@@ -479,3 +479,84 @@ and a personal 14-day strip.
 3. Trainer assigns a diet plan (Diet tab → Assign Diet Plan → add meals).
 4. Client: Coaching card on Home → check in "yes" (long-press → note).
 5. Trainer reopens the plan detail: today's strip cell is green.
+
+## Correction pass: self-authored plans, builder fix, Volume filters
+
+- **Backend (migration 010)**: `diet_plans`/`supplement_plans` gained a
+  nullable `trainer_id` + `created_by` ('trainer'|'client') — clients can now
+  author their own plans via `POST /client/{diet,supplement}-plans` with no
+  trainer relationship (association check only applies to trainer-authored
+  plans). `GET /client/*-plans` returns BOTH kinds tagged with `created_by`.
+  `session_exercise_details.muscle_group` added (synced from the local
+  library; NULL for untagged customs). New
+  `GET /trainer/clients/:id/volume-by-muscle-group?from=&to=` (working/
+  dropset/failure sets only; NULL group returned as a row so the mobile
+  "Untagged" bucket reconciles totals). Per-session volume deliberately
+  reuses the range-filtered `session-summaries` endpoint — no new route.
+- **Mobile sync**: per-set detail payload now carries each exercise's
+  `muscle_group` from the local `exercises` table — never guessed.
+- **Builder wiring bug fixed**: "Assign Diet Plan" / "Assign Supplement
+  Plan" now pass `kind` through navigation params, and the builder throws on
+  an unknown kind instead of silently falling back to the diet form — each
+  button opens correctly titled, with the right fields, saving to the right
+  endpoint. The builder also supports a `self` mode for client-authored plans.
+- **Volume tab "View by"**: Trend (line, unchanged) / Per Session (vertical
+  bars from range-filtered summaries) / By Muscle Group (horizontal bars,
+  "Untagged" bucket for NULL). Same segmented-control language; the Week/
+  Month/Custom range applies consistently across all three views.
+- **Home**: Coaching card removed — Home is exactly CTA, streak, Pinned,
+  Recent Workouts. Diet/supplement surfaces now live in the Routines screen.
+
+### Manual test notes
+1. Tap Assign Diet Plan → screen titled "Diet Plan → [Client]", meal fields,
+   saves to .../diet-plans. Separately tap Assign Supplement Plan →
+   supplement fields, .../supplement-plans. Verify both on a fresh load.
+2. Volume tab reconciliation: sum the muscle-group bars (incl. Untagged) and
+   compare with the period total from Per Session bars for the same range.
+3. Client: create a self-authored diet plan (no trainer needed), check in
+   daily; trainer-assigned plans stay under From Trainer with no mixing.
+
+## Dual Navigator: Trainer View / User View
+
+Trainer-role accounts now pick a mode once per device (cleared on logout):
+
+- **View Choice screen** (`ViewChoiceScreen`): two large cards — Trainer View
+  (blue trainer accent) / User View (default accent). Persisted in
+  SecureStore (`src/lib/viewMode.js`); app restarts mount straight into the
+  chosen view, no re-prompt.
+- **User View** = the existing Home/Routines/History/Progress shell,
+  unchanged (the Clients tab no longer appears here for trainers).
+- **Trainer View** (`TrainerTabs` in App.js): a minimal two-tab bar — Clients
+  (the existing roster/pending/invite screen) and Settings (profile, view
+  switcher, logout) — with the trainer blue as the active tab color, so the
+  mode is distinguishable at a glance. Its own stack keeps trainer flows
+  (Client Detail, assign builders, plan details) fully separate from the
+  user stack.
+- **View switcher**: "Switch to User View" in Trainer View's Settings, and
+  "Switch to Trainer View" in User View's Settings (trainers only — plain
+  users never see it). Switching persists and remounts immediately.
+
+**Client Detail rebuilt as a tabbed shell**: fixed header + compact identity
+strip + a horizontally scrollable top-tab bar (Overview / Analytics /
+Workouts / Diet / Supplements) swapping content panels in place — no
+navigation transitions.
+
+- **Overview (new)**: week/month stat cards (workout count + volume from
+  session-summaries), Quick Actions row (Assign Workout / Diet /
+  Supplement — the one place all three live together), and a merged Recent
+  Activity feed (workouts, measurements, diet/supplement check-ins, sorted
+  by date) composed from existing endpoints.
+- **Analytics / Workouts / Diet / Supplements**: the prior single-scroll
+  content relocated into full-tab panels — no logic changes.
+
+### Manual test notes
+1. Trainer first login → choice screen appears; pick Trainer View → Clients
+   tab bar with blue active state. Kill + reopen → straight into Trainer
+   View, no prompt.
+2. Trainer Settings → Switch to User View → immediately in the user shell;
+   Settings (via Home gear) shows "Switch to Trainer View". Restart persists.
+3. Log out as trainer → view choice cleared; next login asks again.
+4. A user-role account never sees the choice screen or any switch UI.
+5. Client Detail: all 5 tabs load for a client with history; Quick Actions
+   open the right builders and return to the tabs; Overview's activity feed
+   shows merged entries in date order.

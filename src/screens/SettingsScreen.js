@@ -6,7 +6,7 @@ import { useApp } from '../store/AppContext';
 import { useAuth } from '../store/AuthContext';
 import { getPendingSyncCount } from '../db/queries';
 
-export default function SettingsScreen() {
+export default function SettingsScreen({ onSwitchView }) {
   const { themeMode, setThemeMode } = useApp();
   const { logout } = useAuth();
   const colors = useColors();
@@ -188,6 +188,21 @@ export default function SettingsScreen() {
         />
         <Text style={[styles.hint, { color: colors.textDim }]}>Compare current week vs. 4-week average.</Text>
       </View>
+      {onSwitchView ? (
+        <View style={[styles.card, { backgroundColor: colors.card }]}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Trainer Account</Text>
+          <Text style={[styles.hint, { color: colors.textDim }]}>
+            You are in User View — logging your own workouts.
+          </Text>
+          <TouchableOpacity
+            style={[styles.saveBtn, { backgroundColor: colors.blue, marginTop: 14 }]}
+            onPress={() => onSwitchView('trainer')}
+          >
+            <Text style={styles.saveBtnText}>Switch to Trainer View</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       <View style={[styles.card, { backgroundColor: colors.card }]}>
         <Text style={[styles.cardTitle, { color: colors.text }]}>Account</Text>
         <Text style={[styles.hint, { color: colors.textDim }]}>

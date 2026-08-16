@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { api, registerTokenHooks, tryRefresh } from '../lib/api';
+import { clearViewChoice } from '../lib/viewMode';
 import { setCurrentUserId } from '../db/queries';
 
 // Hard auth gate for the whole app. authStatus:
@@ -133,6 +134,9 @@ export function AuthProvider({ children }) {
   );
 
   const logout = useCallback(async () => {
+    // logging out clears the trainer's persisted view choice — they choose
+    // again on next login
+    clearViewChoice();
     try {
       const refresh = await readJson(KEY_REFRESH);
       await api('/auth/logout', { method: 'POST', body: { refreshToken: refresh }, skipAuth: true });

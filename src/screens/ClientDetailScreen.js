@@ -93,6 +93,8 @@ export default function ClientDetailScreen({ route, navigation }) {
 
   // content
   const [cTab, setCTab] = useState('workouts');
+  const [activeTab, setActiveTab] = useState('overview'); // overview | analytics | workouts | diet | supplements
+  const [activity, setActivity] = useState([]);
   const [summaries, setSummaries] = useState([]);
   const [assignedPlans, setAssignedPlans] = useState([]);
   const [dietPlans, setDietPlans] = useState([]);
@@ -113,7 +115,7 @@ export default function ClientDetailScreen({ route, navigation }) {
   const loadContent = useCallback(async () => {
     try {
       const [rows, plans, diet, supp] = await Promise.all([
-        api(`/trainer/clients/${clientId}/session-summaries?limit=20&offset=0`),
+        api(`/trainer/clients/${clientId}/session-summaries?limit=100&offset=0`),
         api(`/trainer/clients/${clientId}/assigned-plans`).catch(() => []),
         api(`/trainer/clients/${clientId}/diet-plans`).catch(() => []),
         api(`/trainer/clients/${clientId}/supplement-plans`).catch(() => []),
@@ -227,6 +229,67 @@ export default function ClientDetailScreen({ route, navigation }) {
     return () => { cancelled = true; };
   }, [clientId, aTab, rangeParams, strengthExercise, metricType, volumeView]);
 
+  // Overview's unified Recent Activity feed - workouts, measurements, and
+  // diet/supplement check-ins merged and sorted by date. Read-only
+  // composition of existing endpoints (no new aggregations).
+  const loadActivity = useCallback(async () => {
+    try {
+      const from = isoDay(-30);
+      const dietReqs = dietPlans.map((pl) =>
+        api(`/trainer/clients/${clientId}/diet-plans/${pl.id}/checkins?from=${from}`).catch(() => [])
+      );
+      const suppReqs = supplementPlans.map((pl) =>
+        api(`/trainer/clients/${clientId}/supplement-plans/${pl.id}/checkins?from=${from}`).catch(() => [])
+      );
+      const [meas, ...rest] = await Promise.all([
+        api(`/trainer/clients/${clientId}/measurements?from=${from}`).catch(() => []),
+        ...dietReqs,
+        ...suppReqs,
+      ]);
+      const dietCis = rest.slice(0, dietPlans.length);
+      const suppCis = rest.slice(dietPlans.length);
+
+      const items = [];
+      for (const sm of summaries.slice(0, 8)) {
+        items.push({
+          at: new Date(sm.performed_at).getTime(),
+          icon: 'barbell-outline',
+          text: `Completed "${sm.name || 'Workout'}" - ${fmtK(sm.total_volume)} vol`,
+        });
+      }
+      for (const m2 of meas) {
+        items.push({
+          at: new Date(m2.date).getTime(),
+          icon: 'scale-outline',
+          text: `Logged ${m2.metric_type.replace(/_/g, ' ')} - ${m2.value}${m2.unit || ''}`,
+        });
+      }
+      dietPlans.forEach((pl, i) => {
+        for (const c of dietCis[i] || []) {
+          items.push({
+            at: new Date(c.date).getTime(),
+            icon: 'nutrition-outline',
+            text: `${c.followed ? 'Followed' : 'Missed'} diet "${pl.name}"`,
+          });
+        }
+      });
+      supplementPlans.forEach((pl, i) => {
+        for (const c of suppCis[i] || []) {
+          items.push({
+            at: new Date(c.date).getTime(),
+            icon: 'medkit-outline',
+            text: `${c.taken ? 'Took' : 'Missed'} supplements "${pl.name}"`,
+          });
+        }
+      });
+      items.sort((a, b) => b.at - a.at);
+      setActivity(items.slice(0, 8));
+    } catch {
+      setActivity([]);
+    }
+  }, [clientId, dietPlans, supplementPlans, summaries]);
+
+
   // accordion — fetch drill-down exactly once per visit, then cache
   const toggleExpand = async (summaryId) => {
     if (expanded === summaryId) {
@@ -303,6 +366,45 @@ export default function ClientDetailScreen({ route, navigation }) {
         </View>
       </View>
 
+      {/* ── Top tabs (scrollable second-level nav) ── */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.topTabScroll} contentContainerStyle={styles.topTabRow}>
+        {[
+          { key: 'overview', label: 'Overview' },
+          { key: 'analytics', label: 'Analytics' },
+          { key: 'workouts', label: 'Workouts' },
+          { key: 'diet', label: 'Diet' },
+          { key: 'supplements', label: 'Supplements' },
+        ].map((t) => {
+          const on = activeTab === t.key;
+          return (
+            <TouchableOpacity
+              key={t.key}
+              style={[styles.topTab, on && styles.topTabOn]}
+              onPress={() => setActiveTab(t.key)}
+            >
+              <Text style={[styles.topTabText, on && { color: '#fff' }]}>{t.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      {activeTab === 'overview' && (
+        <OverviewPanel
+          styles={styles}
+          colors={colors}
+          navigation={navigation}
+          clientId={clientId}
+          clientName={clientName}
+          summaries={summaries}
+          dietPlans={dietPlans}
+          supplementPlans={supplementPlans}
+          activity={activity}
+          onLoadActivity={loadActivity}
+        />
+      )}
+
+      {activeTab === 'analytics' && (
+        <>
       {/* ── Analytics tabs ── */}
       <Segmented
         styles={styles}
@@ -395,22 +497,10 @@ export default function ClientDetailScreen({ route, navigation }) {
           <BarChart data={chartData} height={170} horizontal={chartMode === 'bars-h'} />
         )}
       </View>
+        </>
+      )}
 
-      {/* ── Content tabs ── */}
-      <View style={{ marginTop: 24 }}>
-        <Segmented
-          styles={styles}
-          value={cTab}
-          onChange={setCTab}
-          options={[
-            { value: 'workouts', label: 'Workouts' },
-            { value: 'diet', label: 'Diet' },
-            { value: 'supplements', label: 'Supplements' },
-          ]}
-        />
-      </View>
-
-      {cTab === 'workouts' && (
+      {activeTab === 'workouts' && (
         <View>
           <Text style={styles.groupLabel}>Recent</Text>
           {summaries.length === 0 && (
@@ -516,7 +606,7 @@ export default function ClientDetailScreen({ route, navigation }) {
         </View>
       )}
 
-      {cTab === 'diet' && (
+      {activeTab === 'diet' && (
         <CoachingList
           kind="diet"
           plans={dietPlans}
@@ -529,7 +619,7 @@ export default function ClientDetailScreen({ route, navigation }) {
         />
       )}
 
-      {cTab === 'supplements' && (
+      {activeTab === 'supplements' && (
         <CoachingList
           kind="supplement"
           plans={supplementPlans}
@@ -582,6 +672,80 @@ export default function ClientDetailScreen({ route, navigation }) {
 }
 
 const TYPE_TAG = { working: 'W', warmup: 'WU', dropset: 'DS', failure: 'F' };
+
+// ── Overview panel ──────────────────────────────────────────────────────
+// Week/month stat cards + the one place all three assign actions live
+// together + a merged recent-activity feed.
+function OverviewPanel({
+  styles, colors, navigation, clientId, clientName,
+  summaries, activity, onLoadActivity,
+}) {
+  React.useEffect(() => { onLoadActivity && onLoadActivity(); }, []);
+
+  const now = Date.now();
+  const week = summaries.filter((s) => now - new Date(s.performed_at).getTime() < 7 * 86400000);
+  const month = summaries.filter((s) => now - new Date(s.performed_at).getTime() < 30 * 86400000);
+  const stat = (rows) => ({
+    count: rows.length,
+    vol: rows.reduce((n, r) => n + (Number(r.total_volume) || 0), 0),
+  });
+  const wk = stat(week);
+  const mo = stat(month);
+
+  const actions = [
+    { label: 'Assign Workout', icon: 'barbell-outline', to: 'AssignWorkout' },
+    { label: 'Assign Diet', icon: 'nutrition-outline', to: 'DietPlanBuilder', kind: 'diet' },
+    { label: 'Assign Supplement', icon: 'medkit-outline', to: 'SupplementPlanBuilder', kind: 'supplement' },
+  ];
+
+  return (
+    <View>
+      <View style={styles.statRow}>
+        <View style={styles.statCard}>
+          <Text style={[styles.statBig, NUMS]}>{wk.count}</Text>
+          <Text style={styles.statLabel}>workouts this week</Text>
+          <Text style={[styles.statVol, NUMS]}>{fmtK(wk.vol)} vol</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={[styles.statBig, NUMS]}>{mo.count}</Text>
+          <Text style={styles.statLabel}>workouts this month</Text>
+          <Text style={[styles.statVol, NUMS]}>{fmtK(mo.vol)} vol</Text>
+        </View>
+      </View>
+
+      <Text style={styles.groupLabel}>Quick Actions</Text>
+      <View style={styles.qaRow}>
+        {actions.map((a) => (
+          <TouchableOpacity
+            key={a.to}
+            style={styles.qaBtn}
+            activeOpacity={0.8}
+            onPress={() =>
+              navigation.navigate(a.to, a.kind ? { clientId, clientName, kind: a.kind } : { clientId, clientName })
+            }
+          >
+            <Ionicons name={a.icon} size={18} color={colors.primary} />
+            <Text style={styles.qaText}>{a.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={styles.groupLabel}>Recent Activity</Text>
+      {activity.length === 0 && (
+        <Text style={styles.emptySub}>Nothing synced yet for this client.</Text>
+      )}
+      {activity.map((a, i) => (
+        <View key={i} style={styles.activityRow}>
+          <Ionicons name={a.icon} size={15} color={colors.textDim} />
+          <Text style={styles.activityText} numberOfLines={1}>
+            {a.text}
+          </Text>
+          <Text style={styles.activityWhen}>{relativeTime(a.at)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
 
 // diet/supplement list body for the content tabs
 function CoachingList({ kind, plans, styles, colors, navigation, clientId, clientName, emptyLabel }) {
@@ -653,6 +817,38 @@ const makeStyles = (colors) =>
     avatarText: { color: '#fff', fontWeight: '800', fontSize: 18 },
     name: { color: colors.text, fontSize: 20, fontWeight: '800' },
     meta: { color: colors.textDim, fontSize: 12, marginTop: 2 },
+
+    topTabScroll: { flexGrow: 0, marginTop: 4, marginBottom: 12 },
+    topTabRow: { gap: 8, paddingHorizontal: 0, paddingBottom: 2 },
+    topTab: {
+      borderRadius: 16, paddingHorizontal: 14, paddingVertical: 7,
+      backgroundColor: colors.cardLight,
+    },
+    topTabOn: { backgroundColor: colors.blue },
+    topTabText: { color: colors.textDim, fontWeight: '700', fontSize: 12 },
+
+    statRow: { flexDirection: 'row', gap: 10, marginBottom: 6 },
+    statCard: {
+      flex: 1, backgroundColor: colors.card, borderRadius: 14, padding: 14, alignItems: 'center',
+      shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.12, shadowRadius: 8, elevation: 2,
+    },
+    statBig: { color: colors.primary, fontSize: 26, fontWeight: '800' },
+    statLabel: { color: colors.textDim, fontSize: 11, marginTop: 2 },
+    statVol: { color: colors.text, fontSize: 12, fontWeight: '700', marginTop: 4 },
+    qaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 6 },
+    qaBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 7,
+      borderWidth: 1.5, borderColor: colors.primary, borderRadius: 12,
+      paddingHorizontal: 13, paddingVertical: 10,
+    },
+    qaText: { color: colors.primary, fontWeight: '700', fontSize: 12 },
+    activityRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 10,
+      backgroundColor: colors.card, borderRadius: 12, padding: 12, marginBottom: 6,
+    },
+    activityText: { color: colors.text, fontSize: 13, flex: 1 },
+    activityWhen: { color: colors.textDim, fontSize: 11 },
 
     segRow: {
       flexDirection: 'row', backgroundColor: colors.cardLight,
