@@ -38,7 +38,8 @@ async function ensureBaseTables(db) {
   await db.execAsync(`CREATE TABLE IF NOT EXISTS workout_plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL, notes TEXT, created_at INTEGER NOT NULL,
-    folder_id INTEGER NULL REFERENCES plan_folders(id)
+    folder_id INTEGER NULL REFERENCES plan_folders(id),
+    user_id TEXT NOT NULL
   );`);
   await db.execAsync(`CREATE TABLE IF NOT EXISTS plan_exercises (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,6 +147,9 @@ async function ensureSchema(db) {
   await addColumnSafe(db, 'workout_sessions', 'sync_attempted_at', 'TEXT NULL');
   await addColumnSafe(db, 'workout_sessions', 'source_assigned_plan_id', 'TEXT NULL');
   await addColumnSafe(db, 'user_settings', 'streak_tolerance', 'INTEGER NOT NULL DEFAULT 1');
+  await addColumnSafe(db, 'workout_plans', 'user_id', 'TEXT');
+  // Delete legacy plans without user_id
+  await db.runAsync('DELETE FROM workout_plans WHERE user_id IS NULL OR user_id = ""');
   await addColumnSafe(db, 'user_settings', 'theme_mode', "TEXT NOT NULL DEFAULT 'system'");
   await addColumnSafe(db, 'user_settings', 'length_unit', "TEXT NOT NULL DEFAULT 'cm'");
 
@@ -377,6 +381,13 @@ const MIGRATIONS = [
   // v19: measurement sync flags
   async (db) => {
     await addColumnSafe(db, 'body_metrics', 'synced', 'INTEGER NOT NULL DEFAULT 0');
+  },
+  // v20: user_id for workout plans - fixes user isolation bug
+  // Deletes all existing plans without user_id (option 2: clean slate)
+  async (db) => {
+    await addColumnSafe(db, 'workout_plans', 'user_id', 'TEXT NOT NULL');
+    // Delete all plans that don't have a user_id (legacy data from before this fix)
+    await db.runAsync('DELETE FROM workout_plans WHERE user_id IS NULL OR user_id = ""');
   },
 ];
 

@@ -480,23 +480,30 @@ export default function ClientDetailScreen({ route, navigation }) {
             <Text style={styles.emptySub}>Nothing assigned yet — build one below.</Text>
           )}
           {assignedPlans.map((ap) => (
-            <TouchableOpacity
-              key={ap.id}
-              style={styles.card}
-              activeOpacity={0.8}
-              onPress={() => navigation.navigate('AssignedPlanDetail', { planId: ap.id, clientId, clientName })}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.sessName} numberOfLines={1}>
-                  {ap.name}
-                </Text>
-                <Text style={[styles.meta, NUMS]}>
-                  {ap.exercise_count} exercises · assigned{' '}
-                  {new Date(ap.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-            </TouchableOpacity>
+            <View key={ap.id} style={styles.card}>
+              <TouchableOpacity
+                style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}
+                activeOpacity={0.8}
+                onPress={() => navigation.navigate('AssignedPlanDetail', { planId: ap.id, clientId, clientName })}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sessName} numberOfLines={1}>
+                    {ap.name}
+                  </Text>
+                  <Text style={[styles.meta, NUMS]}>
+                    {ap.exercise_count} exercises · assigned{' '}
+                    {new Date(ap.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.editIconBtn}
+                onPress={() => navigation.navigate('AssignWorkout', { clientId, clientName, planId: ap.id })}
+              >
+                <Ionicons name="create-outline" size={18} color={colors.textDim} />
+              </TouchableOpacity>
+            </View>
           ))}
 
           <TouchableOpacity
@@ -704,6 +711,7 @@ const makeStyles = (colors) =>
       backgroundColor: colors.primary, borderRadius: 14, padding: 16, marginTop: 16,
     },
     assignText: { color: '#fff', fontWeight: '800' },
+    editIconBtn: { padding: 8 },
 
     backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 28 },
     customSheet: { backgroundColor: colors.card, borderRadius: 16, padding: 20 },

@@ -117,6 +117,40 @@ async function deleteAssignedPlan(id) {
   await query('DELETE FROM assigned_plans WHERE id = $1', [id]);
 }
 
+async function updateAssignedPlan(planId, trainerId, clientId, name, notes, exercises) {
+  await assertActiveAssociation(trainerId, clientId);
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      `UPDATE assigned_plans SET name = $1, notes = $2 WHERE id = $3 AND trainer_id = $4 AND client_id = $5 RETURNING *`,
+      [name, notes || null, planId, trainerId, clientId]
+    );
+    if (!rows.length) {
+      throw new HttpError(404, 'Plan not found for this client');
+    }
+    const plan = rows[0];
+    await client.query('DELETE FROM assigned_plan_exercises WHERE assigned_plan_id = $1', [planId]);
+    for (const ex of exercises || []) {
+      await client.query(
+        `INSERT INTO assigned_plan_exercises
+         (assigned_plan_id, exercise_name, target_sets, target_reps, target_weight_note, order_index, rest_seconds, notes, group_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          planId,
+          ex.exercise_name,
+          ex.target_sets,
+          ex.target_reps || null,
+          ex.target_weight_note || null,
+          ex.order_index,
+          ex.rest_seconds || null,
+          ex.notes || null,
+          ex.group_id || null,
+        ]
+      );
+    }
+    return plan;
+  });
+}
+
 // Client-facing: my active assigned plans, newest first, with exercises
 // and the assigning trainer's name.
 async function listActiveForClientId(clientId) {
@@ -147,4 +181,5 @@ module.exports = {
   getAssignedPlan,
   archiveAssignedPlan,
   deleteAssignedPlan,
+  updateAssignedPlan,
 };

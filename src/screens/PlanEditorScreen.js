@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { createPlan } from '../db/queries';
+import { createPlan, getPlan, updatePlan } from '../db/queries';
 import { getSettings } from '../db/settings';
 import ExercisePicker from '../components/ExercisePicker';
 import RestEditorModal from '../components/RestEditorModal';
@@ -21,9 +21,11 @@ const nextGroupId = () => `p${Date.now()}_${++groupCounter}`;
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
-export default function PlanEditorScreen({ navigation }) {
+export default function PlanEditorScreen({ navigation, route }) {
   const colors = useColors();
   const styles = makeStyles(colors);
+  const planId = route.params?.planId;
+  const isEditing = !!planId;
   const [name, setName] = useState('');
   const [notes, setNotes] = useState('');
   const [nameError, setNameError] = useState(false);
@@ -33,10 +35,39 @@ export default function PlanEditorScreen({ navigation }) {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState([]);
   const [defaultRest, setDefaultRest] = useState(90);
+  const [loading, setLoading] = useState(isEditing);
 
-  React.useEffect(() => {
+  useEffect(() => {
     getSettings().then((s) => setDefaultRest(s.default_rest_seconds));
   }, []);
+
+  useEffect(() => {
+    if (isEditing) {
+      getPlan(planId).then((plan) => {
+        if (plan) {
+          setName(plan.name);
+          setNotes(plan.notes || '');
+          setExercises(
+            plan.exercises.map((e) => ({
+              id: e.exercise_id,
+              name: e.name,
+              muscle_group: e.muscle_group,
+              targetSets: e.target_sets,
+              restSeconds: e.rest_seconds,
+              groupId: e.group_id,
+            }))
+          );
+        }
+        setLoading(false);
+      });
+    }
+  }, [planId, isEditing]);
+
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      title: isEditing ? 'Edit Routine' : 'New Routine',
+    });
+  }, [navigation, isEditing]);
 
   const toggleSelect = (i) =>
     setSelected((prev) => (prev.includes(i) ? prev.filter((x) => x !== i) : [...prev, i]));
@@ -69,16 +100,30 @@ export default function PlanEditorScreen({ navigation }) {
       return;
     }
     try {
-      await createPlan(
-        name,
-        notes,
-        exercises.map((e) => ({
-          exerciseId: e.id,
-          targetSets: e.targetSets,
-          restSeconds: e.restSeconds,
-          groupId: e.groupId,
-        }))
-      );
+      if (isEditing) {
+        await updatePlan(
+          planId,
+          name,
+          notes,
+          exercises.map((e) => ({
+            exerciseId: e.id,
+            targetSets: e.targetSets,
+            restSeconds: e.restSeconds,
+            groupId: e.groupId,
+          }))
+        );
+      } else {
+        await createPlan(
+          name,
+          notes,
+          exercises.map((e) => ({
+            exerciseId: e.id,
+            targetSets: e.targetSets,
+            restSeconds: e.restSeconds,
+            groupId: e.groupId,
+          }))
+        );
+      }
       navigation.goBack();
     } catch (err) {
       Alert.alert('Could not save routine', String(err.message || err));
@@ -86,8 +131,15 @@ export default function PlanEditorScreen({ navigation }) {
   };
 
   const labels = groupLabels(exercises);
-  // The superset affordance only exists once there's something to group
   const canSuperset = exercises.length >= 2;
+
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <Text style={{ color: colors.textDim }}>Loading...</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 20, paddingBottom: 48 }}>

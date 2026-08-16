@@ -158,6 +158,21 @@ router.get('/clients/:clientId/assigned-plans', requireAuth, requireRole('traine
   }
 });
 
+// PUT /trainer/clients/:clientId/assigned-plans/:planId — update an assigned plan
+router.put('/clients/:clientId/assigned-plans/:planId', requireAuth, requireRole('trainer'), async (req, res) => {
+  try {
+    const { clientId, planId } = req.params;
+    const { name, notes, exercises } = req.body || {};
+    if (!name || !Array.isArray(exercises) || !exercises.length) {
+      return res.status(400).json({ error: 'name and a non-empty exercises array are required' });
+    }
+    const plan = await assignedPlans.updateAssignedPlan(planId, req.user.id, clientId, name, notes, exercises);
+    res.json(plan);
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
 // PATCH /trainer/clients/:clientId/assigned-plans/:planId — status-only update
 // (archive). Verifies the plan belongs to this trainer+client pair.
 router.patch('/clients/:clientId/assigned-plans/:planId', requireAuth, requireRole('trainer'), async (req, res) => {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -20,12 +20,11 @@ const nextGroupId = () => `a${Date.now()}_${++groupCounter}`;
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
-// The exact routine-builder UI the trainer already knows from Routines —
-// only the title and save action differ (assigns to a specific client).
 export default function AssignWorkoutScreen({ route, navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
-  const { clientId, clientName } = route.params || {};
+  const { clientId, clientName, planId } = route.params || {};
+  const isEditing = !!planId;
   const [name, setName] = useState('');
   const [notes, setNotes] = useState('');
   const [nameError, setNameError] = useState(false);
@@ -35,10 +34,38 @@ export default function AssignWorkoutScreen({ route, navigation }) {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(isEditing);
+
+  useEffect(() => {
+    if (isEditing) {
+      api(`/trainer/clients/${clientId}/assigned-plans`)
+        .then((plans) => {
+          const plan = plans.find((p) => p.id === planId);
+          if (plan) {
+            setName(plan.name);
+            setNotes(plan.notes || '');
+            setExercises(
+              (plan.exercises || []).map((e, i) => ({
+                id: `ex_${i}`,
+                name: e.exercise_name,
+                muscle_group: '',
+                targetSets: e.target_sets,
+                restSeconds: e.rest_seconds || 90,
+                groupId: e.group_id,
+              }))
+            );
+          }
+          setLoading(false);
+        })
+        .catch(() => setLoading(false));
+    }
+  }, [planId, clientId, isEditing]);
 
   React.useLayoutEffect(() => {
-    navigation.setOptions({ title: `Assign to ${clientName || 'Client'}` });
-  }, [navigation, clientName]);
+    navigation.setOptions({
+      title: isEditing ? `Edit for ${clientName || 'Client'}` : `Assign to ${clientName || 'Client'}`,
+    });
+  }, [navigation, clientName, isEditing]);
 
   const toggleSelect = (i) =>
     setSelected((prev) => (prev.includes(i) ? prev.filter((x) => x !== i) : [...prev, i]));
@@ -54,7 +81,7 @@ export default function AssignWorkoutScreen({ route, navigation }) {
     setSelectMode(false);
   };
 
-  const assign = async () => {
+  const saveWorkout = async () => {
     if (busy) return;
     if (!name.trim()) {
       setNameError(true);
@@ -67,32 +94,43 @@ export default function AssignWorkoutScreen({ route, navigation }) {
     }
     setBusy(true);
     try {
-      await api(`/trainer/clients/${clientId}/assigned-plans`, {
-        method: 'POST',
-        body: {
-          name: name.trim(),
-          notes: notes.trim() || null,
-          exercises: exercises.map((e, i) => ({
-            exercise_name: e.name,
-            target_sets: e.targetSets,
-            target_reps: null,
-            target_weight_note: null,
-            order_index: i,
-            rest_seconds: e.restSeconds,
-            notes: null,
-            group_id: e.groupId || null,
-          })),
-        },
-      });
-      // back to detail with a toast — data reloads on focus
+      const exercisesPayload = exercises.map((e, i) => ({
+        exercise_name: e.name,
+        target_sets: e.targetSets,
+        target_reps: null,
+        target_weight_note: null,
+        order_index: i,
+        rest_seconds: e.restSeconds,
+        notes: null,
+        group_id: e.groupId || null,
+      }));
+
+      if (isEditing) {
+        await api(`/trainer/clients/${clientId}/assigned-plans/${planId}`, {
+          method: 'PUT',
+          body: {
+            name: name.trim(),
+            notes: notes.trim() || null,
+            exercises: exercisesPayload,
+          },
+        });
+      } else {
+        await api(`/trainer/clients/${clientId}/assigned-plans`, {
+          method: 'POST',
+          body: {
+            name: name.trim(),
+            notes: notes.trim() || null,
+            exercises: exercisesPayload,
+          },
+        });
+      }
       navigation.navigate('ClientDetail', {
         ...route.params,
         assignedToast: name.trim(),
         refreshKey: Date.now(),
       });
     } catch (e) {
-      // includes the stale/revoked-association 403 guard
-      Alert.alert('Could not assign workout', e.message || 'Please try again.');
+      Alert.alert('Could not save workout', e.message || 'Please try again.');
     } finally {
       setBusy(false);
     }
@@ -100,6 +138,14 @@ export default function AssignWorkoutScreen({ route, navigation }) {
 
   const labels = groupLabels(exercises);
   const canSuperset = exercises.length >= 2;
+
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <Text style={{ color: colors.textDim }}>Loading...</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 20, paddingBottom: 48 }}>
@@ -234,8 +280,10 @@ export default function AssignWorkoutScreen({ route, navigation }) {
         <Text style={styles.addBtnText}>Add Exercise</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.assignBtn} onPress={assign} disabled={busy}>
-        <Text style={styles.assignBtnText}>{busy ? 'Assigning…' : 'Assign Workout'}</Text>
+      <TouchableOpacity style={styles.assignBtn} onPress={saveWorkout} disabled={busy}>
+        <Text style={styles.assignBtnText}>
+          {busy ? (isEditing ? 'Saving…' : 'Assigning…') : isEditing ? 'Save Changes' : 'Assign Workout'}
+        </Text>
       </TouchableOpacity>
 
       <ExercisePicker

@@ -27,9 +27,17 @@ export default function PlanDetailScreen({ route, navigation }) {
   React.useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <TouchableOpacity onPress={() => plan && shareRoutine(plan)} style={{ paddingHorizontal: 8 }}>
-          <Ionicons name="share-social-outline" size={21} color={colors.text} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row' }}>
+          <TouchableOpacity
+            onPress={() => navigation.navigate('PlanEditor', { planId: plan?.id })}
+            style={{ paddingHorizontal: 8 }}
+          >
+            <Ionicons name="create-outline" size={21} color={colors.text} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => plan && shareRoutine(plan)} style={{ paddingHorizontal: 8 }}>
+            <Ionicons name="share-social-outline" size={21} color={colors.text} />
+          </TouchableOpacity>
+        </View>
       ),
     });
   }, [navigation, plan, colors]);

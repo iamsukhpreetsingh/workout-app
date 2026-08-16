@@ -1,6 +1,16 @@
 import { getDb } from './db';
 import { checkAndRecordPR, recomputePRsForExercise } from './pr';
 
+let currentUserId = null;
+
+export function setCurrentUserId(userId) {
+  currentUserId = userId;
+}
+
+export function getCurrentUserId() {
+  return currentUserId;
+}
+
 // ---------- Exercises ----------
 export async function listExercises() {
   const db = await getDb();
@@ -50,10 +60,13 @@ export async function getExerciseBest(exerciseId) {
 // ---------- Plans ----------
 export async function listPlans() {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return [];
   const plans = await db.getAllAsync(
     `SELECT p.*,
        (SELECT COUNT(*) FROM workout_sessions ws WHERE ws.plan_id = p.id) AS used_count
-     FROM workout_plans p ORDER BY p.created_at DESC`
+     FROM workout_plans p WHERE p.user_id = ? ORDER BY p.created_at DESC`,
+    [userId]
   );
   for (const plan of plans) {
     plan.exerciseCount = (
@@ -65,7 +78,9 @@ export async function listPlans() {
 
 export async function getPlan(id) {
   const db = await getDb();
-  const plan = await db.getFirstAsync('SELECT * FROM workout_plans WHERE id = ?', [id]);
+  const userId = currentUserId;
+  if (!userId) return null;
+  const plan = await db.getFirstAsync('SELECT * FROM workout_plans WHERE id = ? AND user_id = ?', [id, userId]);
   if (!plan) return null;
   plan.exercises = await db.getAllAsync(
     `SELECT pe.id, pe.target_sets, pe.position, pe.rest_seconds, pe.group_id,
@@ -95,9 +110,11 @@ export async function getPlan(id) {
 // exercises: [{ exerciseId, targetSets, restSeconds, groupId }]
 export async function createPlan(name, notes, exercises) {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) throw new Error('User not authenticated');
   const result = await db.runAsync(
-    'INSERT INTO workout_plans (name, notes, created_at) VALUES (?, ?, ?)',
-    [name, notes || null, Date.now()]
+    'INSERT INTO workout_plans (name, notes, created_at, user_id) VALUES (?, ?, ?, ?)',
+    [name, notes || null, Date.now(), userId]
   );
   const planId = result.lastInsertRowId;
   for (let i = 0; i < exercises.length; i++) {
@@ -119,7 +136,35 @@ export async function createPlan(name, notes, exercises) {
 
 export async function deletePlan(id) {
   const db = await getDb();
-  await db.runAsync('DELETE FROM workout_plans WHERE id = ?', [id]);
+  const userId = currentUserId;
+  if (!userId) return;
+  await db.runAsync('DELETE FROM workout_plans WHERE id = ? AND user_id = ?', [id, userId]);
+}
+
+export async function updatePlan(id, name, notes, exercises) {
+  const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) throw new Error('User not authenticated');
+  await db.runAsync(
+    'UPDATE workout_plans SET name = ?, notes = ? WHERE id = ? AND user_id = ?',
+    [name, notes || null, id, userId]
+  );
+  await db.runAsync('DELETE FROM plan_exercises WHERE plan_id = ?', [id]);
+  for (let i = 0; i < exercises.length; i++) {
+    await db.runAsync(
+      `INSERT INTO plan_exercises (plan_id, exercise_id, position, target_sets, rest_seconds, group_id)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        exercises[i].exerciseId,
+        i,
+        exercises[i].targetSets || 3,
+        exercises[i].restSeconds || 90,
+        exercises[i].groupId || null,
+      ]
+    );
+  }
+  return id;
 }
 
 // ---------- Sessions ----------

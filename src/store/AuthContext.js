@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { api, registerTokenHooks, tryRefresh } from '../lib/api';
+import { setCurrentUserId } from '../db/queries';
 
 // Hard auth gate for the whole app. authStatus:
 //   'checking'        → splash while restoring the session
@@ -48,6 +49,7 @@ export function AuthProvider({ children }) {
     await writeJson(KEY_REFRESH, refreshToken);
     await writeJson(KEY_USER, userData);
     setUser(userData);
+    setCurrentUserId(userData.id);
     setAuthStatus('authenticated');
   }, []);
 
@@ -58,6 +60,9 @@ export function AuthProvider({ children }) {
       const storedUser = await readJson(KEY_USER);
       const access = await readJson(KEY_ACCESS);
       const refresh = await readJson(KEY_REFRESH);
+      if (storedUser?.id) {
+        setCurrentUserId(storedUser.id);
+      }
       if (!refresh) {
         setAuthStatus('unauthenticated');
         return;
@@ -68,6 +73,7 @@ export function AuthProvider({ children }) {
           await writeJson(KEY_ACCESS, access);
           const me = await api('/me');
           setUser(me);
+          setCurrentUserId(me.id);
           setAuthStatus('authenticated');
           return;
         } catch {
@@ -79,6 +85,7 @@ export function AuthProvider({ children }) {
         try {
           const me = await api('/me');
           setUser(me);
+          setCurrentUserId(me.id);
           setAuthStatus('authenticated');
           return;
         } catch {
@@ -134,6 +141,7 @@ export function AuthProvider({ children }) {
     }
     await clearTokens();
     setUser(null);
+    setCurrentUserId(null);
     setAuthStatus('unauthenticated');
   }, []);
 
