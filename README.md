@@ -653,3 +653,143 @@ for both a trainer-assigned and a self-authored plan.
 3. Empty-catalog escape hatch: with an empty catalog (or a search with no
    hits), tap "Add New Dish", create a dish, confirm you return to the same
    picker with the dish attachable immediately.
+
+## Workout Templates (Trainer View)
+
+- **Workouts tab** (4th Trainer View tab: Clients · Workouts · Recipes ·
+  Settings): the trainer's reusable workout-template library — searchable
+  with the shared CatalogSearch component (third reuse), tag chips (push,
+  pull, legs, beginner, …), "+ New" opens the template editor which reuses
+  the established builder UI (exercise cards, set/rest steppers, superset
+  link/unlink, +Add Exercise) with a header trash action for deletion.
+- **Backend (migration 013)**: `workout_templates` + mirrors
+  `assigned_plan_exercises` field-for-field, plus
+  `assigned_plans.source_template_id` (informational only). CRUD at
+  `/trainer/workout-templates`; `POST /trainer/clients/:id/assigned-plans/
+  from-template/:templateId` snapshot-assigns with the association check —
+  editing or deleting a template never alters past assignments (deletion
+  leaves a harmless dangling source id).
+- **Assign Workout flow restructured** into a two-tab picker:
+  - *From Saved*: searchable template list; **Assign As-Is** = one tap →
+    from-template endpoint → toast → back; **Edit** prefills the from-scratch
+    builder with a client-side copy (saving creates an independent
+    assignment via the direct-create endpoint; the saved template is never
+    touched). Empty state offers a Build New shortcut.
+  - *Build New*: the existing builder, plus an "Also save this as a
+    reusable template" checkbox (OFF by default) that performs a second,
+    independent write to the template library on save.
+
+### Manual test notes
+1. Create a template in the Workouts tab (2 exercises, a tag, a superset).
+2. Assign As-Is to a client; edit the template's sets afterward; re-fetch
+   the client's assigned plan — unchanged (snapshot).
+3. Assign a second copy via Edit with modifications; confirm the original
+   template is unaffected.
+4. Build New with the save-as-template checkbox → both the client
+   assignment AND a new standalone template appear in the Workouts tab;
+   without the checkbox, behavior is exactly as before.
+
+## My Dishes (user-owned dish catalog)
+
+- **Schema (migration 014)**: `meal_catalog_items` becomes polymorphic-owned —
+  `trainer_id` nullable, new `user_id` (CHECK: exactly one owner set). The
+  trainer/system catalog is untouched; user rows power "My Dishes". Dish
+  names are unique per user (case-insensitive), independently of trainer
+  names.
+- **API**: `/client/my-dishes` CRUD (user-role only, strictly scoped to the
+  authenticated user — same duplicate-name 409s as the trainer catalog).
+  The diet-plan tree creation resolves catalog references owner-appropriately:
+  trainer plans snapshot from trainer dishes, self-authored plans snapshot
+  from the client's own My Dishes. Plan items remain snapshots — editing a
+  saved dish later never changes existing meal plans.
+- **Builder**: in self-authored mode the item picker's first tab is
+  **My Dishes** (searchable + tag chips via the shared CatalogSearch);
+  the Custom Item tab's optional checkbox now reads "Save to My Dishes too"
+  and posts to the user catalog. Creating a dish on the fly (empty state →
+  Add New Dish) offers **Save Dish** (persists to My Dishes AND attaches)
+  or **Use Once — Don't Save** (attaches to this plan only, never saved).
+- **My Dishes UI**: inside the Diet sub-tab (My Routines), a Plans | My
+  Dishes segmented control opens a dedicated screen — searchable dish list,
+  add/edit/delete via the shared DishForm, person-icon tag distinguishing
+  user dishes from trainer catalog entries.
+
+Deploy: `npm run migrate` (014) + backend restart.
+
+## Trainer-Client Unlink (archive + purge)
+
+**Lifecycle**: either party can unlink. The relationship flips to
+`archived` (archived_at / archived_by / purge_at = now + 30 days,
+migration 015). Trainer keeps READ-ONLY access to the client's synced
+history and the plans as they existed — all trainer GET endpoints accept
+`active` OR `archived` associations, while every create/assign path still
+requires `active` (enforced in the data layer). The client's app loses the
+trainer's content IMMEDIATELY (all client-facing plan listings join on an
+`active` relationship), regardless of who initiated. After 30 days,
+`npm run purge-archives` (cron daily: `0 3 * * *`) hard-deletes trainer-owned
+content only — assigned_plans and trainer-created diet/supplement plans
+with their items/checkins — flips the row to terminal `revoked`, and never
+touches the client's own session_summaries, exercise details,
+measurements, or self-authored plans. Idempotent; logs relationship ids +
+row counts only.
+
+**Client UI**: Settings shows a "Connected to [Trainer]" card with an
+outlined "Disconnect from Trainer" action (only when an active relationship
+exists). The confirmation is explicit: trainer content goes, your own
+history stays. From Trainer content vanishes on next focus — no restart.
+
+**Trainer UI**: Overview tab has a "Remove Client" action (active clients
+only) with the archive consequences spelled out. The roster shows ACTIVE
+plus a muted ARCHIVED section with "Archived · N days left" countdowns;
+tapping an archived client opens the full 5-tab detail in read-only mode —
+amber banner up top, assign buttons disabled.
+
+### Manual test notes
+1. Client disconnects → GET /client/assigned-plans + diet/supplement-plans
+   return empty immediately; trainer still reads everything.
+2. Trainer removes client → same from the other direction; roster shows
+   the archived card with a countdown.
+3. Backdate a purge_at (`UPDATE trainer_clients SET purge_at = now() - interval '1 day'`),
+   run purge → trainer-owned plans deleted, client's session_summaries +
+   measurements intact, row becomes revoked and disappears from the roster.
+4. Assign against an archived relationship → 403 server-side; buttons
+   disabled in the UI.
+
+## Reactivation + Invite fix
+
+- **Migration 016**: `trainer_clients.restore_preference` ('restore' |
+  'fresh'). The purge job now explicitly SKIPS rows in 'pending' — a
+  reactivation request moves the row out of 'archived', so its data is
+  never purged while awaiting the trainer's decision, even past the
+  original purge_at (commented in the script so it isn't "fixed" away).
+- **Phase 4 backend**: `GET /client/trainer-code-preview?code=` returns
+  trainer identity + `is_reactivation` + archived_at + plan counts.
+  `POST /client/associations/request` reuses the archived row (keeps its
+  countdown) and records the client's `restore_preference`. Pending lists
+  flag reactivations with the summary. `accept` requires
+  `final_decision` for reactivations: 'restore' clears the archive fields
+  on the same row (history reappears to both sides — nothing was deleted);
+  'fresh' leaves the original archived row on its untouched countdown and
+  creates a separate clean active row. `reject` on a reactivation reverts
+  to 'archived' (original timestamps), not 'revoked'; ordinary requests
+  still revoke.
+- **Client UI**: submitting an invite code previews first; reconnections
+  show the "Reconnect with [Trainer]?" sheet — archived date, remaining
+  plan counts, Restore-history / Start-fresh options, and the explicit
+  "Your trainer will confirm this before it takes effect" note.
+- **Trainer UI**: reactivation pending cards show "↻ Reconnecting ·
+  archived N days ago", the client's stated preference (informational),
+  and Restore History / Start Fresh buttons (the preference-matching one
+  solid, the other outlined — both always tappable) plus a muted Decline.
+  Ordinary requests keep the simple accept/reject icons.
+- **Invite fix**: a persistent share icon in the Clients tab header opens
+  the invite-code modal at ANY time — previously it only existed in the
+  zero-clients empty state. The empty-state CTA remains.
+
+### Manual test notes (additions)
+1. Pending reactivation with a backdated purge_at → purge job skips it.
+2. Restore-and-confirm: trainer picks Restore → pre-existing plans
+   reappear for both sides instantly.
+3. Mismatched preference (client wants restore, trainer picks fresh) →
+   new clean relationship; old archived row's purge_at unchanged.
+4. Declined reactivation → row back to 'archived', countdown preserved.
+5. Invite from the header with a non-empty client list.

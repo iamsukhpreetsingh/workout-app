@@ -148,6 +148,27 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
     }
   };
 
+  const confirmDelete = () =>
+    Alert.alert(
+      'Delete plan',
+      `"${plan?.name || 'This plan'}" will be permanently removed. Past check-ins are deleted with it.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api(`/client/diet-plans/${planId}`, { method: 'DELETE' });
+              navigation.goBack();
+            } catch (e) {
+              Alert.alert('Could not delete', e.message || 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
+
   const openRecipe = async (url) => {
     try {
       await Linking.openURL(url);
@@ -275,23 +296,64 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
         </Text>
       </View>
 
-      {/* check-in — unchanged function, positioned below the content */}
-      <Text style={styles.checkinQuestion}>Did you follow your plan today?</Text>
-      {checkedToday != null ? (
-        <Text style={styles.checkedLabel}>
-          Checked in today: {checkedToday ? 'followed' : 'not followed'} — tap to change
-        </Text>
-      ) : null}
-      <View style={styles.checkinRow}>
-        <TouchableOpacity style={[styles.checkBtn, !checkedToday && styles.noBtnOn]} disabled={checkBusy} onPress={() => checkIn(false)}>
-          <Ionicons name="close" size={16} color={colors.red} />
-          <Text style={styles.noText}>No</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.checkBtn, checkedToday && styles.yesBtnOn]} disabled={checkBusy} onPress={() => checkIn(true)}>
-          <Ionicons name="checkmark" size={16} color="#fff" />
-          <Text style={styles.yesText}>Yes</Text>
-        </TouchableOpacity>
+      {/* check-in — clearer phrasing: one clear statement + explicit
+          outcome buttons, with today's recorded state shown up front */}
+      <View style={styles.checkinCard}>
+        <Text style={styles.checkinTitle}>Today's check-in</Text>
+        {checkedToday == null ? (
+          <Text style={styles.checkinSub}>How did today go with this plan?</Text>
+        ) : (
+          <View style={styles.checkinStateRow}>
+            <Ionicons
+              name={checkedToday ? 'checkmark-circle' : 'close-circle'}
+              size={15}
+              color={checkedToday ? colors.green : colors.red}
+            />
+            <Text style={styles.checkinStateText}>
+              {checkedToday ? 'You followed this plan today' : 'You didn’t follow this plan today'}
+            </Text>
+          </View>
+        )}
+        <View style={styles.checkinRow}>
+          <TouchableOpacity
+            style={[styles.checkBtn, checkedToday === false && styles.noBtnOn]}
+            disabled={checkBusy}
+            onPress={() => checkIn(false)}
+          >
+            <Ionicons name="close" size={15} color={checkedToday === false ? '#fff' : colors.red} />
+            <Text style={[styles.checkBtnLabel, checkedToday === false && { color: '#fff' }]}>
+              Not today
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.checkBtn, styles.yesBtn, checkedToday === true && styles.yesBtnOn]}
+            disabled={checkBusy}
+            onPress={() => checkIn(true)}
+          >
+            <Ionicons name="checkmark" size={15} color={checkedToday === true ? '#fff' : colors.green} />
+            <Text style={[styles.checkBtnLabel, checkedToday === true && { color: '#fff' }]}>
+              Followed it
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {/* own-plan management (self-authored only) */}
+      {self && (
+        <View style={styles.manageRow}>
+          <TouchableOpacity
+            style={styles.editBtn}
+            onPress={() => navigation.navigate('DietPlanBuilder', { self: true, editPlanId: planId })}
+          >
+            <Ionicons name="create-outline" size={15} color={colors.primary} />
+            <Text style={styles.editBtnText}>Edit Plan</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.deleteBtn} onPress={confirmDelete}>
+            <Ionicons name="trash-outline" size={15} color={colors.red} />
+            <Text style={styles.deleteBtnText}>Delete</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </ScrollView>
   );
 }
@@ -350,9 +412,9 @@ const makeStyles = (colors) =>
 
     emptyDay: { color: colors.textDim, fontSize: 13, fontStyle: 'italic', textAlign: 'center', paddingVertical: 12 },
 
-    checkinQuestion: { color: colors.text, fontSize: 14, fontWeight: '700', marginTop: 24, textAlign: 'center' },
+
     checkedLabel: { color: colors.textDim, fontSize: 11, textAlign: 'center', marginTop: 4 },
-    checkinRow: { flexDirection: 'row', gap: 12, marginTop: 10, justifyContent: 'center' },
+    checkinRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
     checkBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
       borderRadius: 12, paddingVertical: 12, paddingHorizontal: 28,
@@ -362,4 +424,35 @@ const makeStyles = (colors) =>
     noBtnOn: { borderColor: colors.red },
     yesText: { color: '#fff', fontWeight: '800' },
     noText: { color: colors.red, fontWeight: '800' },
+    checkinCard: {
+      backgroundColor: colors.card, borderRadius: 14, padding: 16, marginTop: 22,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.12, shadowRadius: 8, elevation: 2,
+    },
+    checkinTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
+    checkinSub: { color: colors.textDim, fontSize: 13, marginTop: 3 },
+    checkinStateRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 5 },
+    checkinStateText: { color: colors.text, fontSize: 13 },
+    checkinRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
+    checkBtn: {
+      flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+      borderRadius: 12, paddingVertical: 12,
+      backgroundColor: colors.cardLight, borderWidth: 1.5, borderColor: 'transparent',
+    },
+    yesBtn: {},
+    yesBtnOn: { backgroundColor: colors.green, borderColor: colors.green },
+    noBtnOn: { backgroundColor: colors.red, borderColor: colors.red },
+    checkBtnLabel: { fontWeight: '800', fontSize: 13, color: colors.text },
+    manageRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
+    editBtn: {
+      flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+      borderWidth: 1.5, borderColor: colors.primary, borderRadius: 12, paddingVertical: 12,
+    },
+    editBtnText: { color: colors.primary, fontWeight: '700', fontSize: 13 },
+    deleteBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+      borderWidth: 1, borderColor: colors.red, borderRadius: 12,
+      paddingHorizontal: 18, paddingVertical: 12, opacity: 0.85,
+    },
+    deleteBtnText: { color: colors.red, fontWeight: '700', fontSize: 13 },
   });

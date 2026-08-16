@@ -41,6 +41,65 @@ async function assertNameFree(trainerId, name, excludeId = null) {
   }
 }
 
+// ── user-owned dishes ("My Dishes") ─────────────────────────────────────
+// Same table, user_id set / trainer_id NULL. Snapshots keep existing plans
+// stable when a user dish is later edited.
+
+async function assertUserNameFree(userId, name, excludeId = null) {
+  const { rows } = await query(
+    `SELECT name FROM meal_catalog_items
+     WHERE user_id = $1 AND lower(name) = lower($2)
+       AND ($3::uuid IS NULL OR id != $3)
+     LIMIT 1`,
+    [userId, name, excludeId]
+  );
+  if (rows.length) {
+    throw new HttpError(409, `You already have a dish named "${rows[0].name}"`);
+  }
+}
+
+async function createUserDish(userId, body) {
+  const item = normalize(body);
+  await assertUserNameFree(userId, item.name);
+  const { rows } = await query(
+    `INSERT INTO meal_catalog_items
+       (user_id, name, description, calories, protein_g, carbs_g, fat_g, serving_size, recipe_url, prep_notes, tags)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    [userId, item.name, item.description, item.calories, item.protein_g, item.carbs_g, item.fat_g, item.serving_size, item.recipe_url, item.prep_notes, item.tags]
+  );
+  return rows[0];
+}
+
+async function listUserDishes(userId) {
+  const { rows } = await query(
+    'SELECT * FROM meal_catalog_items WHERE user_id = $1 ORDER BY created_at DESC',
+    [userId]
+  );
+  return rows;
+}
+
+async function updateUserDish(userId, id, body) {
+  const item = normalize(body);
+  await assertUserNameFree(userId, item.name, id);
+  const { rows } = await query(
+    `UPDATE meal_catalog_items SET
+       name=$2, description=$3, calories=$4, protein_g=$5, carbs_g=$6, fat_g=$7,
+       serving_size=$8, recipe_url=$9, prep_notes=$10, tags=$11
+     WHERE id=$1 AND user_id=$12 RETURNING *`,
+    [id, item.name, item.description, item.calories, item.protein_g, item.carbs_g, item.fat_g, item.serving_size, item.recipe_url, item.prep_notes, item.tags, userId]
+  );
+  if (!rows.length) throw new HttpError(404, 'Dish not found');
+  return rows[0];
+}
+
+async function removeUserDish(userId, id) {
+  const { rowCount } = await query(
+    'DELETE FROM meal_catalog_items WHERE id = $1 AND user_id = $2',
+    [id, userId]
+  );
+  if (!rowCount) throw new HttpError(404, 'Dish not found');
+}
+
 async function create(trainerId, body) {
   const item = normalize(body);
   await assertNameFree(trainerId, item.name);
@@ -102,4 +161,7 @@ async function remove(trainerId, id) {
   if (!rowCount) throw new HttpError(404, 'Catalog item not found');
 }
 
-module.exports = { create, list, update, remove };
+module.exports = {
+  create, list, update, remove,
+  createUserDish, listUserDishes, updateUserDish, removeUserDish,
+};

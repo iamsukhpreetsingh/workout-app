@@ -4,6 +4,7 @@ const assignedPlans = require('../data/assignedPlans');
 const sessionSummaries = require('../data/sessionSummaries');
 const measurements = require('../data/measurements');
 const sessionDetails = require('../data/sessionDetails');
+const mealCatalog = require('../data/mealCatalog');
 const coaching = require('../data/coachingPlans');
 const { query } = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
@@ -26,19 +27,54 @@ router.post('/request-association', requireAuth, requireRole('user'), async (req
   }
 });
 
+// GET /client/trainer-code-preview?code=XXX — client-only. Surfaces
+// trainer identity + whether this is a reactivation (with counts).
+router.get('/trainer-code-preview', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const { code } = req.query || {};
+    if (!code) return res.status(400).json({ error: 'code query parameter is required' });
+    res.json(await trainerClients.trainerCodePreview(req.user.id, String(code).trim().toUpperCase()));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
 // POST /client/associations/request — client-only. Trainer is resolved
 // from the invite code server-side; ids in the body are never trusted.
 router.post('/associations/request', requireAuth, requireRole('user'), async (req, res) => {
   try {
-    const { invite_code } = req.body || {};
+    const { invite_code, restore_preference } = req.body || {};
     if (!invite_code) return res.status(400).json({ error: 'Invite code is required' });
     const row = await trainerClients.requestAssociationByCode(
       req.user.id,
-      String(invite_code).trim().toUpperCase()
+      String(invite_code).trim().toUpperCase(),
+      restore_preference || null
     );
     res.status(201).json(row);
   } catch (e) {
     httpError(res, e, 400);
+  }
+});
+
+// POST /client/trainer/unlink — archive the active relationship. Trainer
+// keeps read-only access for 30 days; trainer-created content disappears
+// from this client's app immediately.
+router.post('/trainer/unlink', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const { rows } = await query(
+      `UPDATE trainer_clients SET
+         status = 'archived', archived_at = now(), archived_by = 'client',
+         purge_at = now() + interval '30 days'
+       WHERE client_id = $1 AND status = 'active'
+       RETURNING *`,
+      [req.user.id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ error: 'No active trainer relationship' });
+    }
+    res.json(rows[0]);
+  } catch (e) {
+    httpError(res, e);
   }
 });
 
@@ -137,6 +173,42 @@ for (const kind of ['diet', 'supplement']) {
     }
   });
 
+  // update my own client-authored diet plan (full tree replace)
+  router.patch(`/${seg}/:planId`, requireAuth, requireRole('user'), async (req, res) => {
+    try {
+      if (kind !== 'diet') {
+        return res.status(400).json({ error: 'Only diet plans support editing' });
+      }
+      const { name, notes, days } = req.body || {};
+      if (!name || !Array.isArray(days) || !days.length) {
+        return res.status(400).json({ error: 'name and a non-empty days array are required' });
+      }
+      res.json(
+        await coaching.updateOwnDietPlan(req.user.id, req.params.planId, {
+          name, notes, days,
+          targets: {
+            daily_calorie_target: req.body?.daily_calorie_target,
+            daily_protein_target: req.body?.daily_protein_target,
+            daily_carbs_target: req.body?.daily_carbs_target,
+            daily_fat_target: req.body?.daily_fat_target,
+          },
+        })
+      );
+    } catch (e) {
+      httpError(res, e, 400);
+    }
+  });
+
+  // delete my own client-authored plan
+  router.delete(`/${seg}/:planId`, requireAuth, requireRole('user'), async (req, res) => {
+    try {
+      await coaching.deleteOwnPlan(kind, req.user.id, req.params.planId);
+      res.json({ ok: true });
+    } catch (e) {
+      httpError(res, e, 404);
+    }
+  });
+
   // daily adherence check-in (upsert)
   router.post(`/${seg}/:planId/checkins`, requireAuth, requireRole('user'), async (req, res) => {
     try {
@@ -161,6 +233,40 @@ for (const kind of ['diet', 'supplement']) {
     }
   });
 }
+
+// ---- My Dishes (user-owned catalog) ----
+router.get('/my-dishes', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    res.json(await mealCatalog.listUserDishes(req.user.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+router.post('/my-dishes', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    res.status(201).json(await mealCatalog.createUserDish(req.user.id, req.body || {}));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+router.patch('/my-dishes/:id', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    res.json(await mealCatalog.updateUserDish(req.user.id, req.params.id, req.body || {}));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+router.delete('/my-dishes/:id', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    await mealCatalog.removeUserDish(req.user.id, req.params.id);
+    res.json({ ok: true });
+  } catch (e) {
+    httpError(res, e, 404);
+  }
+});
 
 // GET /client/plans — client-only, plans assigned to me
 router.get('/plans', requireAuth, requireRole('user'), async (req, res) => {

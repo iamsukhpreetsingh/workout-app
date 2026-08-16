@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
@@ -29,6 +29,8 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer }) {
       .catch(() => {});
   }, [isTrainer]);
 
+  const [reconnect, setReconnect] = useState(null); // preview when is_reactivation
+
   const submitInviteCode = async () => {
     const code = inviteCode.trim().toUpperCase();
     if (!code) {
@@ -37,17 +39,32 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer }) {
     }
     setAssocMsg(null);
     try {
+      // preview first: reconnections need a restore/fresh preference
+      const preview = await api(`/client/trainer-code-preview?code=${encodeURIComponent(code)}`);
+      if (preview.is_reactivation) {
+        setReconnect({ code, preview });
+        return;
+      }
+      await sendRequest(code, null);
+    } catch (e) {
+      setAssocMsg(e.message || 'Could not send request'); // form keeps its value
+    }
+  };
+
+  const sendRequest = async (code, restorePreference) => {
+    try {
       const row = await api('/client/associations/request', {
         method: 'POST',
-        body: { invite_code: code },
+        body: { invite_code: code, restore_preference: restorePreference },
       });
       setInviteCode('');
+      setReconnect(null);
       setAssoc({ status: row.status, trainer_name: row.trainer_name });
       setAssocMsg(row.trainer_name
         ? `Request sent to ${row.trainer_name}`
         : 'Request sent — waiting for your trainer to accept');
     } catch (e) {
-      setAssocMsg(e.message || 'Could not send request'); // form keeps its value
+      setAssocMsg(e.message || 'Could not send request');
     }
   };
   const initials = (user.name || '?')
@@ -142,6 +159,65 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer }) {
         </View>
       )}
 
+      {reconnect && (
+        <Modal visible transparent animationType="fade" onRequestClose={() => setReconnect(null)}>
+          <TouchableOpacity style={styles.reconnectBackdrop} activeOpacity={1} onPress={() => setReconnect(null)}>
+            <View style={styles.reconnectSheet}>
+              <Text style={styles.reconnectTitle}>
+                Reconnect with {reconnect.preview.trainer_name || 'this trainer'}?
+              </Text>
+              <Text style={styles.reconnectSub}>
+                You were previously connected with this trainer
+                {reconnect.preview.archived_at
+                  ? ` until ${new Date(reconnect.preview.archived_at).toLocaleDateString()}`
+                  : ''}
+                .
+              </Text>
+              {(reconnect.preview.counts?.assigned_workouts > 0 ||
+                reconnect.preview.counts?.diet_plans > 0) && (
+                <View style={styles.reconnectCounts}>
+                  <Text style={styles.reconnectCountLine}>
+                    • {reconnect.preview.counts.assigned_workouts} assigned workout
+                    {reconnect.preview.counts.assigned_workouts === 1 ? '' : 's'}
+                  </Text>
+                  <Text style={styles.reconnectCountLine}>
+                    • {reconnect.preview.counts.diet_plans} diet plan
+                    {reconnect.preview.counts.diet_plans === 1 ? '' : 's'}
+                  </Text>
+                </View>
+              )}
+              <Text style={styles.reconnectQuestion}>What would you prefer?</Text>
+              <TouchableOpacity
+                style={styles.reconnectOpt}
+                onPress={() => sendRequest(reconnect.code, 'restore')}
+              >
+                <Ionicons name="refresh" size={17} color={colors.primary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.reconnectOptTitle}>Restore my previous history</Text>
+                  <Text style={styles.reconnectOptSub}>Keep everything as it was</Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.reconnectOpt}
+                onPress={() => sendRequest(reconnect.code, 'fresh')}
+              >
+                <Ionicons name="sparkles" size={17} color={colors.blue} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.reconnectOptTitle}>Start fresh</Text>
+                  <Text style={styles.reconnectOptSub}>Begin a new relationship</Text>
+                </View>
+              </TouchableOpacity>
+              <Text style={styles.reconnectNote}>
+                Your trainer will confirm this before it takes effect.
+              </Text>
+              <TouchableOpacity style={styles.reconnectCancel} onPress={() => setReconnect(null)}>
+                <Text style={styles.reconnectCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      )}
+
       {isTrainer && (
         <TouchableOpacity
           style={styles.clientsRow}
@@ -196,6 +272,22 @@ const makeStyles = (colors) =>
       marginTop: 4,
     },
     clientsText: { color: colors.primary, fontWeight: '700', flex: 1 },
+    reconnectBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 24 },
+    reconnectSheet: { backgroundColor: colors.card, borderRadius: 16, padding: 20 },
+    reconnectTitle: { color: colors.text, fontSize: 17, fontWeight: '800' },
+    reconnectSub: { color: colors.textDim, fontSize: 13, marginTop: 6 },
+    reconnectCounts: { marginTop: 10 },
+    reconnectCountLine: { color: colors.text, fontSize: 13 },
+    reconnectQuestion: { color: colors.text, fontSize: 14, fontWeight: '700', marginTop: 14, marginBottom: 8 },
+    reconnectOpt: {
+      flexDirection: 'row', alignItems: 'center', gap: 12,
+      backgroundColor: colors.cardLight, borderRadius: 12, padding: 14, marginBottom: 8,
+    },
+    reconnectOptTitle: { color: colors.text, fontWeight: '700', fontSize: 14 },
+    reconnectOptSub: { color: colors.textDim, fontSize: 12, marginTop: 2 },
+    reconnectNote: { color: colors.textDim, fontSize: 11, marginTop: 4 },
+    reconnectCancel: { alignItems: 'center', padding: 10, marginTop: 6 },
+    reconnectCancelText: { color: colors.textDim, fontWeight: '700' },
     pendingHint: { color: colors.yellow, fontSize: 12, marginTop: 8 },
     inviteInput: {
       backgroundColor: colors.cardLight,

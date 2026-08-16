@@ -47,8 +47,50 @@ async function claimInviteCode(codeId) {
   return rows.length > 0;
 }
 
+// GET /client/trainer-code-preview support: look up the invite code's
+// trainer and check for a still-archived (not purged, not pending)
+// relationship with this client.
+async function trainerCodePreview(clientId, code) {
+  const invite = await findValidInviteCode(code);
+  if (!invite) throw new HttpError(400, 'Invalid or expired invite code');
+  const { rows } = await query(
+    `SELECT * FROM trainer_clients
+     WHERE trainer_id = $1 AND client_id = $2 AND status = 'archived'
+     LIMIT 1`,
+    [invite.trainer_id, clientId]
+  );
+  const archived = rows[0] || null;
+  let counts = null;
+  if (archived) {
+    const [assigned, diet] = await Promise.all([
+      query(
+        `SELECT COUNT(*) AS c FROM assigned_plans
+         WHERE trainer_id = $1 AND client_id = $2 AND status = 'active'`,
+        [archived.trainer_id, clientId]
+      ),
+      query(
+        `SELECT COUNT(*) AS c FROM diet_plans
+         WHERE trainer_id = $1 AND client_id = $2 AND status = 'active' AND created_by = 'trainer'`,
+        [archived.trainer_id, clientId]
+      ),
+    ]);
+    counts = {
+      assigned_workouts: Number(assigned.rows[0].c),
+      diet_plans: Number(diet.rows[0].c),
+    };
+  }
+  return {
+    trainer_id: invite.trainer_id,
+    trainer_name: invite.trainer_name,
+    is_reactivation: !!archived,
+    archived_at: archived?.archived_at || null,
+    purge_at: archived?.purge_at || null,
+    counts,
+  };
+}
+
 // Client submits a trainer's invite code → pending association
-async function requestAssociationByCode(clientId, code) {
+async function requestAssociationByCode(clientId, code, restorePreference = null) {
   const client = await getUserById(clientId);
   if (!client || client.role !== 'user') {
     throw new HttpError(403, 'Only user (client) accounts can request association');
@@ -57,9 +99,11 @@ async function requestAssociationByCode(clientId, code) {
   if (!invite) throw new HttpError(400, 'Invalid or expired invite code');
 
   // Idempotency / business rules — one pending request, one active trainer.
+  // NOTE: 'archived' rows are EXCLUDED here on purpose — they're handled by
+  // the reactivation branch below (reuse the row with a preference).
   const withTrainer = await query(
     `SELECT * FROM trainer_clients
-     WHERE trainer_id = $1 AND client_id = $2 AND status != 'revoked'`,
+     WHERE trainer_id = $1 AND client_id = $2 AND status IN ('pending', 'active')`,
     [invite.trainer_id, clientId]
   );
   if (withTrainer.rows.length) {
@@ -85,6 +129,32 @@ async function requestAssociationByCode(clientId, code) {
   if (!claimed) {
     throw new HttpError(409, 'This invite code has already been used');
   }
+  // Reactivation: REUSE the archived row (keeps archived_at/purge_at for a
+  // decline or 'fresh' outcome) instead of inserting a new one.
+  const archived = await query(
+    `SELECT id FROM trainer_clients
+     WHERE trainer_id = $1 AND client_id = $2 AND status = 'archived'
+     LIMIT 1`,
+    [invite.trainer_id, clientId]
+  );
+  if (archived.rows.length) {
+    const pref = restorePreference === 'fresh' || restorePreference === 'restore'
+      ? restorePreference
+      : null;
+    if (!pref) {
+      throw new HttpError(400, 'restore_preference is required when reconnecting with a previously archived trainer');
+    }
+    const { rows } = await query(
+      `UPDATE trainer_clients SET
+         status = 'pending', requested_by = 'client', responded_at = NULL,
+         restore_preference = $3
+       WHERE id = $1 AND trainer_id = $2
+       RETURNING trainer_clients.*, $4::text AS trainer_name`,
+      [archived.rows[0].id, invite.trainer_id, pref, invite.trainer_name]
+    );
+    return rows[0];
+  }
+
   const { rows } = await query(
     `INSERT INTO trainer_clients (trainer_id, client_id, status, requested_by)
      VALUES ($1, $2, 'pending', 'client')
@@ -118,22 +188,96 @@ async function listAssociations(trainerId, status) {
      ORDER BY tc.created_at DESC`,
     [trainerId, status || null]
   );
+  // flag reactivations + attach the archived-history summary
+  for (const r of rows) {
+    r.is_reactivation = r.restore_preference != null;
+    if (r.is_reactivation) {
+      const [assigned, diet] = await Promise.all([
+        query(
+          `SELECT COUNT(*) AS c FROM assigned_plans
+           WHERE trainer_id = $1 AND client_id = $2 AND status = 'active'`,
+          [trainerId, r.client_id]
+        ),
+        query(
+          `SELECT COUNT(*) AS c FROM diet_plans
+           WHERE trainer_id = $1 AND client_id = $2 AND status = 'active' AND created_by = 'trainer'`,
+          [trainerId, r.client_id]
+        ),
+      ]);
+      r.archived_summary = {
+        assigned_workouts: Number(assigned.rows[0].c),
+        diet_plans: Number(diet.rows[0].c),
+      };
+    }
+  }
   return rows;
 }
 
-async function respondToAssociation(trainerId, associationId, newStatus) {
-  // newStatus: 'active' (accept) or 'revoked' (reject/revoke)
-  const { rows } = await query(
-    `UPDATE trainer_clients
-     SET status = $3, responded_at = now()
-     WHERE id = $1 AND trainer_id = $2
-     RETURNING *`,
-    [associationId, trainerId, newStatus]
+async function respondToAssociation(trainerId, associationId, action, finalDecision = null) {
+  const existing = await query(
+    'SELECT * FROM trainer_clients WHERE id = $1 AND trainer_id = $2',
+    [associationId, trainerId]
   );
-  if (!rows.length) throw new HttpError(404, 'Association not found');
+  if (!existing.rows.length) throw new HttpError(404, 'Association not found');
+  const row = existing.rows[0];
+  const isReactivation = row.restore_preference != null;
+
+  if (action === 'accept') {
+    if (isReactivation) {
+      const decision = finalDecision === 'restore' || finalDecision === 'fresh' ? finalDecision : null;
+      if (!decision) {
+        throw new HttpError(400, "final_decision ('restore' or 'fresh') is required for reactivation requests");
+      }
+      if (decision === 'restore') {
+        const { rows } = await query(
+          `UPDATE trainer_clients SET
+             status = 'active', responded_at = now(),
+             archived_at = NULL, archived_by = NULL, purge_at = NULL,
+             restore_preference = NULL
+           WHERE id = $1 RETURNING *`,
+          [associationId]
+        );
+        return rows[0];
+      }
+      // fresh: separate clean row; the archived row keeps its own countdown
+      await query(
+        `UPDATE trainer_clients SET status = 'archived', responded_at = now()
+         WHERE id = $1`,
+        [associationId]
+      );
+      const { rows } = await query(
+        `INSERT INTO trainer_clients (trainer_id, client_id, status, requested_by, responded_at)
+         VALUES ($1, $2, 'active', 'client', now()) RETURNING *`,
+        [trainerId, row.client_id]
+      );
+      return rows[0];
+    }
+    const { rows } = await query(
+      `UPDATE trainer_clients SET status = 'active', responded_at = now()
+       WHERE id = $1 RETURNING *`,
+      [associationId]
+    );
+    return rows[0];
+  }
+
+  // reject
+  if (isReactivation) {
+    // decline = "not now": revert to archived, original countdown intact
+    const { rows } = await query(
+      `UPDATE trainer_clients SET
+         status = 'archived', responded_at = now(), restore_preference = NULL
+       WHERE id = $1 RETURNING *`,
+      [associationId]
+    );
+    return rows[0];
+  }
+  const { rows } = await query(
+    `UPDATE trainer_clients SET status = 'revoked', responded_at = now()
+     WHERE id = $1 RETURNING *`,
+    [associationId]
+  );
   return rows[0];
 }
-
 async function listActiveClients(trainerId) {
   const { rows } = await query(
     `SELECT u.id, u.name, u.email, tc.responded_at AS associated_at
@@ -158,6 +302,7 @@ async function getActiveTrainerForClient(clientId) {
 
 module.exports = {
   createInviteCode,
+  trainerCodePreview,
   getAssociationStateForClient,
   requestAssociationByCode,
   listAssociations,

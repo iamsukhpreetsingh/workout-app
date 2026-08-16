@@ -5,6 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "migrate": "node scripts/migrate.js",
+    "purge-archives": "node scripts/purgeExpiredArchives.js",
     "dev": "node server.js"
   },
   "dependencies": {

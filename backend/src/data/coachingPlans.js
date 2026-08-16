@@ -121,9 +121,13 @@ async function createDietTree({ trainerId, clientId, name, notes, days, createdB
     }
     const catalogMap = new Map();
     if (catalogIds.length) {
+      // owner-scoped lookup: trainer dishes (trainer-built plans) or the
+      // client's own My Dishes (self-authored plans)
       const { rows: catalogRows } = await client.query(
-        `SELECT * FROM meal_catalog_items WHERE id = ANY($1::uuid[]) AND trainer_id = $2`,
-        [catalogIds, trainerId]
+        `SELECT * FROM meal_catalog_items
+         WHERE id = ANY($1::uuid[])
+           AND ((trainer_id = $2 AND $2 IS NOT NULL) OR (user_id = $3 AND $3 IS NOT NULL))`,
+        [catalogIds, createdBy === 'trainer' ? trainerId : null, createdBy === 'client' ? clientId : null]
       );
       for (const cr of catalogRows) catalogMap.set(cr.id, cr);
     }
@@ -149,7 +153,7 @@ async function createDietTree({ trainerId, clientId, name, notes, days, createdB
           const it = m.items[ii] || {};
           const cat = it.catalog_item_id ? catalogMap.get(it.catalog_item_id) : null;
           if (it.catalog_item_id && !cat) {
-            throw new HttpError(400, 'Catalog item not found for this trainer');
+            throw new HttpError(400, 'Catalog item not found for this owner');
           }
           const snap = cat || it; // custom items carry their own fields
           await client.query(
@@ -179,9 +183,99 @@ async function createDietTree({ trainerId, clientId, name, notes, days, createdB
   });
 }
 
+// Client-side: update one of my OWN diet plans (client-authored only -
+// trainer-assigned plans are not editable by the client). Full tree replace.
+async function updateOwnDietPlan(clientId, planId, payload) {
+  const { rows } = await query(
+    'SELECT id, client_id, created_by FROM diet_plans WHERE id = $1',
+    [planId]
+  );
+  if (!rows.length || rows[0].client_id !== clientId) {
+    throw new HttpError(404, 'Plan not found');
+  }
+  if (rows[0].created_by !== 'client') {
+    throw new HttpError(403, 'Only your own plans can be edited');
+  }
+  await transaction(async (client) => {
+    await client.query(
+      `UPDATE diet_plans SET
+         name = $2, notes = $3,
+         daily_calorie_target = $4, daily_protein_target = $5,
+         daily_carbs_target = $6, daily_fat_target = $7
+       WHERE id = $1`,
+      [
+        planId,
+        payload.name,
+        payload.notes || null,
+        (payload.targets || {}).daily_calorie_target ?? null,
+        (payload.targets || {}).daily_protein_target ?? null,
+        (payload.targets || {}).daily_carbs_target ?? null,
+        (payload.targets || {}).daily_fat_target ?? null,
+      ]
+    );
+    await client.query('DELETE FROM diet_plan_days WHERE diet_plan_id = $1', [planId]);
+    const days = payload.days || [];
+    for (let di = 0; di < days.length; di++) {
+      const d = days[di];
+      const { rows: dayRows } = await client.query(
+        `INSERT INTO diet_plan_days (diet_plan_id, day_label, order_index)
+         VALUES ($1,$2,$3) RETURNING id`,
+        [planId, d.day_label || `Day ${di + 1}`, di]
+      );
+      for (let mi = 0; mi < (d.meals || []).length; mi++) {
+        const m = d.meals[mi];
+        const { rows: mealRows } = await client.query(
+          `INSERT INTO diet_plan_meals (diet_plan_day_id, meal_type, order_index, slot_note)
+           VALUES ($1,$2,$3,$4) RETURNING id`,
+          [dayRows[0].id, m.meal_type, mi, m.slot_note || null]
+        );
+        for (let ii = 0; ii < (m.items || []).length; ii++) {
+          const it = m.items[ii] || {};
+          await client.query(
+            `INSERT INTO diet_plan_meal_items
+               (diet_plan_meal_id, name, calories, protein_g, carbs_g, fat_g,
+                serving_size, recipe_url, quantity_multiplier, client_note, order_index)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            [
+              mealRows[0].id,
+              String(it.name || '').trim(),
+              it.calories != null ? Math.round(Number(it.calories)) : null,
+              it.protein_g != null ? Number(it.protein_g) : null,
+              it.carbs_g != null ? Number(it.carbs_g) : null,
+              it.fat_g != null ? Number(it.fat_g) : null,
+              it.serving_size || null,
+              it.recipe_url || null,
+              it.quantity_multiplier != null ? Number(it.quantity_multiplier) : 1,
+              it.client_note || null,
+              ii,
+            ]
+          );
+        }
+      }
+    }
+  });
+  return getPlanWithItems('diet', planId);
+}
+
+// Client-side: delete one of my OWN client-authored plan
+async function deleteOwnPlan(kind, clientId, planId) {
+  const c = cfg(kind);
+  const { rows } = await query(
+    `SELECT id, client_id, created_by FROM ${c.plansTable} WHERE id = $1`,
+    [planId]
+  );
+  if (!rows.length || rows[0].client_id !== clientId) {
+    throw new HttpError(404, 'Plan not found');
+  }
+  if (rows[0].created_by !== 'client') {
+    throw new HttpError(403, 'Only your own plans can be deleted');
+  }
+  await query(`DELETE FROM ${c.plansTable} WHERE id = $1`, [planId]);
+}
+
 async function listActiveForClient(kind, trainerId, clientId) {
   const c = cfg(kind);
-  await assertActiveAssociation(trainerId, clientId);
+  await assertReadableAssociation(trainerId, clientId);
   // diet lists count MEAL SLOTS (what the trainer builds), not dish items
   const countExpr = kind === 'diet'
     ? `(SELECT COUNT(*) FROM diet_plan_meals m
@@ -204,6 +298,11 @@ async function listActiveForOwner(kind, clientId) {
     `SELECT p.*, u.name AS trainer_name FROM ${c.plansTable} p
       LEFT JOIN users u ON u.id = p.trainer_id
       WHERE p.client_id = $1 AND p.status = 'active'
+        AND (p.created_by = 'client' OR EXISTS (
+          SELECT 1 FROM trainer_clients tc
+          WHERE tc.trainer_id = p.trainer_id AND tc.client_id = p.client_id
+            AND tc.status = 'active'
+        ))
       ORDER BY p.created_at DESC`,
     [clientId]
   );
@@ -291,7 +390,7 @@ async function checkIn(kind, clientId, planId, date, done, note) {
 
 async function listCheckins(kind, trainerId, clientId, planId, from, to) {
   const c = cfg(kind);
-  await assertActiveAssociation(trainerId, clientId);
+  await assertReadableAssociation(trainerId, clientId);
   const { rows } = await query(
     `SELECT * FROM ${c.checkinsTable}
      WHERE ${c.planFk} = $1
@@ -313,8 +412,22 @@ async function listMyCheckins(kind, clientId, planId) {
   return rows;
 }
 
+// Read access during the 30-day archive window: 'active' OR 'archived'.
+// Writes (create/archive/etc.) keep using assertActiveAssociation.
+async function assertReadableAssociation(trainerId, clientId) {
+  const { rows } = await query(
+    `SELECT 1 FROM trainer_clients
+     WHERE trainer_id = $1 AND client_id = $2 AND status IN ('active', 'archived')`,
+    [trainerId, clientId]
+  );
+  if (!rows.length) throw new HttpError(403, 'No active association with this client');
+}
+
 module.exports = {
+  assertReadableAssociation,
   createPlan,
+  updateOwnDietPlan,
+  deleteOwnPlan,
   listActiveForClient,
   listActiveForOwner,
   getPlanWithItems,

@@ -157,7 +157,8 @@ async function listActiveForClientId(clientId) {
   const { rows: plans } = await query(
     `SELECT p.*, u.name AS trainer_name FROM assigned_plans p
      JOIN users u ON u.id = p.trainer_id
-     WHERE p.client_id = $1 AND p.status = 'active'
+     JOIN trainer_clients tc ON tc.trainer_id = p.trainer_id AND tc.client_id = p.client_id
+     WHERE p.client_id = $1 AND p.status = 'active' AND tc.status = 'active'
      ORDER BY p.created_at DESC`,
     [clientId]
   );
@@ -171,7 +172,18 @@ async function listActiveForClientId(clientId) {
   return plans;
 }
 
+// Read access during the archive window: active OR archived
+async function assertReadableAssociation(trainerId, clientId) {
+  const { rows } = await query(
+    `SELECT 1 FROM trainer_clients
+     WHERE trainer_id = $1 AND client_id = $2 AND status IN ('active', 'archived')`,
+    [trainerId, clientId]
+  );
+  if (!rows.length) throw new HttpError(403, 'No active association with this client');
+}
+
 module.exports = {
+  assertReadableAssociation,
   assertActiveAssociation,
   createAssignedPlan,
   listActiveForClientId,

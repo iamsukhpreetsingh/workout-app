@@ -69,7 +69,7 @@ export default function PlansScreen({ navigation }) {
       {isClient && subTab === 'diet' ? (
         <DietPlansList styles={styles} colors={colors} navigation={navigation} fromTrainer={showTrainerTab} />
       ) : showTrainerTab ? (
-        <AssignedList styles={styles} colors={colors} navigation={navigation} />
+        <AssignedList styles={styles} colors={colors} navigation={navigation} pinned={pinned} onTogglePin={onTogglePin} />
       ) : (
         <MyRoutinesList styles={styles} colors={colors} navigation={navigation} pinned={pinned} onTogglePin={onTogglePin} />
       )}
@@ -129,6 +129,19 @@ function DietPlansList({ styles, colors, navigation, fromTrainer }) {
 
   return (
     <View style={{ flex: 1 }}>
+      {!fromTrainer && (
+        <View style={styles.dietSegRow}>
+          <View style={[styles.dietSegBtn, styles.dietSegBtnOn]}>
+            <Text style={[styles.dietSegText, { color: '#fff' }]}>Plans</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.dietSegBtn}
+            onPress={() => navigation.navigate('MyDishes')}
+          >
+            <Text style={styles.dietSegText}>My Dishes ›</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       {plans.length === 0 && (
         <View style={styles.emptyWrap}>
           <Ionicons name="nutrition-outline" size={38} color={colors.textDim} />
@@ -154,6 +167,17 @@ function DietPlansList({ styles, colors, navigation, fromTrainer }) {
         data={plans}
         keyExtractor={(p) => String(p.id)}
         contentContainerStyle={{ padding: 20, paddingTop: 6, paddingBottom: 40 }}
+        ListHeaderComponent={
+          !fromTrainer ? (
+            <TouchableOpacity
+              style={styles.newRoutineBtn}
+              onPress={() => navigation.navigate('DietPlanBuilder', { self: true })}
+            >
+              <Ionicons name="add" size={17} color={colors.primary} />
+              <Text style={styles.newRoutineText}>New Diet Plan</Text>
+            </TouchableOpacity>
+          ) : null
+        }
         renderItem={({ item: plan }) => {
           const itemCount = (plan.days || []).reduce(
             (n, d) => n + (d.meals || []).reduce((m, mm) => m + (mm.items || []).length, 0), 0
@@ -255,7 +279,7 @@ function MyRoutinesList({ styles, colors, navigation, pinned, onTogglePin }) {
   );
 }
 
-function AssignedList({ styles, colors, navigation }) {
+function AssignedList({ styles, colors, navigation, pinned, onTogglePin }) {
   const [assigned, setAssigned] = useState([]);
   const { user } = useAuth();
 
@@ -306,6 +330,12 @@ function AssignedList({ styles, colors, navigation }) {
               {ap.exercises?.length ?? 0} exercises
             </Text>
           </View>
+          <PinButton
+            styles={styles}
+            colors={colors}
+            pinned={pinned.has(`trainer_assigned:${ap.id}`)}
+            onPress={() => onTogglePin('trainer_assigned', ap.id)}
+          />
           <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
         </TouchableOpacity>
       )}
@@ -431,6 +461,13 @@ const makeStyles = (colors) =>
       paddingVertical: 12, marginBottom: 12,
     },
     newRoutineText: { color: colors.primary, fontWeight: '700', fontSize: 14 },
+    dietSegRow: {
+      flexDirection: 'row', backgroundColor: colors.cardLight,
+      borderRadius: 12, padding: 3, marginHorizontal: 20, marginTop: 10, marginBottom: 4,
+    },
+    dietSegBtn: { flex: 1, alignItems: 'center', borderRadius: 10, paddingVertical: 8 },
+    dietSegBtnOn: { backgroundColor: colors.primary },
+    dietSegText: { color: colors.textDim, fontWeight: '700', fontSize: 12 },
     pinBtn: { padding: 6 },
     name: { color: colors.text, fontSize: 15, fontWeight: '700' },
     meta: { color: colors.textDim, fontSize: 12, marginTop: 2 },

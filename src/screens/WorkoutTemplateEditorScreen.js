@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
   TextInput,
   ScrollView,
   TouchableOpacity,
-  Alert,
   StyleSheet,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../lib/api';
@@ -15,74 +16,93 @@ import RestEditorModal from '../components/RestEditorModal';
 import { groupLabels } from '../store/WorkoutContext';
 import { useColors } from '../theme';
 
-let groupCounter = 0;
-const nextGroupId = () => `a${Date.now()}_${++groupCounter}`;
-
 const NUMS = { fontVariant: ['tabular-nums'] };
+const PRESET_TAGS = ['push', 'pull', 'legs', 'full body', 'beginner', 'hypertrophy', 'strength', 'conditioning'];
 
-export default function AssignWorkoutScreen({ route, navigation }) {
+let uid = 0;
+const nid = () => `t${Date.now()}_${++uid}`;
+
+// Template editor — the same builder UI as the Assign Workout flow, saving
+// to the trainer's reusable template library instead of a client assignment.
+export default function WorkoutTemplateEditorScreen({ route, navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
-  const { clientId, clientName, planId, prefill } = route.params || {};
-  const isEditing = !!planId;
+  const { templateId } = route.params || {};
+
+  const [loading, setLoading] = useState(!!templateId);
+  const [id, setId] = useState(templateId || null);
   const [name, setName] = useState('');
   const [notes, setNotes] = useState('');
-  const [nameError, setNameError] = useState(false);
+  const [tags, setTags] = useState([]);
   const [exercises, setExercises] = useState([]);
   const [pickerVisible, setPickerVisible] = useState(false);
   const [restEditIdx, setRestEditIdx] = useState(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [alsoSaveTemplate, setAlsoSaveTemplate] = useState(false);
-  const [loading, setLoading] = useState(isEditing);
-
-  useEffect(() => {
-    if (isEditing) {
-      api(`/trainer/clients/${clientId}/assigned-plans`)
-        .then((plans) => {
-          const plan = plans.find((p) => p.id === planId);
-          if (plan) {
-            setName(plan.name);
-            setNotes(plan.notes || '');
-            setExercises(
-              (plan.exercises || []).map((e, i) => ({
-                id: `ex_${i}`,
-                name: e.exercise_name,
-                muscle_group: '',
-                targetSets: e.target_sets,
-                restSeconds: e.rest_seconds || 90,
-                groupId: e.group_id,
-              }))
-            );
-          }
-          setLoading(false);
-        })
-        .catch(() => setLoading(false));
-    }
-  }, [planId, clientId, isEditing]);
-
-  React.useEffect(() => {
-    if (!prefill) return;
-    setName(prefill.name || '');
-    setNotes(prefill.notes || '');
-    setExercises(
-      (prefill.exercises || []).map((ex, i) => ({
-        id: `p${i}`,
-        name: ex.name,
-        muscle_group: '',
-        targetSets: ex.targetSets || 3,
-        restSeconds: ex.restSeconds || 90,
-        groupId: ex.groupId || null,
-      }))
-    );
-  }, [prefill]);
 
   React.useLayoutEffect(() => {
     navigation.setOptions({
-      title: isEditing ? `Edit for ${clientName || 'Client'}` : `Assign to ${clientName || 'Client'}`,
+      title: id ? 'Edit Template' : 'New Template',
+      headerRight: () =>
+        id ? (
+          <TouchableOpacity
+            onPress={confirmDelete}
+            style={{ padding: 8 }}
+          >
+            <Ionicons name="trash-outline" size={20} color={colors.red} />
+          </TouchableOpacity>
+        ) : null,
     });
-  }, [navigation, clientName, isEditing]);
+  }, [navigation, id, colors]);
+
+  React.useEffect(() => {
+    if (!templateId) return;
+    api(`/trainer/workout-templates/${templateId}`)
+      .then((tpl) => {
+        setId(tpl.id);
+        setName(tpl.name);
+        setNotes(tpl.notes || '');
+        setTags(tpl.tags || []);
+        setExercises(
+          (tpl.exercises || []).map((ex) => ({
+            id: ex.id,
+            name: ex.exercise_name,
+            muscle_group: '',
+            targetSets: ex.target_sets,
+            restSeconds: ex.rest_seconds || 90,
+            groupId: ex.group_id || null,
+          }))
+        );
+      })
+      .catch((e) => {
+        Alert.alert('Could not load template', e.message || 'Please try again.', [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ]);
+      })
+      .finally(() => setLoading(false));
+  }, [templateId]);
+
+  const confirmDelete = () =>
+    Alert.alert(
+      'Delete template',
+      'This template will be removed from your library. Workouts already assigned from it are unaffected.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api(`/trainer/workout-templates/${id}`, { method: 'DELETE' });
+              navigation.goBack();
+            } catch (e) {
+              Alert.alert('Could not delete', e.message || 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
 
   const toggleSelect = (i) =>
     setSelected((prev) => (prev.includes(i) ? prev.filter((x) => x !== i) : [...prev, i]));
@@ -92,116 +112,90 @@ export default function AssignWorkoutScreen({ route, navigation }) {
       Alert.alert('Superset', 'Select at least 2 exercises to link.');
       return;
     }
-    const groupId = nextGroupId();
+    const groupId = nid();
     setExercises((prev) => prev.map((e, i) => (selected.includes(i) ? { ...e, groupId } : e)));
     setSelected([]);
     setSelectMode(false);
   };
 
-  const saveWorkout = async () => {
+  const toApi = () => ({
+    name: name.trim(),
+    notes: notes.trim() || null,
+    tags,
+    exercises: exercises.map((e, i) => ({
+      exercise_name: e.name,
+      target_sets: e.targetSets,
+      target_reps: null,
+      target_weight_note: null,
+      order_index: i,
+      rest_seconds: e.restSeconds,
+      notes: null,
+      group_id: e.groupId || null,
+    })),
+  });
+
+  const save = async () => {
     if (busy) return;
-    if (!name.trim()) {
-      setNameError(true);
-      Alert.alert('Name required', 'Give this workout a name.');
-      return;
-    }
-    if (!exercises.length) {
-      Alert.alert('No exercises', 'Add at least one exercise before assigning.');
-      return;
-    }
+    if (!name.trim()) return Alert.alert('Name required', 'Give this template a name.');
+    if (!exercises.length) return Alert.alert('No exercises', 'Add at least one exercise.');
     setBusy(true);
     try {
-      const exercisesPayload = exercises.map((e, i) => ({
-        exercise_name: e.name,
-        target_sets: e.targetSets,
-        target_reps: null,
-        target_weight_note: null,
-        order_index: i,
-        rest_seconds: e.restSeconds,
-        notes: null,
-        group_id: e.groupId || null,
-      }));
-
-      if (isEditing) {
-        await api(`/trainer/clients/${clientId}/assigned-plans/${planId}`, {
-          method: 'PUT',
-          body: {
-            name: name.trim(),
-            notes: notes.trim() || null,
-            exercises: exercisesPayload,
-          },
-        });
+      if (id) {
+        await api(`/trainer/workout-templates/${id}`, { method: 'PATCH', body: toApi() });
       } else {
-        await api(`/trainer/clients/${clientId}/assigned-plans`, {
-          method: 'POST',
-          body: {
-            name: name.trim(),
-            notes: notes.trim() || null,
-            exercises: exercisesPayload,
-          },
-        });
-      // independent second write: seed the reusable template library
-      if (alsoSaveTemplate) {
-        await api('/trainer/workout-templates', {
-          method: 'POST',
-          body: {
-            name: name.trim(),
-            notes: notes.trim() || null,
-            tags: [],
-            exercises: exercises.map((e, i) => ({
-              exercise_name: e.name,
-              target_sets: e.targetSets,
-              target_reps: null,
-              target_weight_note: null,
-              order_index: i,
-              rest_seconds: e.restSeconds,
-              notes: null,
-              group_id: e.groupId || null,
-            })),
-          },
-        });
+        await api('/trainer/workout-templates', { method: 'POST', body: toApi() });
       }
-      }
-      navigation.navigate('ClientDetail', {
-        ...route.params,
-        assignedToast: name.trim(),
-        refreshKey: Date.now(),
-      });
+      navigation.goBack();
     } catch (e) {
-      Alert.alert('Could not save workout', e.message || 'Please try again.');
+      Alert.alert('Could not save template', e.message || 'Please try again.');
     } finally {
       setBusy(false);
     }
   };
 
-  const labels = groupLabels(exercises);
-  const canSuperset = exercises.length >= 2;
+  const toggleTag = (t) =>
+    setTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
   if (loading) {
     return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <Text style={{ color: colors.textDim }}>Loading...</Text>
+      <View style={[styles.container, { justifyContent: 'center' }]}>
+        <ActivityIndicator color={colors.primary} />
       </View>
     );
   }
 
+  const labels = groupLabels(exercises);
+  const canSuperset = exercises.length >= 2;
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 20, paddingBottom: 48 }}>
       <TextInput
-        style={[styles.input, nameError && !name.trim() && styles.inputError]}
-        placeholder="Workout name (e.g. Hypertrophy A)"
+        style={styles.input}
+        placeholder="Template name (e.g. Push Day A)"
         placeholderTextColor={colors.textDim}
         value={name}
-        onChangeText={(t) => { setName(t); setNameError(false); }}
+        onChangeText={setName}
       />
       <TextInput
-        style={[styles.input, styles.notesInput]}
-        placeholder="Notes for this plan (optional)"
+        style={[styles.input, { minHeight: 56 }]}
+        placeholder="Notes (optional)"
         placeholderTextColor={colors.textDim}
         value={notes}
         onChangeText={setNotes}
         multiline
       />
+
+      <View style={styles.tagRow}>
+        {PRESET_TAGS.map((t) => (
+          <TouchableOpacity
+            key={t}
+            style={[styles.tagChip, tags.includes(t) && styles.tagChipOn]}
+            onPress={() => toggleTag(t)}
+          >
+            <Text style={[styles.tagText, tags.includes(t) && { color: '#fff' }]}>{t}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
 
       {canSuperset && (
         <View style={styles.selectBar}>
@@ -235,7 +229,7 @@ export default function AssignWorkoutScreen({ route, navigation }) {
         const firstInGroup = ex.groupId && exercises[idx - 1]?.groupId !== ex.groupId;
         return (
           <View
-            key={ex.id}
+            key={ex.id || idx}
             style={[
               styles.exRow,
               ex.groupId && styles.groupedRow,
@@ -261,7 +255,6 @@ export default function AssignWorkoutScreen({ route, navigation }) {
               {!selectMode && (
                 <View style={{ flex: 1 }}>
                   <Text style={styles.exName}>{ex.name}</Text>
-                  <Text style={styles.exGroup}>{ex.muscle_group}</Text>
                 </View>
               )}
             </View>
@@ -293,14 +286,16 @@ export default function AssignWorkoutScreen({ route, navigation }) {
                   <Ionicons name="time-outline" size={13} color={colors.textDim} />
                   <Text style={[styles.restText, NUMS]}>{ex.restSeconds}s</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.unlinkBtn}
-                  onPress={() =>
-                    setExercises((prev) => prev.map((e, i) => (i === idx ? { ...e, groupId: null } : e)))
-                  }
-                >
-                  {ex.groupId ? <Ionicons name="unlink" size={15} color={colors.textDim} /> : null}
-                </TouchableOpacity>
+                {ex.groupId && (
+                  <TouchableOpacity
+                    style={styles.unlinkBtn}
+                    onPress={() =>
+                      setExercises((prev) => prev.map((e, i) => (i === idx ? { ...e, groupId: null } : e)))
+                    }
+                  >
+                    <Ionicons name="unlink" size={15} color={colors.textDim} />
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity
                   style={styles.removeBtn}
                   onPress={() => setExercises((prev) => prev.filter((_, i) => i !== idx))}
@@ -318,15 +313,8 @@ export default function AssignWorkoutScreen({ route, navigation }) {
         <Text style={styles.addBtnText}>Add Exercise</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.checkRow} onPress={() => setAlsoSaveTemplate((v) => !v)}>
-        <Ionicons name={alsoSaveTemplate ? 'checkbox' : 'square-outline'} size={18} color={colors.primary} />
-        <Text style={styles.checkText}>Also save this as a reusable template</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity style={styles.assignBtn} onPress={saveWorkout} disabled={busy}>
-        <Text style={styles.assignBtnText}>
-          {busy ? (isEditing ? 'Saving…' : 'Assigning…') : isEditing ? 'Save Changes' : 'Assign Workout'}
-        </Text>
+      <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={busy}>
+        <Text style={styles.saveBtnText}>{busy ? 'Saving…' : 'Save Changes'}</Text>
       </TouchableOpacity>
 
       <ExercisePicker
@@ -360,18 +348,17 @@ const makeStyles = (colors) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.bg },
     input: {
-      backgroundColor: colors.cardLight,
-      color: colors.text,
-      borderRadius: 12,
-      paddingHorizontal: 14,
-      paddingVertical: 13,
-      marginBottom: 10,
-      fontSize: 15,
-      borderWidth: 1.5,
-      borderColor: 'transparent',
+      backgroundColor: colors.cardLight, color: colors.text, borderRadius: 12,
+      paddingHorizontal: 14, paddingVertical: 13, marginBottom: 10, fontSize: 15,
+      borderWidth: 1.5, borderColor: 'transparent',
     },
-    inputError: { borderColor: colors.red },
-    notesInput: { minHeight: 64, paddingTop: 12 },
+    tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
+    tagChip: {
+      backgroundColor: colors.cardLight, borderRadius: 12,
+      paddingHorizontal: 11, paddingVertical: 6,
+    },
+    tagChipOn: { backgroundColor: colors.primary },
+    tagText: { color: colors.textDim, fontSize: 11, fontWeight: '600' },
 
     selectBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 8 },
     supersetChip: {
@@ -390,8 +377,8 @@ const makeStyles = (colors) =>
 
     exRow: {
       backgroundColor: colors.card, borderRadius: 14, padding: 12, marginBottom: 8,
-      shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.12,
-      shadowRadius: 8, elevation: 2,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.12, shadowRadius: 8, elevation: 2,
     },
     groupedRow: {
       backgroundColor: colors.cardLight, borderLeftWidth: 3, borderLeftColor: colors.blue,
@@ -406,7 +393,6 @@ const makeStyles = (colors) =>
     },
     idxText: { color: colors.primary, fontWeight: '800', fontSize: 13 },
     exName: { color: colors.text, fontWeight: '700', fontSize: 15 },
-    exGroup: { color: colors.textDim, fontSize: 12, marginTop: 2 },
     selectCheck: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
 
     controls: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
@@ -430,13 +416,10 @@ const makeStyles = (colors) =>
       paddingVertical: 14, marginTop: 8, marginBottom: 16,
     },
     addBtnText: { color: colors.primary, fontWeight: '700', fontSize: 15 },
-
-    checkRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-    checkText: { color: colors.text, fontSize: 13 },
-    assignBtn: {
+    saveBtn: {
       backgroundColor: colors.primary, borderRadius: 14, padding: 16, alignItems: 'center',
       shadowColor: colors.primary, shadowOffset: { width: 0, height: 6 },
       shadowOpacity: 0.35, shadowRadius: 12, elevation: 5,
     },
-    assignBtnText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+    saveBtnText: { color: '#fff', fontWeight: '800', fontSize: 16 },
   });

@@ -40,7 +40,7 @@ const macroLine = (it) => {
 export default function DietPlanBuilderScreen({ route, navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
-  const { clientId, clientName, self } = route.params || {};
+  const { clientId, clientName, self, editPlanId } = route.params || {};
 
   const [name, setName] = useState('');
   const [notes, setNotes] = useState('');
@@ -59,16 +59,62 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
 
   React.useLayoutEffect(() => {
     navigation.setOptions({
-      title: self ? 'New Diet Plan' : `Diet Plan → ${clientName || 'Client'}`,
+      title: editPlanId
+        ? 'Edit Diet Plan'
+        : self
+        ? 'New Diet Plan'
+        : `Diet Plan → ${clientName || 'Client'}`,
     });
   }, [navigation, clientName, self]);
 
   useEffect(() => {
-    if (!self) {
-      api('/trainer/meal-catalog')
-        .then(setCatalog)
-        .catch(() => setCatalog([]));
-    }
+    if (!editPlanId) return;
+    // edit mode: prefill from the existing own plan
+    api(`/client/diet-plans/${editPlanId}`)
+      .then((pl) => {
+        setName(pl.name || '');
+        setNotes(pl.notes || '');
+        setTargets({
+          cal: pl.daily_calorie_target != null ? String(pl.daily_calorie_target) : '',
+          pro: pl.daily_protein_target != null ? String(pl.daily_protein_target) : '',
+          car: pl.daily_carbs_target != null ? String(pl.daily_carbs_target) : '',
+          fat: pl.daily_fat_target != null ? String(pl.daily_fat_target) : '',
+        });
+        setDays(
+          (pl.days || []).map((d, di) => ({
+            key: `e${di}`,
+            day_label: d.day_label,
+            meals: (d.meals || []).map((m, mi) => ({
+              key: `e${di}_${mi}`,
+              meal_type: m.meal_type,
+              slot_note: m.slot_note || '',
+              items: (m.items || []).map((it, ii) => ({
+                key: `e${di}_${mi}_${ii}`,
+                catalog_item_id: it.catalog_item_id || null,
+                name: it.name,
+                calories: it.calories,
+                protein_g: it.protein_g,
+                carbs_g: it.carbs_g,
+                fat_g: it.fat_g,
+                serving_size: it.serving_size,
+                recipe_url: it.recipe_url,
+                quantity_multiplier: it.quantity_multiplier || 1,
+                client_note: it.client_note || '',
+              })),
+            })),
+          }))
+        );
+      })
+      .catch((e) => Alert.alert('Could not load plan', e.message || 'Please try again.'));
+  }, [editPlanId]);
+
+  useEffect(() => {
+    // trainers browse their meal catalog; clients browse their My Dishes —
+    // same picker, owner-appropriate source
+    const url = self ? '/client/my-dishes' : '/trainer/meal-catalog';
+    api(url)
+      .then(setCatalog)
+      .catch(() => setCatalog([]));
   }, [self]);
 
   const mutateDays = (fn) => setDays((prev) => fn(prev.map((d) => ({ ...d, meals: [...d.meals] }))));
@@ -192,7 +238,9 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
           })),
         })),
       };
-      if (self) {
+      if (editPlanId) {
+        await api(`/client/diet-plans/${editPlanId}`, { method: 'PATCH', body });
+      } else if (self) {
         await api('/client/diet-plans', { method: 'POST', body });
       } else {
         await api(`/trainer/clients/${clientId}/diet-plans`, { method: 'POST', body });
@@ -244,11 +292,13 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
       recipe_url: f.recipe_url || null,
       client_note: f.client_note?.trim() || null,
     };
-    if (customForm.saveToCatalog && !self) {
+    if (customForm.saveToCatalog) {
       try {
-        await api('/trainer/meal-catalog', { method: 'POST', body: item });
-      } catch {
-        // non-fatal: plan item still saves
+        const url = self ? '/client/my-dishes' : '/trainer/meal-catalog';
+        await api(url, { method: 'POST', body: item });
+      } catch (e) {
+        // non-fatal for the plan item, but surface duplicate-name errors
+        Alert.alert('Could not save dish', e.message || 'Please try again.');
       }
     }
     addItemToMeal(customForm.mealKey, item);
@@ -326,6 +376,10 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
                         setPickQuery('');
                         setPickTag(null);
                         setPicker({ mealKey: m.key, mealType: m.meal_type, mode: 'catalog' });
+                        // refresh dishes on every open so newly saved items appear
+                        api(self ? '/client/my-dishes' : '/trainer/meal-catalog')
+                          .then(setCatalog)
+                          .catch(() => {});
                       }}
                     >
                       <Ionicons name="add" size={13} color={colors.primary} />
@@ -376,7 +430,7 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.assignBtn} onPress={save} disabled={busy}>
-        <Text style={styles.assignText}>{busy ? 'Saving…' : self ? 'Save Diet Plan' : 'Assign Diet Plan'}</Text>
+        <Text style={styles.assignText}>{busy ? 'Saving…' : editPlanId ? 'Save Changes' : self ? 'Save Diet Plan' : 'Assign Diet Plan'}</Text>
       </TouchableOpacity>
 
       {/* Add-Item modal: From Catalog (searchable, one-tap attach) | Custom */}
@@ -386,7 +440,7 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
             <Text style={styles.pickTitle}>Add to {picker?.mealType || 'Meal'}</Text>
             <View style={styles.pickTabs}>
               {[
-                { key: 'catalog', label: 'From Catalog' },
+                { key: 'catalog', label: self ? 'My Dishes' : 'From Catalog' },
                 { key: 'custom', label: 'Custom Item' },
               ].map((t) => {
                 const on = picker?.mode === t.key;
@@ -403,7 +457,6 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
             </View>
 
             {picker?.mode === 'catalog' ? (
-              !self ? (
                 <View style={{ flex: 1 }}>
                   <CatalogSearch
                     query={pickQuery}
@@ -416,7 +469,11 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
                   ) : pickFiltered.length === 0 ? (
                     <View style={styles.pickEmpty}>
                       <Text style={styles.pickEmptyText}>
-                        {catalog.length === 0 ? 'Your catalog is empty' : 'No dishes found'}
+                        {catalog.length === 0
+                          ? self
+                            ? 'No saved dishes yet — create one below'
+                            : 'Your catalog is empty'
+                          : 'No dishes found'}
                       </Text>
                       <TouchableOpacity
                         style={styles.pickQuickBtn}
@@ -454,20 +511,6 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
                     />
                   )}
                 </View>
-              ) : (
-                <View style={styles.pickEmpty}>
-                  <Text style={styles.pickEmptyText}>
-                    The meal catalog is a trainer feature — use Custom Item for your own dishes.
-                  </Text>
-                  <TouchableOpacity
-                    style={styles.pickQuickBtn}
-                    onPress={() => setPicker((p) => (p ? { ...p, mode: 'custom' } : p))}
-                  >
-                    <Ionicons name="create-outline" size={15} color={colors.primary} />
-                    <Text style={styles.pickQuickText}>Custom Item</Text>
-                  </TouchableOpacity>
-                </View>
-              )
             ) : (
               <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
                 <TextInput
@@ -520,19 +563,19 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
                   onChangeText={(v) => setCustomForm((c) => ((c && c.form) ? { ...c, form: { ...c.form, client_note: v } } : { form: { client_note: v } }))}
                   multiline
                 />
-                {!self && (
-                  <TouchableOpacity
-                    style={styles.checkRow}
-                    onPress={() => setCustomForm((c) => (c ? { ...c, saveToCatalog: !c.saveToCatalog } : { form: {}, saveToCatalog: true }))}
-                  >
-                    <Ionicons
-                      name={customForm?.saveToCatalog ? 'checkbox' : 'square-outline'}
-                      size={18}
-                      color={colors.primary}
-                    />
-                    <Text style={styles.checkText}>Save to my catalog too</Text>
-                  </TouchableOpacity>
-                )}
+                <TouchableOpacity
+                  style={styles.checkRow}
+                  onPress={() => setCustomForm((c) => ((c && c.form) ? { ...c, saveToCatalog: !c.saveToCatalog } : { form: {}, saveToCatalog: false }))}
+                >
+                  <Ionicons
+                    name={customForm?.saveToCatalog ? 'checkbox' : 'square-outline'}
+                    size={18}
+                    color={colors.primary}
+                  />
+                  <Text style={styles.checkText}>
+                    {self ? 'Save to My Dishes too' : 'Save to my catalog too'}
+                  </Text>
+                </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.pickAttachBtn}
                   onPress={() => {
@@ -557,14 +600,32 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
             dish={{}}
             onClose={() => setQuickCreate(false)}
             onSave={async (item) => {
+              // Save to My Dishes / trainer catalog, then attach
               try {
-                const created = await api('/trainer/meal-catalog', { method: 'POST', body: item });
+                const url = self ? '/client/my-dishes' : '/trainer/meal-catalog';
+                const created = await api(url, { method: 'POST', body: item });
                 setCatalog((prev) => (prev || []).concat([created]));
-                setCustomForm(null);
+                if (picker) attachCatalogItem(created);
               } catch (e) {
                 Alert.alert('Could not save dish', e.message || 'Please try again.');
               }
               setQuickCreate(false);
+            }}
+            onUseOnce={async (item) => {
+              // add to this plan only — never saved to the catalog
+              if (picker) {
+                addItemToMeal(picker.mealKey, {
+                  name: item.name,
+                  calories: item.calories ?? null,
+                  protein_g: item.protein_g ?? null,
+                  carbs_g: item.carbs_g ?? null,
+                  fat_g: item.fat_g ?? null,
+                  serving_size: item.serving_size || null,
+                  recipe_url: item.recipe_url || null,
+                });
+              }
+              setQuickCreate(false);
+              setPicker(null);
             }}
             onDelete={null}
           />
@@ -655,9 +716,11 @@ const makeStyles = (colors) =>
     assignText: { color: '#fff', fontWeight: '800', fontSize: 15 },
 
     pickWrap: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+    // fixed height (not maxHeight) so the flex:1 content area has real
+    // bounds — auto-height + flex children collapsed the dish list to zero
     pickSheet: {
       backgroundColor: colors.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20,
-      padding: 18, maxHeight: '80%',
+      padding: 18, height: '82%',
     },
     pickTitle: { color: colors.text, fontSize: 17, fontWeight: '800', marginBottom: 10 },
     pickTabs: { flexDirection: 'row', backgroundColor: colors.cardLight, borderRadius: 12, padding: 3, marginBottom: 10 },

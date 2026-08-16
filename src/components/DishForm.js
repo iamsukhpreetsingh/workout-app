@@ -7,7 +7,7 @@ const PRESET_TAGS = ['vegetarian', 'vegan', 'non-veg', 'high-protein', 'low-carb
 const NUMS = { fontVariant: ['tabular-nums'] };
 
 // Add/Edit dish form (modal) — compact 4-column macro row + tag chips
-function DishForm({ visible, dish, onClose, onSave, onDelete }) {
+function DishForm({ visible, dish, onClose, onSave, onUseOnce, onDelete }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const initForm = (d) => ({
@@ -158,6 +158,26 @@ function DishForm({ visible, dish, onClose, onSave, onDelete }) {
               <TouchableOpacity style={styles.saveDishBtn} onPress={submit}>
                 <Text style={styles.saveDishText}>Save Dish</Text>
               </TouchableOpacity>
+              {onUseOnce && (
+                <TouchableOpacity
+                  style={styles.useOnceBtn}
+                  onPress={() => {
+                    if (!form.name.trim()) {
+                      Alert.alert('Name required', 'Give this dish a name.');
+                      return;
+                    }
+                    onUseOnce({
+                      ...form,
+                      calories: form.calories === '' ? null : Number(form.calories),
+                      protein_g: form.protein_g === '' ? null : Number(form.protein_g),
+                      carbs_g: form.carbs_g === '' ? null : Number(form.carbs_g),
+                      fat_g: form.fat_g === '' ? null : Number(form.fat_g),
+                    });
+                  }}
+                >
+                  <Text style={styles.useOnceText}>Use Once — Don't Save</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
         />
@@ -225,6 +245,11 @@ const makeStyles = (colors) =>
       alignItems: 'center', marginTop: 20,
     },
     saveDishText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+    useOnceBtn: {
+      alignItems: 'center', padding: 12, marginTop: 6,
+      borderWidth: 1, borderColor: colors.border, borderRadius: 12,
+    },
+    useOnceText: { color: colors.textDim, fontWeight: '700', fontSize: 13 },
   });
 
 export default DishForm;

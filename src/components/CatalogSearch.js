@@ -8,7 +8,7 @@ const PRESET_TAGS = ['vegetarian', 'vegan', 'non-veg', 'high-protein', 'low-carb
 // Shared catalog search: text query + single-select tag filter chips.
 // Used by the Recipes tab and the diet builder's Add-Item picker — one
 // implementation, not two.
-export default function CatalogSearch({ query, onQuery, tag, onTag, tagsFromItems = [] }) {
+export default function CatalogSearch({ query, onQuery, tag, onTag, tagsFromItems = [], placeholder = 'Search dishes…' }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const tags = [...new Set([...PRESET_TAGS, ...tagsFromItems])];
@@ -19,7 +19,7 @@ export default function CatalogSearch({ query, onQuery, tag, onTag, tagsFromItem
         <Ionicons name="search-outline" size={15} color={colors.textDim} />
         <TextInput
           style={styles.search}
-          placeholder="Search dishes…"
+          placeholder={placeholder}
           placeholderTextColor={colors.textDim}
           value={query}
           onChangeText={onQuery}

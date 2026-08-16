@@ -9,6 +9,7 @@ import {
   RefreshControl,
   TextInput,
   Modal,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -68,7 +69,9 @@ function weeklyVolumeBuckets(summaries) {
 export default function ClientDetailScreen({ route, navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
-  const { clientId, clientName, adherence, lastActive, associatedAt } = route.params || {};
+  const { clientId, clientName, adherence, lastActive, associatedAt, archived, daysRemaining } =
+    route.params || {};
+  const readOnly = !!archived;
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -366,6 +369,16 @@ export default function ClientDetailScreen({ route, navigation }) {
         </View>
       </View>
 
+      {readOnly ? (
+        <View style={styles.archiveBanner}>
+          <Ionicons name="archive-outline" size={13} color={colors.yellow} />
+          <Text style={styles.archiveBannerText}>
+            This client is archived. Read-only access for {daysRemaining ?? 30} more day
+            {(daysRemaining ?? 30) === 1 ? '' : 's'}.
+          </Text>
+        </View>
+      ) : null}
+
       {/* ── Top tabs (scrollable second-level nav) ── */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.topTabScroll} contentContainerStyle={styles.topTabRow}>
         {[
@@ -395,6 +408,7 @@ export default function ClientDetailScreen({ route, navigation }) {
           navigation={navigation}
           clientId={clientId}
           clientName={clientName}
+          readOnly={readOnly}
           summaries={summaries}
           dietPlans={dietPlans}
           supplementPlans={supplementPlans}
@@ -597,8 +611,9 @@ export default function ClientDetailScreen({ route, navigation }) {
           ))}
 
           <TouchableOpacity
-            style={styles.assignBtn}
-            onPress={() => navigation.navigate('AssignWorkout', { clientId, clientName })}
+            style={[styles.assignBtn, readOnly && { opacity: 0.4 }]}
+            disabled={readOnly}
+            onPress={() => navigation.navigate('AssignWorkoutPicker', { clientId, clientName })}
           >
             <Ionicons name="add-circle-outline" size={20} color="#fff" />
             <Text style={styles.assignText}>Assign Workout</Text>
@@ -677,9 +692,30 @@ const TYPE_TAG = { working: 'W', warmup: 'WU', dropset: 'DS', failure: 'F' };
 // Week/month stat cards + the one place all three assign actions live
 // together + a merged recent-activity feed.
 function OverviewPanel({
-  styles, colors, navigation, clientId, clientName,
+  styles, colors, navigation, clientId, clientName, readOnly,
   summaries, activity, onLoadActivity,
 }) {
+  const confirmRemoveClient = () =>
+    Alert.alert(
+      'Remove client',
+      `You'll keep read-only access to ${clientName || 'this client'}'s workout history, diet plans, and supplement plans for 30 days, after which they'll be permanently removed. They will immediately lose access to anything you've assigned them.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api(`/trainer/clients/${clientId}/unlink`, { method: 'POST' });
+              navigation.goBack();
+            } catch (e) {
+              Alert.alert('Could not remove client', e.message || 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
+
   React.useEffect(() => { onLoadActivity && onLoadActivity(); }, []);
 
   const now = Date.now();
@@ -693,7 +729,7 @@ function OverviewPanel({
   const mo = stat(month);
 
   const actions = [
-    { label: 'Assign Workout', icon: 'barbell-outline', to: 'AssignWorkout' },
+    { label: 'Assign Workout', icon: 'barbell-outline', to: 'AssignWorkoutPicker' },
     { label: 'Assign Diet', icon: 'nutrition-outline', to: 'DietPlanBuilder', kind: 'diet' },
     { label: 'Assign Supplement', icon: 'medkit-outline', to: 'SupplementPlanBuilder', kind: 'supplement' },
   ];
@@ -714,6 +750,12 @@ function OverviewPanel({
       </View>
 
       <Text style={styles.groupLabel}>Quick Actions</Text>
+      {!readOnly ? (
+        <TouchableOpacity style={styles.removeClientBtn} onPress={confirmRemoveClient}>
+          <Ionicons name="person-remove-outline" size={14} color={colors.red} />
+          <Text style={styles.removeClientText}>Remove Client</Text>
+        </TouchableOpacity>
+      ) : null}
       <View style={styles.qaRow}>
         {actions.map((a) => (
           <TouchableOpacity
@@ -818,6 +860,20 @@ const makeStyles = (colors) =>
     name: { color: colors.text, fontSize: 20, fontWeight: '800' },
     meta: { color: colors.textDim, fontSize: 12, marginTop: 2 },
 
+    archiveBanner: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      backgroundColor: colors.cardLight, borderLeftWidth: 3, borderLeftColor: colors.yellow,
+      borderRadius: 8, borderTopLeftRadius: 4, borderBottomLeftRadius: 4,
+      paddingHorizontal: 10, paddingVertical: 7, marginBottom: 10,
+    },
+    archiveBannerText: { color: colors.yellow, fontSize: 11, fontWeight: '700', flex: 1 },
+    removeClientBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 7,
+      borderWidth: 1, borderColor: colors.red, borderRadius: 10,
+      paddingHorizontal: 12, paddingVertical: 8, marginBottom: 8, alignSelf: 'flex-start',
+      opacity: 0.85,
+    },
+    removeClientText: { color: colors.red, fontWeight: '700', fontSize: 12 },
     topTabScroll: { flexGrow: 0, marginTop: 4, marginBottom: 12 },
     topTabRow: { gap: 8, paddingHorizontal: 0, paddingBottom: 2 },
     topTab: {

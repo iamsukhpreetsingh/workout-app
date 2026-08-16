@@ -37,7 +37,11 @@ import CoachingPlanDetailScreen from './src/screens/CoachingPlanDetailScreen';
 import AssignedPlanDetailScreen from './src/screens/AssignedPlanDetailScreen';
 import DietPlanBuilderScreen from './src/screens/DietPlanBuilderScreen';
 import ClientDietPlanDetailScreen from './src/screens/ClientDietPlanDetailScreen';
+import MyDishesScreen from './src/screens/MyDishesScreen';
 import MealCatalogScreen from './src/screens/MealCatalogScreen';
+import WorkoutTemplatesScreen from './src/screens/WorkoutTemplatesScreen';
+import WorkoutTemplateEditorScreen from './src/screens/WorkoutTemplateEditorScreen';
+import AssignWorkoutPickerScreen from './src/screens/AssignWorkoutPickerScreen';
 import ActiveWorkoutMiniBar from './src/components/ActiveWorkoutMiniBar';
 
 const Tab = createBottomTabNavigator();
@@ -120,6 +124,7 @@ function MainStack({ onSwitchView }) {
       <Stack.Screen name="ClientAssignedDetail" component={ClientAssignedDetailScreen} options={{ title: 'From Your Trainer' }} />
       <Stack.Screen name="DietPlanBuilder" component={DietPlanBuilderScreen} options={{ title: 'Diet Plan' }} />
       <Stack.Screen name="ClientDietPlanDetail" component={ClientDietPlanDetailScreen} options={{ title: 'Diet Plan' }} />
+      <Stack.Screen name="MyDishes" component={MyDishesScreen} options={{ title: 'My Dishes' }} />
       <Stack.Screen name="SupplementPlanBuilder" component={CoachingPlanBuilderScreen} options={{ title: 'Supplement Plan' }} />
       <Stack.Screen name="CoachingPlanBuilder" component={CoachingPlanBuilderScreen} options={{ title: 'Plan' }} />
       <Stack.Screen name="CoachingPlanDetail" component={CoachingPlanDetailScreen} options={{ title: 'Plan' }} />
@@ -155,6 +160,8 @@ function TrainerTabs({ onSwitchView }) {
             name={
               route.name === 'Clients'
                 ? 'people'
+                : route.name === 'Workouts'
+                ? 'barbell-outline'
                 : route.name === 'Recipes'
                 ? 'restaurant-outline'
                 : 'settings-outline'
@@ -166,6 +173,7 @@ function TrainerTabs({ onSwitchView }) {
       })}
     >
       <Tab.Screen name="Clients" component={TrainerClientsScreen} options={{ title: 'Clients' }} />
+      <Tab.Screen name="Workouts" component={WorkoutTemplatesScreen} options={{ title: 'Workouts' }} />
       <Tab.Screen name="Recipes" component={MealCatalogScreen} options={{ title: 'Recipes' }} />
       <Tab.Screen name="TrainerSettings">
         {(props) => <TrainerSettingsScreen {...props} onSwitchView={onSwitchView} />}
@@ -188,7 +196,9 @@ function TrainerStack({ onSwitchView }) {
         {(props) => <TrainerTabs {...props} onSwitchView={onSwitchView} />}
       </Stack.Screen>
       <Stack.Screen name="ClientDetail" component={ClientDetailScreen} options={{ title: 'Client' }} />
+      <Stack.Screen name="AssignWorkoutPicker" component={AssignWorkoutPickerScreen} options={{ title: 'Assign Workout' }} />
       <Stack.Screen name="AssignWorkout" component={AssignWorkoutScreen} options={{ title: 'Assign Workout' }} />
+      <Stack.Screen name="WorkoutTemplateEditor" component={WorkoutTemplateEditorScreen} options={{ title: 'Template' }} />
       <Stack.Screen name="DietPlanBuilder" component={DietPlanBuilderScreen} options={{ title: 'Diet Plan' }} />
       <Stack.Screen name="SupplementPlanBuilder" component={CoachingPlanBuilderScreen} options={{ title: 'Supplement Plan' }} />
       <Stack.Screen name="AssignedPlanDetail" component={AssignedPlanDetailScreen} options={{ title: 'Assigned Plan' }} />

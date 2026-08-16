@@ -48,6 +48,7 @@ export default function TrainerClientsScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [clients, setClients] = useState([]);
+  const [archived, setArchived] = useState([]);
   const [pending, setPending] = useState([]);
   const [error, setError] = useState(null);
   const [invite, setInvite] = useState(null); // { code, expires_at }
@@ -55,11 +56,12 @@ export default function TrainerClientsScreen({ navigation }) {
   const load = useCallback(async () => {
     try {
       setError(null);
-      const [active, pendingReqs] = await Promise.all([
+      const [roster, pendingReqs] = await Promise.all([
         api('/trainer/clients'),
         api('/trainer/associations?status=pending'),
       ]);
-      setClients(active);
+      setClients(roster.filter((c) => c.status === 'active'));
+      setArchived(roster.filter((c) => c.status === 'archived'));
       setPending(pendingReqs);
     } catch (e) {
       setError(e.message || 'Could not load clients');
@@ -72,18 +74,31 @@ export default function TrainerClientsScreen({ navigation }) {
     }, [load])
   );
 
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity onPress={showInviteCode} style={{ padding: 8 }}>
+          <Ionicons name="share-social-outline" size={20} color={colors.text} />
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation, colors]);
+
   const refresh = async () => {
     setRefreshing(true);
     await load();
     setRefreshing(false);
   };
 
-  const respond = async (assocId, action) => {
+  const respond = async (assocId, action, finalDecision = null) => {
     // optimistic local update, re-sync on failure
     const snapshot = pending;
     setPending((p) => p.filter((a) => a.id !== assocId));
     try {
-      await api(`/trainer/associations/${assocId}/${action}`, { method: 'POST' });
+      await api(`/trainer/associations/${assocId}/${action}`, {
+        method: 'POST',
+        body: finalDecision ? { final_decision: finalDecision } : undefined,
+      });
       await load(); // accept → move into the active list
     } catch (e) {
       setPending(snapshot);
@@ -140,25 +155,65 @@ export default function TrainerClientsScreen({ navigation }) {
                 <Text style={styles.groupLabel}>Pending</Text>
                 {pending.map((p) => (
                   <View key={p.id} style={styles.pendingCard}>
-                    <View style={[styles.avatar, styles.avatarMuted]}>
-                      <Text style={styles.avatarMutedText}>{initialsOf(p.client_name)}</Text>
+                    <View style={styles.pendingHeader}>
+                      <View style={[styles.avatar, styles.avatarMuted]}>
+                        <Text style={styles.avatarMutedText}>{initialsOf(p.client_name)}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.pendingName}>{p.client_name}</Text>
+                        {p.is_reactivation ? (
+                          <>
+                            <Text style={styles.reactivationTag}>
+                              ↻ Reconnecting · archived{' '}
+                              {p.archived_at
+                                ? `${Math.max(0, Math.floor((Date.now() - new Date(p.archived_at).getTime()) / 86400000))} days ago`
+                                : ''}
+                            </Text>
+                            <Text style={styles.prefLine}>
+                              {(p.client_name || 'They').split(' ')[0]} prefer
+                              {p.restore_preference === 'restore' ? 's: Restore history' : 's: Start fresh'}
+                            </Text>
+                          </>
+                        ) : (
+                          <Text style={styles.pendingSub}>wants to train with you</Text>
+                        )}
+                      </View>
+                      {!p.is_reactivation && (
+                        <TouchableOpacity style={styles.rejectBtn} onPress={() => respond(p.id, 'reject')}>
+                          <Ionicons name="close" size={16} color={colors.red} />
+                        </TouchableOpacity>
+                      )}
                     </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.pendingName}>{p.client_name}</Text>
-                      <Text style={styles.pendingSub}>wants to train with you</Text>
-                    </View>
-                    <TouchableOpacity
-                      style={styles.rejectBtn}
-                      onPress={() => respond(p.id, 'reject')}
-                    >
-                      <Ionicons name="close" size={16} color={colors.red} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.acceptBtn}
-                      onPress={() => respond(p.id, 'accept')}
-                    >
-                      <Ionicons name="checkmark" size={16} color="#fff" />
-                    </TouchableOpacity>
+                    {!p.is_reactivation && (
+                      <TouchableOpacity style={styles.acceptBtn} onPress={() => respond(p.id, 'accept')}>
+                        <Ionicons name="checkmark" size={16} color="#fff" />
+                      </TouchableOpacity>
+                    )}
+                    {p.is_reactivation && (
+                      <View style={styles.reactivationActions}>
+                        <View style={styles.decisionRow}>
+                          <TouchableOpacity
+                            style={p.restore_preference === 'restore' ? styles.decideBtnSolid : styles.decideBtnOutline}
+                            onPress={() => respond(p.id, 'accept', 'restore')}
+                          >
+                            <Text style={p.restore_preference === 'restore' ? styles.decideTextSolid : styles.decideTextOutline}>
+                              Restore History
+                            </Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={p.restore_preference === 'fresh' ? styles.decideBtnSolid : styles.decideBtnOutline}
+                            onPress={() => respond(p.id, 'accept', 'fresh')}
+                          >
+                            <Text style={p.restore_preference === 'fresh' ? styles.decideTextSolid : styles.decideTextOutline}>
+                              Start Fresh
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                        <TouchableOpacity style={styles.declineBtn} onPress={() => respond(p.id, 'reject')}>
+                          <Text style={styles.declineText}>Decline</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </View>
                 ))}
               </>
@@ -170,6 +225,44 @@ export default function TrainerClientsScreen({ navigation }) {
               </Text>
             )}
           </View>
+        }
+        ListFooterComponent={
+          archived.length > 0 ? (
+            <View>
+              <Text style={styles.groupLabel}>Archived</Text>
+              {archived.map((c) => (
+                <TouchableOpacity
+                  key={c.id}
+                  style={[styles.card, styles.archivedRow]}
+                  onPress={() =>
+                    navigation.navigate('ClientDetail', {
+                      clientId: c.id,
+                      clientName: c.name,
+                      adherence: c.adherence_pct,
+                      lastActive: c.last_active_at,
+                      associatedAt: c.responded_at,
+                      archived: true,
+                      daysRemaining: c.days_remaining,
+                    })
+                  }
+                >
+                  <View style={[styles.avatar, styles.avatarMuted]}>
+                    <Text style={styles.avatarMutedText}>{initialsOf(c.name)}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.archivedName}>{c.name}</Text>
+                    <Text style={styles.meta}>
+                      Archived · {c.days_remaining} day{c.days_remaining === 1 ? '' : 's'} left
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+                </TouchableOpacity>
+              ))}
+              <Text style={styles.archivedHint}>
+                Read-only — content is removed permanently after the window ends.
+              </Text>
+            </View>
+          ) : null
         }
         ListEmptyComponent={
           isEmpty ? (
@@ -259,6 +352,9 @@ const makeStyles = (colors) =>
     },
 
     // Active clients — solid cards (same family as History/Routines)
+    archivedRow: { opacity: 0.7 },
+    archivedName: { color: colors.textDim, fontSize: 15, fontWeight: '700' },
+    archivedHint: { color: colors.textDim, fontSize: 11, marginTop: 6, opacity: 0.8 },
     card: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -287,9 +383,6 @@ const makeStyles = (colors) =>
 
     // Pending — muted, outlined, visually distinct from data-backed cards
     pendingCard: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 12,
       borderRadius: 14,
       borderWidth: 1,
       borderColor: colors.border,
@@ -297,11 +390,35 @@ const makeStyles = (colors) =>
       padding: 12,
       marginBottom: 8,
     },
+    pendingHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+    },
     avatarMuted: { backgroundColor: colors.cardLight },
     avatarMutedText: { color: colors.textDim, fontWeight: '800' },
     pendingName: { color: colors.text, fontSize: 15, fontWeight: '700' },
     pendingSub: { color: colors.textDim, fontSize: 12, marginTop: 2 },
-    acceptBtn: {
+    reactivationTag: { color: colors.blue, fontSize: 11, fontWeight: '700', marginTop: 4 },
+  prefLine: { color: colors.text, fontSize: 12, marginTop: 6 },
+  reactivationActions: { marginTop: 12 },
+  decisionRow: { flexDirection: 'row', gap: 8 },
+  decideBtnSolid: {
+    flex: 1, backgroundColor: colors.primary, borderRadius: 10,
+    paddingVertical: 10, alignItems: 'center',
+  },
+  decideBtnOutline: {
+    flex: 1, borderWidth: 1.5, borderColor: colors.primary, borderRadius: 10,
+    paddingVertical: 10, alignItems: 'center',
+  },
+  decideTextSolid: { color: '#fff', fontWeight: '700', fontSize: 12 },
+  decideTextOutline: { color: colors.primary, fontWeight: '700', fontSize: 12 },
+  declineBtn: {
+    marginTop: 8, borderWidth: 1, borderColor: colors.border, borderRadius: 10,
+    paddingVertical: 9, alignItems: 'center',
+  },
+  declineText: { color: colors.textDim, fontWeight: '700', fontSize: 12 },
+  acceptBtn: {
       width: 34,
       height: 34,
       borderRadius: 17,

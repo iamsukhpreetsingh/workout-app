@@ -65,6 +65,36 @@ async function listForClient(clientId, { limit = 20, offset = 0, from, to } = {}
   return rows;
 }
 
+// Roster with active + archived groups. Archived entries carry archived_at
+// and days_remaining vs the stored purge_at; 'revoked' rows never appear.
+async function rosterWithArchive(trainerId) {
+  const { rows } = await query(
+    `SELECT u.id, u.name, u.email, tc.status, tc.archived_at, tc.archived_by, tc.purge_at,
+            GREATEST(0, EXTRACT(DAY FROM (tc.purge_at - now()))::int) AS days_remaining,
+            last.last_active_at,
+            ROUND(days.recent_day_count::numeric / 30 * 100, 1) AS adherence_pct
+     FROM trainer_clients tc
+     JOIN users u ON u.id = tc.client_id
+     LEFT JOIN (
+       SELECT client_id, MAX(performed_at) AS last_active_at
+       FROM session_summaries GROUP BY client_id
+     ) last ON last.client_id = u.id
+     LEFT JOIN (
+       SELECT client_id, COUNT(*) AS recent_day_count
+       FROM (
+         SELECT DISTINCT client_id, (performed_at AT TIME ZONE 'UTC')::date AS workout_day
+         FROM session_summaries
+         WHERE performed_at >= now() - interval '30 days'
+       ) d
+       GROUP BY client_id
+     ) days ON days.client_id = u.id
+     WHERE tc.trainer_id = $1 AND tc.status IN ('active', 'archived')
+     ORDER BY tc.status ASC, tc.responded_at DESC`,
+    [trainerId]
+  );
+  return rows;
+}
+
 // Per-client aggregates for the trainer's client list, computed in ONE query
 // (JOIN + GROUP BY — never N+1).
 //
@@ -103,4 +133,4 @@ async function clientsWithActivity(trainerId) {
   return rows;
 }
 
-module.exports = { upsertSummaries, listForClient, clientsWithActivity };
+module.exports = { upsertSummaries, rosterWithArchive, listForClient, clientsWithActivity };

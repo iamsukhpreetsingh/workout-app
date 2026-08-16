@@ -4,11 +4,44 @@ import { getSettings, updateSettings } from '../db/settings';
 import { useColors } from '../theme';
 import { useApp } from '../store/AppContext';
 import { useAuth } from '../store/AuthContext';
+import { api } from '../lib/api';
 import { getPendingSyncCount } from '../db/queries';
 
 export default function SettingsScreen({ onSwitchView }) {
   const { themeMode, setThemeMode } = useApp();
   const { logout } = useAuth();
+  const [trainer, setTrainer] = useState(null); // active association state
+
+  useEffect(() => {
+    api('/client/trainer')
+      .then((assoc) => {
+        if (assoc?.status === 'active') setTrainer(assoc);
+        else setTrainer(null);
+      })
+      .catch(() => setTrainer(null));
+  }, []);
+
+  const disconnect = () =>
+    Alert.alert(
+      'Disconnect from trainer',
+      `You'll lose access to workouts, diet plans, and supplement plans assigned by ${trainer?.trainer_name || 'your trainer'}. Your own workout history stays exactly as it is.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Disconnect',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api('/client/trainer/unlink', { method: 'POST' });
+              setTrainer(null);
+              Alert.alert('Disconnected', "Your trainer's assigned content has been removed from your app.");
+            } catch (e) {
+              Alert.alert('Could not disconnect', e.message || 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
   const colors = useColors();
   const [settings, setSettings] = useState(null);
   const [platesText, setPlatesText] = useState('');
@@ -188,6 +221,21 @@ export default function SettingsScreen({ onSwitchView }) {
         />
         <Text style={[styles.hint, { color: colors.textDim }]}>Compare current week vs. 4-week average.</Text>
       </View>
+      {trainer ? (
+        <View style={[styles.card, { backgroundColor: colors.card }]}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Trainer</Text>
+          <Text style={[styles.hint, { color: colors.textDim }]}>
+            Connected to {trainer.trainer_name || 'your trainer'}
+          </Text>
+          <TouchableOpacity
+            style={[styles.saveBtn, { borderColor: colors.red, borderWidth: 1, backgroundColor: 'transparent', marginTop: 14 }]}
+            onPress={disconnect}
+          >
+            <Text style={[styles.saveBtnText, { color: colors.red }]}>Disconnect from Trainer</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       {onSwitchView ? (
         <View style={[styles.card, { backgroundColor: colors.card }]}>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Trainer Account</Text>
