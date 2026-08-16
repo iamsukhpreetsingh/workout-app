@@ -88,29 +88,54 @@ export default function CoachingPlanDetailScreen({ route, navigation }) {
       </Text>
       {plan.notes ? <Text style={styles.notes}>{plan.notes}</Text> : null}
 
-      <Text style={styles.groupLabel}>
-        {kind === 'diet' ? 'Meals' : 'Supplements'}
-      </Text>
-      {(plan.items || []).map((item, i) => (
-        <View key={item.id || i} style={styles.card}>
-          <View style={styles.rowHeader}>
-            <View style={styles.idxBadge}>
-              <Text style={styles.idxText}>{i + 1}</Text>
+      {/* Diet renders the nested day → meal → item chart; supplements flat */}
+      {kind === 'diet'
+        ? (plan.days || []).map((d, di) => (
+            <View key={d.id || di}>
+              <Text style={[styles.groupLabel, { marginTop: di === 0 ? 8 : 16 }]}>{d.day_label}</Text>
+              {(d.meals || []).map((m, mi) => (
+                <View key={m.id || mi} style={styles.card}>
+                  <Text style={styles.mealTypeLabel}>{String(m.meal_type).toUpperCase()}</Text>
+                  {m.slot_note ? <Text style={styles.itemDesc}>{m.slot_note}</Text> : null}
+                  {(m.items || []).map((it, ii) => (
+                    <View key={it.id || ii} style={styles.nestedItem}>
+                      <Text style={styles.itemTitle} numberOfLines={1}>
+                        {it.name}
+                        {(it.quantity_multiplier || 1) !== 1 ? ` · ${it.quantity_multiplier}x` : ''}
+                      </Text>
+                      <Text style={styles.itemDesc}>
+                        {it.calories != null ? `${it.calories} cal` : ''}
+                        {it.protein_g != null ? ` · ${Math.round(it.protein_g)}P` : ''}
+                        {it.carbs_g != null ? ` ${Math.round(it.carbs_g)}C` : ''}
+                        {it.fat_g != null ? ` ${Math.round(it.fat_g)}F` : ''}
+                      </Text>
+                      {it.client_note ? (
+                        <Text style={styles.clientNote}>Note: {it.client_note}</Text>
+                      ) : null}
+                    </View>
+                  ))}
+                </View>
+              ))}
             </View>
-            <Text style={styles.itemTitle}>
-              {kind === 'diet' ? item.meal_label : item.supplement_name}
-            </Text>
-            {kind === 'supplement' && item.dosage ? (
-              <View style={styles.doseChip}>
-                <Text style={styles.doseText}>{item.dosage}</Text>
+          ))
+        : (plan.items || []).map((item, i) => (
+            <View key={item.id || i} style={styles.card}>
+              <View style={styles.rowHeader}>
+                <View style={styles.idxBadge}>
+                  <Text style={styles.idxText}>{i + 1}</Text>
+                </View>
+                <Text style={styles.itemTitle}>{item.supplement_name}</Text>
+                {item.dosage ? (
+                  <View style={styles.doseChip}>
+                    <Text style={styles.doseText}>{item.dosage}</Text>
+                  </View>
+                ) : null}
               </View>
-            ) : null}
-          </View>
-          <Text style={styles.itemDesc}>
-            {kind === 'diet' ? item.description : [item.timing, item.notes].filter(Boolean).join(' · ')}
-          </Text>
-        </View>
-      ))}
+              <Text style={styles.itemDesc}>
+                {[item.timing, item.notes].filter(Boolean).join(' · ')}
+              </Text>
+            </View>
+          ))}
 
       {/* adherence strip — neutral for days with no check-in */}
       <Text style={styles.groupLabel}>Adherence — last 4 weeks</Text>
@@ -171,6 +196,9 @@ const makeStyles = (colors) =>
     },
     doseText: { color: colors.textDim, fontSize: 11, fontWeight: '600' },
     itemDesc: { color: colors.textDim, fontSize: 13, marginTop: 6 },
+    mealTypeLabel: { color: colors.textDim, fontSize: 11, fontWeight: '800', letterSpacing: 1, marginBottom: 6 },
+    nestedItem: { borderTopWidth: 1, borderTopColor: colors.border, marginTop: 8, paddingTop: 8 },
+    clientNote: { color: colors.yellow, fontSize: 11, fontStyle: 'italic', marginTop: 3 },
 
     stripRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
     stripCell: {

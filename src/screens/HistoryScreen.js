@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { listSessions } from '../db/queries';
 import { useColors } from '../theme';
+import { useHeaderActions } from '../components/HeaderActions';
 import { formatDuration } from '../store/WorkoutContext';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
@@ -48,6 +49,8 @@ export default function HistoryScreen({ navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [sessions, setSessions] = useState([]);
+
+  useHeaderActions(navigation);
 
   useFocusEffect(
     useCallback(() => {

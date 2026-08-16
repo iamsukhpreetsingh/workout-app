@@ -48,15 +48,25 @@ function cfg(kind) {
   return c;
 }
 
-async function createPlan(kind, { trainerId, clientId, name, notes, items, createdBy = 'trainer' }) {
+async function createPlan(kind, payload) {
+  const { trainerId, clientId, name, notes, items, days, createdBy = 'trainer' } = payload;
   const c = cfg(kind);
   // Only trainer-authored plans require an active association — a client's
   // own plan needs no trainer relationship (same spirit as self-made routines).
   if (createdBy === 'trainer') {
     await assertActiveAssociation(trainerId, clientId);
   }
-  if (!name || !Array.isArray(items) || !items.length) {
-    throw new HttpError(400, 'name and a non-empty items array are required');
+  if (!name) throw new HttpError(400, 'name is required');
+
+  // Diet: nested days / meals / items with catalog snapshotting
+  if (kind === 'diet') {
+    if (!Array.isArray(days) || !days.length) {
+      throw new HttpError(400, 'a non-empty days array is required');
+    }
+    return createDietTree({ ...payload, createdBy });
+  }
+  if (!Array.isArray(items) || !items.length) {
+    throw new HttpError(400, 'a non-empty items array are required');
   }
   return transaction(async (client) => {
     const { rows } = await client.query(
@@ -79,13 +89,107 @@ async function createPlan(kind, { trainerId, clientId, name, notes, items, creat
   });
 }
 
+// Diet plan tree creation (one transaction). Catalog-sourced items are
+// SNAPSHOTTED server-side from the catalog at insert time, so later catalog
+// edits never alter already-assigned plans.
+async function createDietTree({ trainerId, clientId, name, notes, days, createdBy = 'trainer', targets = {} }) {
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      `INSERT INTO diet_plans
+         (trainer_id, client_id, name, notes, created_by,
+          daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [
+        createdBy === 'trainer' ? trainerId : null,
+        clientId, name, notes || null, createdBy,
+        targets.daily_calorie_target ?? null,
+        targets.daily_protein_target ?? null,
+        targets.daily_carbs_target ?? null,
+        targets.daily_fat_target ?? null,
+      ]
+    );
+    const plan = rows[0];
+
+    // batch-load catalog references once (scoped to this trainer)
+    const catalogIds = [];
+    for (const d of days) {
+      for (const m of d.meals || []) {
+        for (const it of m.items || []) {
+          if (it.catalog_item_id) catalogIds.push(it.catalog_item_id);
+        }
+      }
+    }
+    const catalogMap = new Map();
+    if (catalogIds.length) {
+      const { rows: catalogRows } = await client.query(
+        `SELECT * FROM meal_catalog_items WHERE id = ANY($1::uuid[]) AND trainer_id = $2`,
+        [catalogIds, trainerId]
+      );
+      for (const cr of catalogRows) catalogMap.set(cr.id, cr);
+    }
+
+    for (let di = 0; di < days.length; di++) {
+      const d = days[di];
+      const { rows: dayRows } = await client.query(
+        `INSERT INTO diet_plan_days (diet_plan_id, day_label, order_index)
+         VALUES ($1,$2,$3) RETURNING id`,
+        [plan.id, d.day_label || `Day ${di + 1}`, di]
+      );
+      const dayId = dayRows[0].id;
+      for (let mi = 0; mi < (d.meals || []).length; mi++) {
+        const m = d.meals[mi];
+        if (!m.meal_type) throw new HttpError(400, 'each meal slot requires meal_type');
+        const { rows: mealRows } = await client.query(
+          `INSERT INTO diet_plan_meals (diet_plan_day_id, meal_type, order_index, slot_note)
+           VALUES ($1,$2,$3,$4) RETURNING id`,
+          [dayId, m.meal_type, mi, m.slot_note || null]
+        );
+        const mealId = mealRows[0].id;
+        for (let ii = 0; ii < (m.items || []).length; ii++) {
+          const it = m.items[ii] || {};
+          const cat = it.catalog_item_id ? catalogMap.get(it.catalog_item_id) : null;
+          if (it.catalog_item_id && !cat) {
+            throw new HttpError(400, 'Catalog item not found for this trainer');
+          }
+          const snap = cat || it; // custom items carry their own fields
+          await client.query(
+            `INSERT INTO diet_plan_meal_items
+               (diet_plan_meal_id, catalog_item_id, name, calories, protein_g, carbs_g, fat_g,
+                serving_size, recipe_url, quantity_multiplier, client_note, order_index)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+            [
+              mealId,
+              cat ? cat.id : null,
+              String(snap.name || '').trim(),
+              snap.calories != null ? Math.round(Number(snap.calories)) : null,
+              snap.protein_g != null ? Number(snap.protein_g) : null,
+              snap.carbs_g != null ? Number(snap.carbs_g) : null,
+              snap.fat_g != null ? Number(snap.fat_g) : null,
+              snap.serving_size || null,
+              snap.recipe_url || null,
+              it.quantity_multiplier != null ? Number(it.quantity_multiplier) : 1,
+              it.client_note || null,
+              ii,
+            ]
+          );
+        }
+      }
+    }
+    return plan;
+  });
+}
+
 async function listActiveForClient(kind, trainerId, clientId) {
   const c = cfg(kind);
   await assertActiveAssociation(trainerId, clientId);
+  // diet lists count MEAL SLOTS (what the trainer builds), not dish items
+  const countExpr = kind === 'diet'
+    ? `(SELECT COUNT(*) FROM diet_plan_meals m
+        JOIN diet_plan_days d ON d.id = m.diet_plan_day_id
+        WHERE d.diet_plan_id = p.id)`
+    : `(SELECT COUNT(*) FROM ${c.itemsTable} i WHERE i.${c.planFk} = p.id)`;
   const { rows } = await query(
-    `SELECT p.*, (
-       SELECT COUNT(*) FROM ${c.itemsTable} i WHERE i.${c.planFk} = p.id
-     ) AS item_count
+    `SELECT p.*, ${countExpr} AS item_count
      FROM ${c.plansTable} p
      WHERE p.trainer_id = $1 AND p.client_id = $2 AND p.status = 'active'
      ORDER BY p.created_at DESC`,
@@ -104,11 +208,16 @@ async function listActiveForOwner(kind, clientId) {
     [clientId]
   );
   for (const plan of rows) {
-    const items = await query(
-      `SELECT * FROM ${c.itemsTable} WHERE ${c.planFk} = $1 ORDER BY order_index`,
-      [plan.id]
-    );
-    plan.items = items.rows;
+    if (kind === 'diet') {
+      const nested = await getPlanWithItems('diet', plan.id);
+      plan.days = nested ? nested.days : [];
+    } else {
+      const items = await query(
+        `SELECT * FROM ${c.itemsTable} WHERE ${c.planFk} = $1 ORDER BY order_index`,
+        [plan.id]
+      );
+      plan.items = items.rows;
+    }
   }
   return rows;
 }
@@ -117,6 +226,29 @@ async function getPlanWithItems(kind, planId) {
   const c = cfg(kind);
   const { rows } = await query(`SELECT * FROM ${c.plansTable} WHERE id = $1`, [planId]);
   if (!rows.length) return null;
+  if (kind === 'diet') {
+    // nested days -> meals -> snapshot items (the flat table is deprecated)
+    const days = await query(
+      'SELECT * FROM diet_plan_days WHERE diet_plan_id = $1 ORDER BY order_index',
+      [planId]
+    );
+    for (const d of days.rows) {
+      const meals = await query(
+        'SELECT * FROM diet_plan_meals WHERE diet_plan_day_id = $1 ORDER BY order_index',
+        [d.id]
+      );
+      for (const m of meals.rows) {
+        const items = await query(
+          'SELECT * FROM diet_plan_meal_items WHERE diet_plan_meal_id = $1 ORDER BY order_index',
+          [m.id]
+        );
+        m.items = items.rows;
+      }
+      d.meals = meals.rows;
+    }
+    rows[0].days = days.rows;
+    return rows[0];
+  }
   const items = await query(
     `SELECT * FROM ${c.itemsTable} WHERE ${c.planFk} = $1 ORDER BY order_index`,
     [planId]

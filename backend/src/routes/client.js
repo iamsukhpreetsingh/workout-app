@@ -5,6 +5,7 @@ const sessionSummaries = require('../data/sessionSummaries');
 const measurements = require('../data/measurements');
 const sessionDetails = require('../data/sessionDetails');
 const coaching = require('../data/coachingPlans');
+const { query } = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
@@ -99,13 +100,40 @@ for (const kind of ['diet', 'supplement']) {
   // self-authored plan creation (no trainer relationship required)
   router.post(`/${seg}`, requireAuth, requireRole('user'), async (req, res) => {
     try {
-      const { name, notes, items } = req.body || {};
+      const { name, notes, items, days } = req.body || {};
+      const targets = kind === 'diet'
+        ? {
+            daily_calorie_target: req.body?.daily_calorie_target,
+            daily_protein_target: req.body?.daily_protein_target,
+            daily_carbs_target: req.body?.daily_carbs_target,
+            daily_fat_target: req.body?.daily_fat_target,
+          }
+        : undefined;
       const plan = await coaching.createPlan(kind, {
-        clientId: req.user.id, name, notes, items, createdBy: 'client',
+        clientId: req.user.id, name, notes, items, days,
+        ...(kind === 'diet' ? { targets } : {}),
+        createdBy: 'client',
       });
       res.status(201).json(plan);
     } catch (e) {
       httpError(res, e, 400);
+    }
+  });
+
+  // full nested detail for one of my own plans (drives the client viewer)
+  router.get(`/${seg}/:planId`, requireAuth, requireRole('user'), async (req, res) => {
+    try {
+      const plan = await coaching.getPlanWithItems(kind, req.params.planId);
+      if (!plan || plan.client_id !== req.user.id) {
+        return res.status(404).json({ error: 'Plan not found' });
+      }
+      if (plan.trainer_id) {
+        const { rows } = await query('SELECT name FROM users WHERE id = $1', [plan.trainer_id]);
+        plan.trainer_name = rows[0]?.name || null;
+      }
+      res.json(plan);
+    } catch (e) {
+      httpError(res, e);
     }
   });
 

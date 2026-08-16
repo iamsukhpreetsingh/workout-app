@@ -560,3 +560,96 @@ navigation transitions.
 5. Client Detail: all 5 tabs load for a client with history; Quick Actions
    open the right builders and return to the tabs; Overview's activity feed
    shows merged entries in date order.
+
+## Meal Catalog & Structured Diet Plans
+
+**Backend (migration 011 — run `npm run migrate` + restart)**:
+- `meal_catalog_items`: a trainer-owned reusable dish library (name,
+  description, optional calories/macros, serving size, recipe link, prep
+  notes, tags) — CRUD at `/trainer/meal-catalog`, scoped to the requesting
+  trainer only.
+- `diet_plans` gains optional daily targets; the flat `diet_plan_items` is
+  deprecated in favor of `diet_plan_days` → `diet_plan_meals` →
+  `diet_plan_meal_items`. Plan items are **snapshots**: catalog fields are
+  copied server-side at insert, so editing a catalog dish later never
+  changes an already-assigned plan (`catalog_item_id` kept only as a
+  reference). Legacy flat items were wrapped into a single "Every Day" day.
+- Diet plan create (trainer + client self-authored) accepts the nested
+  days payload in one transaction; GETs return the full nested structure.
+
+**Trainer UI**:
+- **Meal Catalog** (Trainer View → Settings → Meal Catalog): searchable dish
+  list, add/edit form with a compact Cal/P/C/F row and tag chips (presets +
+  custom), delete with confirmation (safe — plan snapshots unaffected).
+- **Diet Plan builder rebuilt** (`DietPlanBuilderScreen`): plan name/notes,
+  optional daily targets, collapsible editable days (Day 1 / Monday / Every
+  Day — both patterns supported), meal-slot chips, items added **From
+  Catalog** (searchable, snapshotted) or **Custom** (quick-entry with an
+  optional "save to catalog too"), per-item quantity multiplier stepper and
+  inline client-specific note.
+
+**Client UI**:
+- Routines gains a **Workouts | Diet** sub-tab dock (both top-level tabs):
+  My Routines → self-authored diet plans (+ New Diet Plan via the same
+  builder in `self` mode — **no catalog access**, custom items only);
+  From Trainer → trainer-assigned plans, read-only list.
+- **Diet chart viewer** (`ClientDietPlanDetailScreen`, shared by both
+  kinds): day tabs (hidden for single "Every Day"), meal-slot sections,
+  item cards with multiplier-scaled macros, client-note callouts, "View
+  Recipe" via Linking, day totals vs targets with a progress bar, and the
+  unchanged daily check-in.
+
+### Manual test notes
+1. Build a catalog dish with macros; use it in a plan; edit the dish's
+   calories; re-fetch the plan — the original value is retained (snapshot).
+2. Build a 2-day plan with 3 slots/day, mixed catalog + custom items, a 1.5x
+   multiplier and a client note; assign it.
+3. As the client: browse days, verify totals scale with multipliers, tap a
+   recipe link, check in.
+4. Client self-authored builder shows no "From Catalog" option anywhere.
+
+### Client diet viewer fix (fetch-driven)
+
+The diet chart viewer no longer relies on the plan object passed through
+navigation params (whose nested `days` could be missing) — it now fetches
+the authoritative nested structure from the new `GET /client/diet-plans/:id`
+(ownership-checked, includes trainer_name), with pull-to-refresh. Day tabs
+render only for genuinely multi-day plans; slot notes sit under their meal
+header; item cards show multiplier-scaled macros, client notes, and View
+Recipe links; the running total sums the rendered items of the current day
+against the plan's targets; empty days explain themselves. The check-in now
+also reflects today's existing state. Test: create a 2-day plan with ≥2
+slots/day, one item with a client_note and one with a recipe_url, assign
+it, and verify every detail renders and totals update when switching days —
+for both a trainer-assigned and a self-authored plan.
+
+## Recipes Tab & Searchable Add-From-Catalog
+
+- **Recipes is now a first-class Trainer View tab** (Clients · Recipes ·
+  Settings) — the dish library is one tap away instead of buried in
+  Settings. Add/edit/delete unchanged.
+- **Shared search tooling**: one `CatalogSearch` component (text query +
+  single-select tag chips: All / vegetarian / high-protein / …) used by BOTH
+  the Recipes tab and the diet builder's item picker; `DishForm` likewise
+  extracted into a shared component.
+- **Add-Item modal rebuilt** in the diet plan builder: a bottom sheet titled
+  "Add to Breakfast" (etc.) with **From Catalog / Custom Item** tabs.
+  From Catalog = live search + tag chips + compact rows with a one-tap
+  attach (snapshot copied, modal closes, item card appears with its note and
+  multiplier editable in place). Empty catalog or no results →
+  "Add New Dish" opens the quick-create form INSIDE the picker; after
+  saving, the trainer lands back on the picker's catalog tab with the new
+  dish ready to attach — never kicked out of the plan being built.
+  Custom Item keeps the inline form incl. the per-item note and the
+  optional "save to catalog too". Client self-authored mode hides catalog
+  access entirely.
+
+### Manual test notes
+1. Trainer View → Recipes tab reachable at all times; search by name and
+   filter by tag; add/edit/delete a dish.
+2. In the diet builder, + Item on a slot → search/filter → tap a row once →
+   item attached as a snapshot (edit its catalog source afterwards and
+   confirm the plan item is unchanged).
+3. Empty-catalog escape hatch: with an empty catalog (or a search with no
+   hits), tap "Add New Dish", create a dish, confirm you return to the same
+   picker with the dish attachable immediately.

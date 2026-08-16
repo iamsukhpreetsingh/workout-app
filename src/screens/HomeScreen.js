@@ -7,6 +7,7 @@ import { listPlans, getPlan, listSessions } from '../db/queries';
 import { getSettings } from '../db/settings';
 import { calculateStreak } from '../lib/streaks';
 import { useColors } from '../theme';
+import { useHeaderActions } from '../components/HeaderActions';
 import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
 import { listPins, removePin, removeStalePins, MAX_PINNED_ROUTINES } from '../db/pins';
@@ -78,23 +79,11 @@ export default function HomeScreen({ navigation }) {
   // non-blocking: prefilled in the choice sheet, one tap starts.
   const [emptyName, setEmptyName] = useState(smartWorkoutName());
 
-  // Settings stays Home-only; Profile is a distinct quick account view.
-  // The header shows a contextual greeting rather than the literal app name.
+  // Contextual greeting; shared settings + profile icons (all screens)
   React.useLayoutEffect(() => {
-    navigation.setOptions({
-      title: greeting(),
-      headerRight: () => (
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.headerIcon}>
-            <Ionicons name="settings-outline" size={22} color={colors.text} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => navigation.navigate('Profile')} style={styles.headerIcon}>
-            <Ionicons name="person-circle-outline" size={22} color={colors.text} />
-          </TouchableOpacity>
-        </View>
-      ),
-    });
-  }, [navigation, colors]);
+    navigation.setOptions({ title: greeting() });
+  }, [navigation]);
+  useHeaderActions(navigation);
 
   useFocusEffect(
     useCallback(() => {

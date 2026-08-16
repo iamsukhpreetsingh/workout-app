@@ -6,6 +6,7 @@ const sessionSummaries = require('../data/sessionSummaries');
 const measurements = require('../data/measurements');
 const sessionDetails = require('../data/sessionDetails');
 const coaching = require('../data/coachingPlans');
+const mealCatalog = require('../data/mealCatalog');
 const { query } = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
@@ -279,9 +280,18 @@ for (const kind of ['diet', 'supplement']) {
 
   router.post(`/clients/:clientId/${seg}`, requireAuth, requireRole('trainer'), async (req, res) => {
     try {
-      const { name, notes, items } = req.body || {};
+      const { name, notes, items, days } = req.body || {};
+      const targets = kind === 'diet'
+        ? {
+            daily_calorie_target: req.body?.daily_calorie_target,
+            daily_protein_target: req.body?.daily_protein_target,
+            daily_carbs_target: req.body?.daily_carbs_target,
+            daily_fat_target: req.body?.daily_fat_target,
+          }
+        : undefined;
       const plan = await coaching.createPlan(kind, {
-        trainerId: req.user.id, clientId: req.params.clientId, name, notes, items,
+        trainerId: req.user.id, clientId: req.params.clientId, name, notes, items, days,
+        ...(kind === 'diet' ? { targets } : {}),
       });
       res.status(201).json(plan);
     } catch (e) {
@@ -345,6 +355,40 @@ router.get(
     }
   }
 );
+
+// ---- Meal catalog (trainer-owned dish library) ----
+router.post('/meal-catalog', requireAuth, requireRole('trainer'), async (req, res) => {
+  try {
+    res.status(201).json(await mealCatalog.create(req.user.id, req.body || {}));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+router.get('/meal-catalog', requireAuth, requireRole('trainer'), async (req, res) => {
+  try {
+    res.json(await mealCatalog.list(req.user.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+router.patch('/meal-catalog/:id', requireAuth, requireRole('trainer'), async (req, res) => {
+  try {
+    res.json(await mealCatalog.update(req.user.id, req.params.id, req.body || {}));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+router.delete('/meal-catalog/:id', requireAuth, requireRole('trainer'), async (req, res) => {
+  try {
+    await mealCatalog.remove(req.user.id, req.params.id);
+    res.json({ ok: true });
+  } catch (e) {
+    httpError(res, e, 404);
+  }
+});
 
 // GET /trainer/plans/:id — trainer-only
 router.get('/plans/:id', requireAuth, requireRole('trainer'), async (req, res) => {

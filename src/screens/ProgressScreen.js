@@ -10,6 +10,7 @@ import { getSettings } from '../db/settings';
 import LineChart from '../components/LineChart';
 import CalendarHeatmap from '../components/CalendarHeatmap';
 import { useColors } from '../theme';
+import { useHeaderActions } from '../components/HeaderActions';
 
 export default function ProgressScreen({ navigation }) {
   const colors = useColors();
@@ -47,6 +48,8 @@ export default function ProgressScreen({ navigation }) {
     exSub: { fontSize: 12, marginTop: 2 },
     chev: { fontSize: 20 },
   };
+
+  useHeaderActions(navigation);
 
   useFocusEffect(
     useCallback(() => {
