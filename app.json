@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Workout Tracker",
+    "slug": "workout-tracker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0f0f0f"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.workouttracker"
+    },
+    "android": {
+      "package": "com.anonymous.workouttracker"
+    },
+    "plugins": [
+      "expo-font",
+      "expo-secure-store"
+    ]
+  }
+}

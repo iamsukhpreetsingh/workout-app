@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "amazon-bedrock": {
+      "options": {
+        "region": "us-east-1",
+        "profile": "bedrock-profile"
+      }
+    }
+  },
+  "model": "amazon-bedrock/minimax.minimax-m2.5"
+}

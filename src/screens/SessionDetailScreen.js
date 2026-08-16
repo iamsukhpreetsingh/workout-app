@@ -1,0 +1,277 @@
+import React, { useCallback, useState } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, Alert, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
+import { getSession, deleteSession, updateSetType } from '../db/queries';
+import { getPRSetIdsForSession } from '../db/pr';
+import { shareSessionAsRoutine } from '../lib/share';
+import { useColors, fmtDate } from '../theme';
+import { formatDuration, groupLabels } from '../store/WorkoutContext';
+
+const NUMS = { fontVariant: ['tabular-nums'] };
+const SET_TYPES = ['working', 'warmup', 'dropset', 'failure'];
+const TYPE_TAG = { working: 'W', warmup: 'WU', dropset: 'DS', failure: 'F' };
+// Left-edge set-type color tags — subtle, numbers stay the content
+const TYPE_COLOR = { working: 'primary', warmup: 'textDim', dropset: 'orange', failure: 'red' };
+
+export default function SessionDetailScreen({ route, navigation }) {
+  const colors = useColors();
+  const styles = makeStyles(colors);
+  const [session, setSession] = useState(null);
+  const [prSetIds, setPrSetIds] = useState(new Set());
+
+  // Share the performed workout structure (no notes/RPE/timestamps)
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () =>
+        session ? (
+          <TouchableOpacity onPress={() => shareSessionAsRoutine(session)} style={{ paddingHorizontal: 8 }}>
+            <Ionicons name="share-social-outline" size={21} color={colors.text} />
+          </TouchableOpacity>
+        ) : null,
+    });
+  }, [navigation, session, colors]);
+
+  const reload = useCallback(() => {
+    let mounted = true;
+    async function load() {
+      const s = await getSession(route.params.sessionId);
+      if (!mounted) return;
+      setSession(s);
+      if (s) {
+        const prs = await getPRSetIdsForSession(s.id);
+        if (mounted) setPrSetIds(prs);
+      }
+    }
+    load();
+    return () => { mounted = false; };
+  }, [route.params.sessionId]);
+
+  useFocusEffect(reload);
+
+  if (!session) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.dim}>Loading…</Text>
+      </View>
+    );
+  }
+
+  const totalVolume = session.exercises.reduce(
+    (n, ex) =>
+      n + ex.sets.filter((s) => s.set_type !== 'warmup').reduce((m, s) => m + s.weight * s.reps, 0),
+    0
+  );
+  const totalSets = session.exercises.reduce(
+    (n, ex) => n + ex.sets.filter((s) => s.set_type !== 'warmup').length,
+    0
+  );
+
+  const cycleType = (set) => {
+    const next = SET_TYPES[(SET_TYPES.indexOf(set.set_type) + 1) % SET_TYPES.length];
+    updateSetType(set.id, next).then(reload);
+  };
+
+  // Confirm-before-destructive — unchanged behavior
+  const confirmDelete = () =>
+    Alert.alert('Delete workout', 'This session will be permanently deleted.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          await deleteSession(session.id);
+          navigation.goBack();
+        },
+      },
+    ]);
+
+  const labels = groupLabels(session.exercises.map((e) => ({ groupId: e.group_id })));
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={{ padding: 20, paddingBottom: 48 }}>
+      {/* Identity: display-weight name, muted date/time */}
+      <Text style={styles.name}>{session.name}</Text>
+      {!!session.source_assigned_plan_id && (
+        <View style={styles.trainerBadge}>
+          <Ionicons name="fitness" size={12} color={colors.blue} />
+          <Text style={styles.trainerBadgeText}>From your trainer</Text>
+        </View>
+      )}
+      <Text style={styles.sub}>
+        {fmtDate(session.start_time)}
+        {session.duration_sec ? ` · ${formatDuration(session.duration_sec)}` : ''}
+      </Text>
+
+      {/* Stats: volume leads, exercises + sets supporting */}
+      <View style={styles.statHero}>
+        <Text style={[styles.statHeroVal, NUMS]}>{Math.round(totalVolume).toLocaleString()}</Text>
+        <Text style={styles.statHeroLabel}>volume</Text>
+      </View>
+      <View style={styles.statsRow}>
+        <View style={styles.statBox}>
+          <Text style={[styles.statVal, NUMS]}>{session.exercises.length}</Text>
+          <Text style={styles.statLabel}>Exercises</Text>
+        </View>
+        <View style={styles.statBox}>
+          <Text style={[styles.statVal, NUMS]}>{totalSets}</Text>
+          <Text style={styles.statLabel}>Working Sets</Text>
+        </View>
+      </View>
+
+      {/* Set tables */}
+      {session.exercises.map((ex, i) => (
+        <View
+          key={ex.session_exercise_id}
+          style={[styles.card, ex.group_id && styles.groupedCard]}
+        >
+          {ex.group_id && session.exercises[i - 1]?.group_id !== ex.group_id && (
+            <Text style={styles.groupLabel}>Superset {labels[ex.group_id]}</Text>
+          )}
+          <Text style={styles.exName}>{ex.name}</Text>
+          {ex.notes ? <Text style={styles.exNote}>{ex.notes}</Text> : null}
+          <View style={styles.setHeader}>
+            <Text style={styles.setHeaderLabel}>TYPE</Text>
+            <Text style={styles.setHeaderLabel}>KG</Text>
+            <Text style={styles.setHeaderLabel}>REPS</Text>
+            <Text style={styles.setHeaderLabel}>RPE</Text>
+            <Text style={styles.setHeaderLabel} />
+          </View>
+          {ex.sets.map((s) => (
+            <TouchableOpacity
+              key={s.id}
+              style={[styles.setRow, s.set_type === 'warmup' && styles.warmupRow]}
+              onPress={cycleType.bind(null, s)}
+            >
+              {/* set-type left-edge tag keeps columns as straight lines */}
+              <View style={styles.typeCell}>
+                <View
+                  style={[
+                    styles.typeTag,
+                    { backgroundColor: colors[TYPE_COLOR[s.set_type] || 'textDim'] },
+                  ]}
+                />
+                <Text style={[styles.setType, s.set_type === 'warmup' && styles.warmupText]}>
+                  {TYPE_TAG[s.set_type] || 'W'}
+                </Text>
+              </View>
+              <Text style={[styles.setCell, NUMS, s.set_type === 'warmup' && styles.warmupText]}>
+                {s.weight}
+              </Text>
+              <Text style={[styles.setCell, NUMS, s.set_type === 'warmup' && styles.warmupText]}>
+                {s.reps}
+              </Text>
+              <Text style={[styles.setCell, NUMS, s.set_type === 'warmup' && styles.warmupText]}>
+                {s.rpe != null ? s.rpe : '—'}
+              </Text>
+              {/* PR trophy trails the row so number columns stay scannable */}
+              <View style={styles.prSlot}>
+                {prSetIds.has(s.id) && <Ionicons name="trophy" size={12} color={colors.yellow} />}
+              </View>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ))}
+
+      <Text style={styles.hint}>Tap any set row to change its type. Stats update instantly.</Text>
+
+      {session.notes ? (
+        <View style={styles.card}>
+          <Text style={styles.notesLabel}>NOTES</Text>
+          <Text style={styles.notesText}>{session.notes}</Text>
+        </View>
+      ) : null}
+
+      {/* Destructive action: quiet, outlined, well separated from the data */}
+      <TouchableOpacity style={styles.deleteBtn} onPress={confirmDelete}>
+        <Ionicons name="trash-outline" size={16} color={colors.red} />
+        <Text style={styles.deleteText}>Delete Workout</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+const makeStyles = (colors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.bg },
+    dim: { color: colors.textDim, padding: 16 },
+
+    name: { color: colors.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.4 },
+    sub: { color: colors.textDim, marginTop: 4, marginBottom: 18, fontSize: 13 },
+    trainerBadge: {
+      flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+      backgroundColor: colors.cardLight, borderLeftWidth: 3, borderLeftColor: colors.blue,
+      borderRadius: 8, borderTopLeftRadius: 4, borderBottomLeftRadius: 4,
+      paddingHorizontal: 8, paddingVertical: 4, marginTop: 8,
+    },
+    trainerBadgeText: { color: colors.blue, fontSize: 12, fontWeight: '700' },
+
+    // Volume is the hero stat
+    statHero: { alignItems: 'center', marginBottom: 4 },
+    statHeroVal: { color: colors.primary, fontSize: 38, fontWeight: '800', letterSpacing: -1 },
+    statHeroLabel: {
+      color: colors.textDim,
+      fontSize: 11,
+      fontWeight: '800',
+      letterSpacing: 1.2,
+      textTransform: 'uppercase',
+    },
+    statsRow: { flexDirection: 'row', gap: 10, marginBottom: 22 },
+    statBox: { flex: 1, backgroundColor: colors.card, borderRadius: 14, padding: 12, alignItems: 'center' },
+    statVal: { color: colors.text, fontSize: 18, fontWeight: '800' },
+    statLabel: { color: colors.textDim, fontSize: 11, marginTop: 2 },
+
+    card: {
+      backgroundColor: colors.card,
+      borderRadius: 14,
+      padding: 14,
+      marginBottom: 12,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.12,
+      shadowRadius: 8,
+      elevation: 2,
+    },
+    groupedCard: { borderLeftWidth: 3, borderLeftColor: colors.blue },
+    groupLabel: { color: colors.blue, fontWeight: '700', fontSize: 12, marginBottom: 6 },
+
+    exName: { color: colors.text, fontSize: 16, fontWeight: '800', marginBottom: 2 },
+    exNote: { color: colors.textDim, fontSize: 12, fontStyle: 'italic', marginBottom: 8 },
+
+    setHeader: { flexDirection: 'row', marginTop: 8, marginBottom: 2 },
+    setHeaderLabel: { color: colors.textDim, fontSize: 10, fontWeight: '700', flex: 1, textAlign: 'center', letterSpacing: 0.5 },
+
+    setRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 5 },
+    warmupRow: { opacity: 0.55 },
+    warmupText: { color: colors.textDim },
+    typeCell: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+    typeTag: { width: 3, height: 12, borderRadius: 1.5 },
+    setType: { color: colors.textDim, fontSize: 11, fontWeight: '700' },
+    setCell: { color: colors.text, flex: 1, textAlign: 'center', fontSize: 14, fontWeight: '600' },
+    prSlot: { width: 16, alignItems: 'center' },
+
+    hint: { color: colors.textDim, fontSize: 11, opacity: 0.75, marginTop: 2 },
+    notesLabel: {
+      color: colors.textDim,
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 1.2,
+      marginBottom: 4,
+    },
+    notesText: { color: colors.text, fontSize: 13 },
+
+    // Destructive: text+icon, outlined, separated by a wide margin
+    deleteBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      marginTop: 44,
+      paddingVertical: 12,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: colors.red,
+      opacity: 0.85,
+    },
+    deleteText: { color: colors.red, fontWeight: '700', fontSize: 14 },
+  });

@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Expo
+.expo/
+.expo-shared/
+dist/
+web-build/
+
+# Native builds
+android/
+ios/
+*.xcworkspace
+*.xcodeproj
+
+# Build outputs
+*.apk
+*.aab
+*.ipa
+
+# Environment
+.env
+.env.local
+.env.production
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Testing
+coverage/
+
+# Temp
+*.tmp
+*.temp
