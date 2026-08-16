@@ -793,3 +793,68 @@ amber banner up top, assign buttons disabled.
    new clean relationship; old archived row's purge_at unchanged.
 4. Declined reactivation → row back to 'archived', countdown preserved.
 5. Invite from the header with a non-empty client list.
+
+## Client Self-Management of Diet Plans
+
+- **New Diet Plan button**: the Diet sub-tab (My Routines) has a persistent
+  "+ New Diet Plan" action — in the empty state AND in the list header —
+  opening the shared builder in `self` mode (My Dishes + custom items only).
+- **Edit / Delete own plans** (`ClientDietPlanDetailScreen`): self-authored
+  plans get an Edit Plan action that reopens the builder prefilled with the
+  nested days structure (days, meals, items, multipliers, notes all
+  round-trip), plus Delete with confirmation. Trainer-assigned plans remain
+  strictly read-only for the client. Hooks run before any early returns
+  (fixed a Rules-of-Hooks violation that crashed edits on slow loads).
+- **Expandable item cards**: tapping a meal item expands it in place to
+  reveal the full macro breakdown, serving size, recipe link, and the
+  trainer's note; collapsed rows stay compact. Custom items can carry a
+  free-text note entered in the builder's Custom tab.
+- **Check-in redesign**: the daily check-in is now two explicit tappable
+  cards — "Followed it" / "Not today" — reflecting today's existing state on
+  load (tap again to clear). Long-press still adds an optional note.
+- **Day-totals fix**: the progress bar and totals previously summed items
+  across ALL days (a day showing "0 / 2002 cal" stuck while other days
+  carried the items). Totals now scope strictly to the rendered day's items
+  with multipliers applied, re-computed on every day switch.
+
+### Manual test notes
+1. Create a 2-day self-authored plan → Edit it → change quantities, add a
+   meal, save → re-open: changes persisted, structure intact.
+2. Delete a self-authored plan → gone from the list; a trainer-assigned
+   plan shows no Edit/Delete anywhere.
+3. Check in "Followed it" → the card reflects the state on reload; switch
+   to "Not today" → trainer's adherence strip updates.
+4. A multi-day plan where only Day 2 has items → Day 1 totals read 0/X,
+   Day 2 shows its real total (no cross-day bleeding).
+
+## Pending Request Card Layout (fixed)
+
+The reactivation pending card was originally a single row (avatar | text |
+buttons), which crushed the two full-width decision buttons into the narrow
+text column. It is now a column of two blocks:
+
+- **Header row** — avatar, client name, "↻ Reconnecting · archived N days
+  ago" tag, preference line; ordinary (non-reactivation) requests keep
+  their ✓/✕ icon buttons in this row.
+- **Actions block** (reactivation only) — Restore History / Start Fresh
+  side by side at FULL card width (preference-matching one solid), with the
+  muted Decline button beneath.
+
+## Post-reactivation bugfixes & ops notes
+
+- **Reactivation 409 bug**: the duplicate-association guard in
+  `requestAssociationByCode` matched `status != 'revoked'`, which includes
+  `archived` — so a client trying to reconnect got "Already connected to
+  this trainer" and no pending row was ever created. Fixed to
+  `status IN ('pending', 'active')`; archived rows now fall through to the
+  reactivation branch (row reuse + restore_preference recording).
+- **Missing `Alert` import** in `ClientDetailScreen` crashed the screen
+  when tapping Remove Client. All screens were audited for the same
+  mistake (single offender).
+- **Ops lesson (recurring)**: the backend runs plain `node server.js` with
+  NO auto-reload — every backend file change requires a restart
+  (`Ctrl+C` → `node server.js`), or use `npx nodemon server.js` in
+  development. A stale backend serving old code has masqueraded as several
+  different "bugs" (404s on new routes, this 409). If Metro shows an error
+  you believe is fixed, restart with `npx expo start -c` to clear its cache.
+

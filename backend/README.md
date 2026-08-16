@@ -206,3 +206,43 @@ any time from the Clients screen.
 
 Test: generate a code, redeem it from client A (201), then try the same code
 from client B → 409 "already been used".
+
+## Trainer-client association lifecycle (migrations 015–016)
+
+Status flow on `trainer_clients`: `pending → active → archived → revoked`.
+
+- **Unlink (either party)**: `POST /trainer/clients/:clientId/unlink`
+  (trainer) or `POST /client/trainer/unlink` (client) flips an active row to
+  `archived` with `archived_at` / `archived_by` / `purge_at = now() + 30 days`.
+  All trainer GET endpoints accept `active` OR `archived` (30-day read-only
+  window); every create/assign path requires `active`. Client-facing plan
+  listings join on `active` only, so the client loses trainer content
+  immediately regardless of who initiated.
+- **Reactivation**: `GET /client/trainer-code-preview?code=` reports
+  `is_reactivation` (an archived row exists for this pair) plus archived date
+  and plan counts. `POST /client/associations/request` then REUSES the
+  archived row (countdown preserved, data protected) setting
+  `status='pending'` and recording the client's `restore_preference`
+  ('restore' | 'fresh', migration 016). The duplicate-association guard only
+  matches `status IN ('pending','active')` — archived rows must fall through
+  to the reactivation branch, never 409.
+- **Trainer decision** (`POST /trainer/associations/:id/accept` with
+  `final_decision` for reactivations): 'restore' clears the archive fields on
+  the same row (history reappears — nothing was deleted); 'fresh' reverts the
+  row to archived (untouched countdown) and inserts a separate clean active
+  row. `reject` on a reactivation reverts to 'archived'; on an ordinary
+  request it revokes.
+- **Purge**: `npm run purge-archives` (cron daily `0 3 * * *`) hard-deletes
+  trainer-owned content (assigned_plans, trainer-created diet/supplement
+  plans + items/checkins) for rows past `purge_at`, then flips them to
+  `revoked`. It deliberately **skips rows in 'pending'** — a pending
+  reactivation must never be purged while awaiting the trainer's decision,
+  even past its original purge_at. Client-owned data (session_summaries,
+  exercise details, measurements, self-authored plans) is never touched.
+
+## Development note
+
+`node server.js` does NOT auto-reload. After editing any backend file,
+restart the server (or run `npx nodemon server.js`) — a stale process
+serving old code has repeatedly masqueraded as bugs (404s on new routes,
+stale validation rules).
