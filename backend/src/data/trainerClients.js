@@ -3,6 +3,8 @@
 // callers forgetting to validate.
 const { query } = require('../db/pool');
 const { getUserById } = require('./users');
+const coachingPlans = require('./coachingPlans');
+const assignedPlans = require('./assignedPlans');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -246,6 +248,11 @@ async function respondToAssociation(trainerId, associationId, action, finalDecis
         return rows[0];
       }
       // fresh: separate clean row; the archived row keeps its own countdown
+      // First archive ALL historical data for this trainer-client pair
+      await coachingPlans.archiveAllPlansForPair('diet', trainerId, row.client_id);
+      await coachingPlans.archiveAllPlansForPair('supplement', trainerId, row.client_id);
+      await assignedPlans.archiveAllAssignedPlansForPair(trainerId, row.client_id);
+      
       await query(
         `UPDATE trainer_clients SET status = 'archived', responded_at = now()
          WHERE id = $1`,

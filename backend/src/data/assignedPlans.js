@@ -182,6 +182,17 @@ async function assertReadableAssociation(trainerId, clientId) {
   if (!rows.length) throw new HttpError(403, 'No active association with this client');
 }
 
+// Archive ALL assigned plans for a trainer-client pair
+async function archiveAllAssignedPlansForPair(trainerId, clientId) {
+  const { rows } = await query(
+    `UPDATE assigned_plans SET status = 'archived'
+     WHERE trainer_id = $1 AND client_id = $2 AND status = 'active'
+     RETURNING id`,
+    [trainerId, clientId]
+  );
+  return rows.length;
+}
+
 module.exports = {
   assertReadableAssociation,
   assertActiveAssociation,
@@ -194,4 +205,5 @@ module.exports = {
   archiveAssignedPlan,
   deleteAssignedPlan,
   updateAssignedPlan,
+  archiveAllAssignedPlansForPair,
 };

@@ -446,6 +446,18 @@ async function assertReadableAssociation(trainerId, clientId) {
   if (!rows.length) throw new HttpError(403, 'No active association with this client');
 }
 
+// Archive ALL plans of a specific kind for a trainer-client pair
+async function archiveAllPlansForPair(kind, trainerId, clientId) {
+  const c = cfg(kind);
+  const { rows } = await query(
+    `UPDATE ${c.plansTable} SET status = 'archived'
+     WHERE trainer_id = $1 AND client_id = $2 AND status = 'active'
+     RETURNING id`,
+    [trainerId, clientId]
+  );
+  return rows.length;
+}
+
 module.exports = {
   assertReadableAssociation,
   createPlan,
@@ -458,4 +470,5 @@ module.exports = {
   checkIn,
   listCheckins,
   listMyCheckins,
+  archiveAllPlansForPair,
 };

@@ -196,9 +196,7 @@ function DietPlansList({ styles, colors, navigation, fromTrainer }) {
                   {plan.name}
                 </Text>
                 <Text style={[styles.meta, NUMS]}>
-                  {fromTrainer ? `From ${plan.trainer_name || 'your trainer'} · ` : ''}
-                  {itemCount} items
-                  {plan.daily_calorie_target ? ` · ${plan.daily_calorie_target} cal/day` : ''}
+                  {(fromTrainer ? `From ${plan.trainer_name || 'your trainer'} · ` : '') + itemCount + ' items' + (plan.daily_calorie_target ? ` · ${plan.daily_calorie_target} cal/day` : '')}
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={16} color={colors.textDim} />

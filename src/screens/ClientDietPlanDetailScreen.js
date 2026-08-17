@@ -207,9 +207,7 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
             {target > 0 ? `Daily Target: ${target.toLocaleString()} cal` : 'Daily Targets'}
           </Text>
           <Text style={[styles.targetMacros, NUMS]}>
-            {tPro ? `P ${tPro}g` : ''}
-            {tCar ? ` · C ${tCar}g` : ''}
-            {tFat ? ` · F ${tFat}g` : ''}
+            {(tPro ? `P ${tPro}g` : '') + (tCar ? ` · C ${tCar}g` : '') + (tFat ? ` · F ${tFat}g` : '')}
           </Text>
         </View>
       ) : null}
@@ -256,8 +254,11 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
                   : null,
                 i.difficulty ? i.difficulty[0].toUpperCase() + i.difficulty.slice(1) : null,
               ].filter(Boolean);
-              const hasDetail =
-                i.client_note || i.recipe_url || (i.ingredients || []).length || altServings.length || metaBits.length;
+              const hasDetail = Boolean(
+              i.client_note || i.recipe_url || (i.ingredients || []).length || altServings.length || metaBits.length
+              );
+              // const hasDetail =
+              //   i.client_note || i.recipe_url || (i.ingredients || []).length || altServings.length || metaBits.length;
               return (
                 <TouchableOpacity
                   key={itemKey}
@@ -321,11 +322,7 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
                           <Text style={styles.ingLabel}>Also available as:</Text>
                           {altServings.map((a, k) => (
                             <Text key={k} style={[styles.ingLine, NUMS]}>
-                              {a.label}
-                              {a.calories != null ? ` — ${a.calories} cal` : ''}
-                              {a.protein_g != null ? ` · ${Math.round(a.protein_g)}P` : ''}
-                              {a.carbs_g != null ? ` ${Math.round(a.carbs_g)}C` : ''}
-                              {a.fat_g != null ? ` ${Math.round(a.fat_g)}F` : ''}
+                              {a.label + (a.calories != null ? ` — ${a.calories} cal` : '') + (a.protein_g != null ? ` · ${Math.round(a.protein_g)}P` : '') + (a.carbs_g != null ? ` ${Math.round(a.carbs_g)}C` : '') + (a.fat_g != null ? ` ${Math.round(a.fat_g)}F` : '')}
                             </Text>
                           ))}
                         </View>
@@ -358,8 +355,7 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
       {/* running total — after the meal list, summed from rendered items */}
       <View style={[styles.targetCard, { marginTop: 20 }]}>
         <Text style={[styles.totalLine, NUMS]}>
-          {Math.round(totals.cal).toLocaleString()}
-          {target > 0 ? ` / ${target.toLocaleString()} cal` : ' cal'}
+          {Math.round(totals.cal).toLocaleString() + (target > 0 ? ` / ${target.toLocaleString()} cal` : '')}
         </Text>
         {target > 0 && (
           <View style={styles.progressTrack}>
