@@ -8,7 +8,7 @@ const PRESET_TAGS = ['vegetarian', 'vegan', 'non-veg', 'high-protein', 'low-carb
 // Shared catalog search: text query + single-select tag filter chips.
 // Used by the Recipes tab and the diet builder's Add-Item picker — one
 // implementation, not two.
-export default function CatalogSearch({ query, onQuery, tag, onTag, tagsFromItems = [], placeholder = 'Search dishes…' }) {
+export default function CatalogSearch({ query, onQuery, tag, onTag, tagsFromItems = [], placeholder = 'Search dishes…', favOnly = false, onFavOnly }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const tags = [...new Set([...PRESET_TAGS, ...tagsFromItems])];
@@ -37,6 +37,15 @@ export default function CatalogSearch({ query, onQuery, tag, onTag, tagsFromItem
         >
           <Text style={[styles.chipText, !tag && { color: '#fff' }]}>All</Text>
         </TouchableOpacity>
+        {onFavOnly && (
+          <TouchableOpacity
+            style={[styles.chip, favOnly && styles.chipFavOn]}
+            onPress={() => onFavOnly(!favOnly)}
+          >
+            <Ionicons name="star" size={11} color={favOnly ? '#fff' : colors.yellow} />
+            <Text style={[styles.chipText, favOnly && { color: '#fff' }]}>Favorites</Text>
+          </TouchableOpacity>
+        )}
         {tags.map((t) => (
           <TouchableOpacity
             key={t}
@@ -64,7 +73,9 @@ const makeStyles = (colors) =>
     chip: {
       backgroundColor: colors.cardLight, borderRadius: 14,
       paddingHorizontal: 11, paddingVertical: 5,
+      flexDirection: 'row', alignItems: 'center', gap: 4,
     },
     chipOn: { backgroundColor: colors.primary },
+    chipFavOn: { backgroundColor: colors.yellow },
     chipText: { color: colors.textDim, fontSize: 11, fontWeight: '600' },
   });

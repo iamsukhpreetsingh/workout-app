@@ -31,6 +31,23 @@ router.post('/invite-code', requireAuth, requireRole('trainer'), async (req, res
   }
 });
 
+// GET /trainer/invite-code/latest — the trainer's most recent still-valid
+// code (null if none), so Settings can show the existing code instead of
+// silently minting a new one on every open.
+router.get('/invite-code/latest', requireAuth, requireRole('trainer'), async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT id, code, expires_at FROM trainer_invite_codes
+       WHERE trainer_id = $1 AND used_at IS NULL AND expires_at > now()
+       ORDER BY created_at DESC LIMIT 1`,
+      [req.user.id]
+    );
+    res.json(rows[0] || null);
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
 // GET /trainer/associations?status=pending — trainer-only
 router.get('/associations', requireAuth, requireRole('trainer'), async (req, res) => {
   try {

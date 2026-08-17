@@ -11,6 +11,34 @@ class HttpError extends Error {
 
 const FIELDS = ['name', 'description', 'calories', 'protein_g', 'carbs_g', 'fat_g', 'serving_size', 'recipe_url', 'prep_notes'];
 
+// richer optional metadata (migration 018) — every field nullable/empty-safe
+function normalizeExtended(body, item) {
+  const strArr = (v) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
+  item.photo_path = body.photo_path || null;
+  item.ingredients = strArr(body.ingredients);
+  item.allergens = strArr(body.allergens);
+  item.prep_time_minutes = body.prep_time_minutes != null && body.prep_time_minutes !== ''
+    ? Math.max(0, Math.round(Number(body.prep_time_minutes))) : null;
+  item.cook_time_minutes = body.cook_time_minutes != null && body.cook_time_minutes !== ''
+    ? Math.max(0, Math.round(Number(body.cook_time_minutes))) : null;
+  item.difficulty = ['easy', 'medium', 'hard'].includes(body.difficulty) ? body.difficulty : null;
+  item.suggested_meal_types = strArr(body.suggested_meal_types);
+  item.is_favorite = !!body.is_favorite;
+  // [{ label, calories, protein_g, carbs_g, fat_g }] — numeric-coerced, label required
+  item.alternate_servings = (Array.isArray(body.alternate_servings) ? body.alternate_servings : [])
+    .filter((a) => a && String(a.label || '').trim())
+    .map((a) => ({
+      label: String(a.label).trim(),
+      calories: a.calories != null ? Math.round(Number(a.calories)) : null,
+      protein_g: a.protein_g != null ? Number(a.protein_g) : null,
+      carbs_g: a.carbs_g != null ? Number(a.carbs_g) : null,
+      fat_g: a.fat_g != null ? Number(a.fat_g) : null,
+    }));
+}
+
+const EXT_COLS = 'photo_path, ingredients, allergens, prep_time_minutes, cook_time_minutes, difficulty, suggested_meal_types, is_favorite, alternate_servings';
+const EXT_PLACE = (start) => Array.from({ length: 9 }, (_, i) => `$${start + i}`).join(',');
+
 function normalize(body) {
   const item = {};
   for (const f of FIELDS) {
@@ -24,6 +52,7 @@ function normalize(body) {
     throw new HttpError(400, 'Dish name is required');
   }
   item.tags = Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean) : [];
+  normalizeExtended(body, item);
   return item;
 }
 
@@ -63,9 +92,10 @@ async function createUserDish(userId, body) {
   await assertUserNameFree(userId, item.name);
   const { rows } = await query(
     `INSERT INTO meal_catalog_items
-       (user_id, name, description, calories, protein_g, carbs_g, fat_g, serving_size, recipe_url, prep_notes, tags)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-    [userId, item.name, item.description, item.calories, item.protein_g, item.carbs_g, item.fat_g, item.serving_size, item.recipe_url, item.prep_notes, item.tags]
+       (user_id, name, description, calories, protein_g, carbs_g, fat_g, serving_size, recipe_url, prep_notes, tags, ${EXT_COLS})
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,${EXT_PLACE(12)}) RETURNING *`,
+    [userId, item.name, item.description, item.calories, item.protein_g, item.carbs_g, item.fat_g, item.serving_size, item.recipe_url, item.prep_notes, item.tags,
+      item.photo_path, item.ingredients, item.allergens, item.prep_time_minutes, item.cook_time_minutes, item.difficulty, item.suggested_meal_types, item.is_favorite, JSON.stringify(item.alternate_servings)]
   );
   return rows[0];
 }
@@ -84,9 +114,13 @@ async function updateUserDish(userId, id, body) {
   const { rows } = await query(
     `UPDATE meal_catalog_items SET
        name=$2, description=$3, calories=$4, protein_g=$5, carbs_g=$6, fat_g=$7,
-       serving_size=$8, recipe_url=$9, prep_notes=$10, tags=$11
-     WHERE id=$1 AND user_id=$12 RETURNING *`,
-    [id, item.name, item.description, item.calories, item.protein_g, item.carbs_g, item.fat_g, item.serving_size, item.recipe_url, item.prep_notes, item.tags, userId]
+       serving_size=$8, recipe_url=$9, prep_notes=$10, tags=$11,
+       photo_path=$12, ingredients=$13, allergens=$14, prep_time_minutes=$15,
+       cook_time_minutes=$16, difficulty=$17, suggested_meal_types=$18,
+       is_favorite=$19, alternate_servings=$20
+     WHERE id=$1 AND user_id=$21 RETURNING *`,
+    [id, item.name, item.description, item.calories, item.protein_g, item.carbs_g, item.fat_g, item.serving_size, item.recipe_url, item.prep_notes, item.tags,
+      item.photo_path, item.ingredients, item.allergens, item.prep_time_minutes, item.cook_time_minutes, item.difficulty, item.suggested_meal_types, item.is_favorite, JSON.stringify(item.alternate_servings), userId]
   );
   if (!rows.length) throw new HttpError(404, 'Dish not found');
   return rows[0];
@@ -106,9 +140,10 @@ async function create(trainerId, body) {
   try {
     const { rows } = await query(
       `INSERT INTO meal_catalog_items
-         (trainer_id, name, description, calories, protein_g, carbs_g, fat_g, serving_size, recipe_url, prep_notes, tags)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [trainerId, item.name, item.description, item.calories, item.protein_g, item.carbs_g, item.fat_g, item.serving_size, item.recipe_url, item.prep_notes, item.tags]
+         (trainer_id, name, description, calories, protein_g, carbs_g, fat_g, serving_size, recipe_url, prep_notes, tags, ${EXT_COLS})
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,${EXT_PLACE(12)}) RETURNING *`,
+      [trainerId, item.name, item.description, item.calories, item.protein_g, item.carbs_g, item.fat_g, item.serving_size, item.recipe_url, item.prep_notes, item.tags,
+        item.photo_path, item.ingredients, item.allergens, item.prep_time_minutes, item.cook_time_minutes, item.difficulty, item.suggested_meal_types, item.is_favorite, JSON.stringify(item.alternate_servings)]
     );
     return rows[0];
   } catch (e) {
@@ -143,9 +178,13 @@ async function update(trainerId, id, body) {
   const { rows } = await query(
     `UPDATE meal_catalog_items SET
        name=$2, description=$3, calories=$4, protein_g=$5, carbs_g=$6, fat_g=$7,
-       serving_size=$8, recipe_url=$9, prep_notes=$10, tags=$11
-     WHERE id=$1 AND trainer_id=$12 RETURNING *`,
-    [id, item.name, item.description, item.calories, item.protein_g, item.carbs_g, item.fat_g, item.serving_size, item.recipe_url, item.prep_notes, item.tags, trainerId]
+       serving_size=$8, recipe_url=$9, prep_notes=$10, tags=$11,
+       photo_path=$12, ingredients=$13, allergens=$14, prep_time_minutes=$15,
+       cook_time_minutes=$16, difficulty=$17, suggested_meal_types=$18,
+       is_favorite=$19, alternate_servings=$20
+     WHERE id=$1 AND trainer_id=$21 RETURNING *`,
+    [id, item.name, item.description, item.calories, item.protein_g, item.carbs_g, item.fat_g, item.serving_size, item.recipe_url, item.prep_notes, item.tags,
+      item.photo_path, item.ingredients, item.allergens, item.prep_time_minutes, item.cook_time_minutes, item.difficulty, item.suggested_meal_types, item.is_favorite, JSON.stringify(item.alternate_servings), trainerId]
   );
   if (!rows.length) throw new HttpError(404, 'Catalog item not found');
   return rows[0];

@@ -73,7 +73,18 @@ async function rosterWithArchive(trainerId) {
             GREATEST(0, EXTRACT(DAY FROM (tc.purge_at - now()))::int) AS days_remaining,
             last.last_active_at,
             ROUND(days.recent_day_count::numeric / 30 * 100, 1) AS adherence_pct
-     FROM trainer_clients tc
+     FROM (
+       -- one row per client: prefer the active association; otherwise the
+       -- most recent archived one (repeated Start-Fresh cycles can leave
+       -- several archived rows per pair)
+       SELECT DISTINCT ON (client_id) *
+       FROM trainer_clients
+       WHERE trainer_id = $1 AND status IN ('active', 'archived')
+       ORDER BY client_id,
+                (status = 'active') DESC,
+                archived_at DESC NULLS LAST,
+                responded_at DESC NULLS LAST
+     ) tc
      JOIN users u ON u.id = tc.client_id
      LEFT JOIN (
        SELECT client_id, MAX(performed_at) AS last_active_at
@@ -88,7 +99,6 @@ async function rosterWithArchive(trainerId) {
        ) d
        GROUP BY client_id
      ) days ON days.client_id = u.id
-     WHERE tc.trainer_id = $1 AND tc.status IN ('active', 'archived')
      ORDER BY tc.status ASC, tc.responded_at DESC`,
     [trainerId]
   );

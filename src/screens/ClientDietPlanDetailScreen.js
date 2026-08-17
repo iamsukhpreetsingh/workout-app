@@ -9,6 +9,7 @@ import {
   Alert,
   Linking,
   RefreshControl,
+  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -48,6 +49,17 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
   const [checkBusy, setCheckBusy] = useState(false);
   const [checkedToday, setCheckedToday] = useState(null);
   const [expandedItem, setExpandedItem] = useState(null); // diet_plan_meal_item id
+
+  // union of allergens across the WHOLE plan (all days) — shown once at top
+  const planAllergens = React.useMemo(() => {
+    const set = new Set();
+    for (const d of plan?.days || []) {
+      for (const m of d.meals || []) {
+        for (const it of m.items || []) (it.allergens || []).forEach((a) => set.add(a));
+      }
+    }
+    return [...set];
+  }, [plan]);
 
   React.useLayoutEffect(() => {
     navigation.setOptions({ title: (plan || planFallback)?.name || 'Diet Plan' });
@@ -202,6 +214,16 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
         </View>
       ) : null}
 
+      {/* consolidated allergen notice — one glance before scrolling */}
+      {planAllergens.length > 0 && (
+        <View style={styles.planAllergenCard}>
+          <Ionicons name="warning" size={13} color={colors.red} />
+          <Text style={styles.planAllergenText}>
+            This plan contains: {planAllergens.join(', ')}
+          </Text>
+        </View>
+      )}
+
       {/* day tabs — only when the plan truly has multiple days */}
       {multiDay && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.dayTabScroll} contentContainerStyle={{ gap: 8 }}>
@@ -226,34 +248,88 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
             {(m.items || []).map((i, ii) => {
               const itemKey = i.id || `i${ii}`;
               const isOpen = expandedItem === itemKey;
-              const hasDetail = i.client_note || i.recipe_url;
+              const altServings = Array.isArray(i.alternate_servings) ? i.alternate_servings : [];
+              const metaBits = [
+                i.prep_time_minutes != null ? `${i.prep_time_minutes} min prep` : null,
+                i.cook_time_minutes != null
+                  ? (i.cook_time_minutes === 0 ? 'No cook' : `${i.cook_time_minutes} min cook`)
+                  : null,
+                i.difficulty ? i.difficulty[0].toUpperCase() + i.difficulty.slice(1) : null,
+              ].filter(Boolean);
+              const hasDetail =
+                i.client_note || i.recipe_url || (i.ingredients || []).length || altServings.length || metaBits.length;
               return (
                 <TouchableOpacity
                   key={itemKey}
                   style={styles.itemCard}
-                  activeOpacity={hasDetail ? 0.85 : 1}
-                  onPress={() => hasDetail && setExpandedItem(isOpen ? null : itemKey)}
+                  activeOpacity={0.85}
+                  onPress={() => setExpandedItem(isOpen ? null : itemKey)}
                 >
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <View style={styles.itemRow}>
+                    {i.photo_path ? (
+                      <Image source={{ uri: i.photo_path }} style={styles.itemThumb} />
+                    ) : null}
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.itemName}>
-                        {i.name}
-                        {(i.quantity_multiplier || 1) !== 1 ? (
-                          <Text style={styles.mult}> · {i.quantity_multiplier}x</Text>
-                        ) : null}
-                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={styles.itemName} numberOfLines={2}>
+                          {i.name}
+                          {(i.quantity_multiplier || 1) !== 1 ? (
+                            <Text style={styles.mult}> · {i.quantity_multiplier}x</Text>
+                          ) : null}
+                        </Text>
+                        {hasDetail && (
+                          <Ionicons
+                            name={isOpen ? 'chevron-up' : 'chevron-down'}
+                            size={15}
+                            color={colors.textDim}
+                          />
+                        )}
+                      </View>
                       <Text style={[styles.itemMacro, NUMS]}>{macroLine(i)}</Text>
+                      {/* allergens are a safety matter — visible WITHOUT expanding */}
+                      {(i.allergens || []).length > 0 && (
+                        <View style={styles.allergenBadge}>
+                          <Ionicons name="warning" size={10} color={colors.red} />
+                          <Text style={styles.allergenBadgeText}>
+                            Contains: {i.allergens.join(', ')}
+                          </Text>
+                        </View>
+                      )}
                     </View>
-                    {hasDetail && (
-                      <Ionicons
-                        name={isOpen ? 'chevron-up' : 'chevron-down'}
-                        size={15}
-                        color={colors.textDim}
-                      />
-                    )}
                   </View>
                   {isOpen && (
                     <View style={styles.expandedWrap}>
+                      {(i.ingredients || []).length > 0 && (
+                        <View style={styles.ingWrap}>
+                          <Text style={styles.ingLabel}>Ingredients</Text>
+                          {(i.ingredients || []).map((ing, k) => (
+                            <Text key={k} style={styles.ingLine}>• {ing}</Text>
+                          ))}
+                        </View>
+                      )}
+                      {metaBits.length > 0 && (
+                        <View style={styles.metaRow}>
+                          {metaBits.map((b, k) => (
+                            <View key={k} style={styles.metaChip}>
+                              <Text style={styles.metaChipText}>{b}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                      {altServings.length > 0 && (
+                        <View style={styles.ingWrap}>
+                          <Text style={styles.ingLabel}>Also available as:</Text>
+                          {altServings.map((a, k) => (
+                            <Text key={k} style={[styles.ingLine, NUMS]}>
+                              {a.label}
+                              {a.calories != null ? ` — ${a.calories} cal` : ''}
+                              {a.protein_g != null ? ` · ${Math.round(a.protein_g)}P` : ''}
+                              {a.carbs_g != null ? ` ${Math.round(a.carbs_g)}C` : ''}
+                              {a.fat_g != null ? ` ${Math.round(a.fat_g)}F` : ''}
+                            </Text>
+                          ))}
+                        </View>
+                      )}
                       {i.client_note ? (
                         <View style={styles.noteRow}>
                           <Ionicons name="document-text-outline" size={11} color={colors.yellow} />
@@ -263,7 +339,7 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
                       {i.recipe_url ? (
                         <TouchableOpacity style={styles.recipeRow} onPress={() => openRecipe(i.recipe_url)}>
                           <Ionicons name="link-outline" size={11} color={colors.primary} />
-                          <Text style={styles.recipeText}>View Recipe</Text>
+                          <Text style={styles.recipeText}>View Full Recipe</Text>
                         </TouchableOpacity>
                       ) : null}
                     </View>
@@ -402,6 +478,30 @@ const makeStyles = (colors) =>
     itemName: { color: colors.text, fontSize: 14, fontWeight: '700' },
     mult: { color: colors.textDim, fontWeight: '600', fontSize: 12 },
     itemMacro: { color: colors.textDim, fontSize: 11, marginTop: 2 },
+    itemRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    itemThumb: { width: 46, height: 46, borderRadius: 9 },
+    allergenBadge: {
+      flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 5,
+      alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.red,
+      borderRadius: 7, paddingHorizontal: 6, paddingVertical: 2,
+      backgroundColor: colors.card,
+    },
+    allergenBadgeText: { color: colors.red, fontSize: 10, fontWeight: '700' },
+    planAllergenCard: {
+      flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10,
+      borderWidth: 1, borderColor: colors.red, borderRadius: 12,
+      paddingHorizontal: 12, paddingVertical: 10, backgroundColor: colors.card,
+    },
+    planAllergenText: { color: colors.red, fontSize: 12, fontWeight: '700', flex: 1 },
+    ingWrap: { marginBottom: 8 },
+    ingLabel: { color: colors.textDim, fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
+    ingLine: { color: colors.text, fontSize: 12, lineHeight: 18 },
+    metaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
+    metaChip: {
+      backgroundColor: colors.cardLight, borderRadius: 8,
+      paddingHorizontal: 8, paddingVertical: 3,
+    },
+    metaChipText: { color: colors.textDim, fontSize: 10, fontWeight: '600' },
     noteRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 5 },
     noteText: { color: colors.yellow, fontSize: 11, fontStyle: 'italic', flex: 1 },
     expandedWrap: {

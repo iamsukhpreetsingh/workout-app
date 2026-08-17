@@ -9,6 +9,7 @@ import {
   Modal,
   Alert,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -27,6 +28,7 @@ export default function MealCatalogScreen({ navigation }) {
   const [items, setItems] = useState(null); // null = loading
   const [query, setQuery] = useState('');
   const [tagFilter, setTagFilter] = useState(null);
+  const [favOnly, setFavOnly] = useState(false);
   const [editing, setEditing] = useState(null); // null | {} | item
 
   React.useLayoutEffect(() => {
@@ -56,7 +58,8 @@ export default function MealCatalogScreen({ navigation }) {
       i.name.toLowerCase().includes(q) ||
       (i.tags || []).some((t) => t.toLowerCase().includes(q));
     const matchesTag = !tagFilter || (i.tags || []).includes(tagFilter);
-    return matchesText && matchesTag;
+    const matchesFav = !favOnly || i.is_favorite;
+    return matchesText && matchesTag && matchesFav;
   });
 
   const save = async (item) => {
@@ -70,6 +73,19 @@ export default function MealCatalogScreen({ navigation }) {
       load();
     } catch (e) {
       Alert.alert('Could not save dish', e.message || 'Please try again.');
+    }
+  };
+
+  // quick favorite toggle straight from the list — no form round-trip
+  const toggleFavorite = async (item) => {
+    try {
+      await api(`/trainer/meal-catalog/${item.id}`, {
+        method: 'PATCH',
+        body: { ...item, is_favorite: !item.is_favorite },
+      });
+      setItems((prev) => prev.map((d) => (d.id === item.id ? { ...d, is_favorite: !d.is_favorite } : d)));
+    } catch (e) {
+      Alert.alert('Could not update', e.message || 'Please try again.');
     }
   };
 
@@ -111,6 +127,8 @@ export default function MealCatalogScreen({ navigation }) {
           onQuery={setQuery}
           tag={tagFilter}
           onTag={setTagFilter}
+          favOnly={favOnly}
+          onFavOnly={setFavOnly}
         />
       </View>
 
@@ -132,17 +150,41 @@ export default function MealCatalogScreen({ navigation }) {
           </View>
         }
         renderItem={({ item }) => (
-          <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={() => setEditing(item)}>
+          <TouchableOpacity
+            style={styles.card}
+            activeOpacity={0.8}
+            onPress={() => setEditing(item)}
+            onLongPress={() =>
+              // duplicate as starting point for variations of a base recipe
+              setEditing({ ...item, id: undefined, name: `${item.name} (Copy)`, is_favorite: false })
+            }
+          >
+            {item.photo_path ? (
+              <Image source={{ uri: item.photo_path }} style={styles.thumb} />
+            ) : (
+              <View style={[styles.thumb, styles.thumbFallback]}>
+                <Ionicons name="restaurant-outline" size={16} color={colors.textDim} />
+              </View>
+            )}
             <View style={{ flex: 1 }}>
-              <Text style={styles.name} numberOfLines={1}>
-                {item.name}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={styles.name} numberOfLines={1}>
+                  {item.name}
+                </Text>
+                {item.is_favorite && <Ionicons name="star" size={12} color={colors.yellow} />}
+              </View>
               <Text style={[styles.macro, NUMS]}>
                 {item.calories != null ? `${item.calories} cal` : '— cal'}
                 {item.protein_g != null ? ` · ${Math.round(item.protein_g)}P` : ''}
                 {item.carbs_g != null ? ` ${Math.round(item.carbs_g)}C` : ''}
                 {item.fat_g != null ? ` ${Math.round(item.fat_g)}F` : ''}
               </Text>
+              {(item.allergens || []).length > 0 && (
+                <View style={styles.allergenBadge}>
+                  <Ionicons name="warning" size={10} color={colors.red} />
+                  <Text style={styles.allergenText}>Contains: {item.allergens.join(', ')}</Text>
+                </View>
+              )}
               {(item.tags || []).length > 0 && (
                 <View style={styles.tagRow}>
                   {item.tags.slice(0, 3).map((t) => (
@@ -153,7 +195,13 @@ export default function MealCatalogScreen({ navigation }) {
                 </View>
               )}
             </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+            <TouchableOpacity onPress={() => toggleFavorite(item)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Ionicons
+                name={item.is_favorite ? 'star' : 'star-outline'}
+                size={18}
+                color={item.is_favorite ? colors.yellow : colors.textDim}
+              />
+            </TouchableOpacity>
           </TouchableOpacity>
         )}
       />
@@ -192,6 +240,17 @@ const makeStyles = (colors) =>
     },
     tagOn: { backgroundColor: colors.primary },
     tagText: { color: colors.textDim, fontSize: 10, fontWeight: '600' },
+    thumb: {
+      width: 46, height: 46, borderRadius: 10, backgroundColor: colors.cardLight,
+    },
+    thumbFallback: { alignItems: 'center', justifyContent: 'center' },
+    allergenBadge: {
+      flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 5,
+      alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.red,
+      borderRadius: 7, paddingHorizontal: 6, paddingVertical: 2,
+      backgroundColor: colors.card,
+    },
+    allergenText: { color: colors.red, fontSize: 10, fontWeight: '700' },
 
     emptyWrap: { alignItems: 'center', padding: 32 },
     emptyTitle: { color: colors.text, fontSize: 18, fontWeight: '800', marginTop: 12 },
@@ -203,29 +262,4 @@ const makeStyles = (colors) =>
     },
     emptyBtnText: { color: colors.primary, fontWeight: '700' },
 
-    formWrap: { flex: 1, backgroundColor: colors.bg, paddingTop: 12 },
-    formHeader: {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 8,
-    },
-    formTitle: { color: colors.text, fontSize: 17, fontWeight: '800' },
-    fieldLabel: { color: colors.textDim, fontSize: 11, fontWeight: '700', marginTop: 12, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
-    field: {
-      backgroundColor: colors.cardLight, color: colors.text, borderRadius: 10,
-      paddingHorizontal: 12, paddingVertical: 10, fontSize: 14,
-    },
-    macroRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
-    macroCell: { flex: 1 },
-    macroLabel: { color: colors.textDim, fontSize: 11, marginBottom: 4, textAlign: 'center' },
-    macroInput: { textAlign: 'center' },
-    tagPickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
-    addTagBtn: {
-      backgroundColor: colors.cardLight, borderRadius: 10,
-      paddingHorizontal: 12, justifyContent: 'center',
-    },
-    saveDishBtn: {
-      backgroundColor: colors.primary, borderRadius: 12, padding: 15,
-      alignItems: 'center', marginTop: 20,
-    },
-    saveDishText: { color: '#fff', fontWeight: '800', fontSize: 15 },
   });

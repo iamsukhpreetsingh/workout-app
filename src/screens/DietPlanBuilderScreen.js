@@ -10,6 +10,7 @@ import {
   Modal,
   FlatList,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../lib/api';
@@ -52,6 +53,7 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
   const [picker, setPicker] = useState(null); // { mealKey, mealType, mode }
   const [pickQuery, setPickQuery] = useState('');
   const [pickTag, setPickTag] = useState(null);
+  const [pickFav, setPickFav] = useState(false);
   const [quickCreate, setQuickCreate] = useState(false); // nested DishForm inside the picker
   const [catalog, setCatalog] = useState(null);
   const [catalogQuery, setCatalogQuery] = useState('');
@@ -253,13 +255,23 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
     }
   };
 
-  // catalog picker data (shared search + tag filter)
+  // catalog picker data — search + tag + favorites, and dishes tagged for
+  // the slot being filled surface FIRST (advisory ranking, never a filter —
+  // any dish stays attachable to any slot)
+  const slotWord = String(picker?.mealType || '').toLowerCase().replace('-', '');
+  const rankFor = (c) =>
+    (c.suggested_meal_types || []).some(
+      (t) => t.toLowerCase().replace('-', '').replace(' ', '') === slotWord
+    )
+      ? 0
+      : 1;
   const pickFiltered = (catalog || []).filter((c) => {
     const q = pickQuery.trim().toLowerCase();
     const matchesText = !q || c.name.toLowerCase().includes(q) || (c.tags || []).some((t) => t.toLowerCase().includes(q));
     const matchesTag = !pickTag || (c.tags || []).includes(pickTag);
-    return matchesText && matchesTag;
-  });
+    const matchesFav = !pickFav || c.is_favorite;
+    return matchesText && matchesTag && matchesFav;
+  }).slice().sort((a, b) => rankFor(a) - rankFor(b));
 
   // one tap → snapshot attach → close
   const attachCatalogItem = (c) => {
@@ -272,8 +284,16 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
       fat_g: c.fat_g,
       serving_size: c.serving_size,
       recipe_url: c.recipe_url,
+      photo_path: c.photo_path,
+      ingredients: c.ingredients,
+      allergens: c.allergens,
+      prep_time_minutes: c.prep_time_minutes,
+      cook_time_minutes: c.cook_time_minutes,
+      difficulty: c.difficulty,
+      alternate_servings: c.alternate_servings,
     });
     setPicker(null);
+    setPickFav(false);
   };
 
   const submitCustom = async () => {
@@ -434,7 +454,7 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
       </TouchableOpacity>
 
       {/* Add-Item modal: From Catalog (searchable, one-tap attach) | Custom */}
-      <Modal visible={!!picker} transparent animationType="slide" onRequestClose={() => !quickCreate && setPicker(null)}>
+      <Modal visible={!!picker} transparent animationType="slide" onRequestClose={() => { if (!quickCreate) { setPicker(null); setPickFav(false); } }}>
         <View style={styles.pickWrap}>
           <View style={styles.pickSheet}>
             <Text style={styles.pickTitle}>Add to {picker?.mealType || 'Meal'}</Text>
@@ -463,6 +483,8 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
                     onQuery={setPickQuery}
                     tag={pickTag}
                     onTag={setPickTag}
+                    favOnly={pickFav}
+                    onFavOnly={setPickFav}
                   />
                   {catalog === null ? (
                     <ActivityIndicator color={colors.primary} size="small" style={{ marginTop: 20 }} />
@@ -494,16 +516,32 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
                           // one tap attaches the snapshot and closes
                           onPress={() => attachCatalogItem(c)}
                         >
+                          {c.photo_path ? (
+                            <Image source={{ uri: c.photo_path }} style={styles.pickThumb} />
+                          ) : (
+                            <View style={[styles.pickThumb, { backgroundColor: colors.cardLight, alignItems: 'center', justifyContent: 'center' }]}>
+                              <Ionicons name="restaurant-outline" size={14} color={colors.textDim} />
+                            </View>
+                          )}
                           <View style={{ flex: 1 }}>
-                            <Text style={styles.pickName} numberOfLines={1}>
-                              {c.name}
-                            </Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                              {c.is_favorite && <Ionicons name="star" size={11} color={colors.yellow} />}
+                              <Text style={styles.pickName} numberOfLines={1}>
+                                {c.name}
+                              </Text>
+                            </View>
                             <Text style={[styles.pickMacro, NUMS]}>
                               {c.calories != null ? `${c.calories} cal` : ''}
                               {c.protein_g != null ? ` · ${Math.round(c.protein_g)}P` : ''}
                               {c.carbs_g != null ? ` ${Math.round(c.carbs_g)}C` : ''}
                               {c.fat_g != null ? ` ${Math.round(c.fat_g)}F` : ''}
                             </Text>
+                            {(c.allergens || []).length > 0 && (
+                              <View style={styles.pickAllergen}>
+                                <Ionicons name="warning" size={10} color={colors.red} />
+                                <Text style={styles.pickAllergenText}>Contains: {c.allergens.join(', ')}</Text>
+                              </View>
+                            )}
                           </View>
                           <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
                         </TouchableOpacity>
@@ -588,7 +626,7 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
               </ScrollView>
             )}
 
-            <TouchableOpacity style={styles.cancelBtn} onPress={() => setPicker(null)}>
+            <TouchableOpacity style={styles.cancelBtn} onPress={() => { setPicker(null); setPickFav(false); }}>
               <Text style={styles.cancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
@@ -727,6 +765,13 @@ const makeStyles = (colors) =>
     pickTab: { flex: 1, alignItems: 'center', borderRadius: 10, paddingVertical: 8 },
     pickTabOn: { backgroundColor: colors.primary },
     pickTabText: { color: colors.textDim, fontWeight: '700', fontSize: 12 },
+    pickThumb: { width: 40, height: 40, borderRadius: 9, marginRight: 2 },
+    pickAllergen: {
+      flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4,
+      alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.red,
+      borderRadius: 6, paddingHorizontal: 5, paddingVertical: 2,
+    },
+    pickAllergenText: { color: colors.red, fontSize: 10, fontWeight: '700' },
     pickRow: {
       flexDirection: 'row', alignItems: 'center', gap: 10,
       backgroundColor: colors.card, borderRadius: 12, padding: 12, marginBottom: 6,

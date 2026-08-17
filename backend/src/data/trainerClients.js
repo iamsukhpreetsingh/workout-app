@@ -130,10 +130,13 @@ async function requestAssociationByCode(clientId, code, restorePreference = null
     throw new HttpError(409, 'This invite code has already been used');
   }
   // Reactivation: REUSE the archived row (keeps archived_at/purge_at for a
-  // decline or 'fresh' outcome) instead of inserting a new one.
+  // decline or 'fresh' outcome) instead of inserting a new one. Multiple
+  // archived rows can exist after repeated Start-Fresh cycles — always take
+  // the most recent.
   const archived = await query(
     `SELECT id FROM trainer_clients
      WHERE trainer_id = $1 AND client_id = $2 AND status = 'archived'
+     ORDER BY archived_at DESC NULLS LAST, created_at DESC
      LIMIT 1`,
     [invite.trainer_id, clientId]
   );
@@ -173,7 +176,10 @@ async function getAssociationStateForClient(clientId) {
             u.id AS trainer_id, u.name AS trainer_name, u.email AS trainer_email
      FROM trainer_clients tc JOIN users u ON u.id = tc.trainer_id
      WHERE tc.client_id = $1 AND tc.status != 'revoked'
-     ORDER BY tc.created_at DESC LIMIT 1`,
+     -- prefer an open association over stale archived rows left by
+     -- Start-Fresh cycles
+     ORDER BY (tc.status IN ('pending', 'active')) DESC, tc.created_at DESC
+     LIMIT 1`,
     [clientId]
   );
   if (!rows.length) return null;

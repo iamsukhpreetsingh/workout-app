@@ -74,15 +74,9 @@ export default function TrainerClientsScreen({ navigation }) {
     }, [load])
   );
 
-  React.useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity onPress={showInviteCode} style={{ padding: 8 }}>
-          <Ionicons name="share-social-outline" size={20} color={colors.text} />
-        </TouchableOpacity>
-      ),
-    });
-  }, [navigation, colors]);
+  // Invite code management lives in Trainer Settings (dedicated card with
+  // the code always visible) — the old header icon generated codes whose
+  // display only rendered in the zero-clients empty state.
 
   const refresh = async () => {
     setRefreshing(true);

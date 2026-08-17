@@ -156,11 +156,15 @@ async function createDietTree({ trainerId, clientId, name, notes, days, createdB
             throw new HttpError(400, 'Catalog item not found for this owner');
           }
           const snap = cat || it; // custom items carry their own fields
+          const snapStrArr = (v) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
+          const snapInt = (v) => (v != null && v !== '' ? Math.max(0, Math.round(Number(v))) : null);
           await client.query(
             `INSERT INTO diet_plan_meal_items
                (diet_plan_meal_id, catalog_item_id, name, calories, protein_g, carbs_g, fat_g,
-                serving_size, recipe_url, quantity_multiplier, client_note, order_index)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+                serving_size, recipe_url, quantity_multiplier, client_note, order_index,
+                photo_path, ingredients, allergens, prep_time_minutes, cook_time_minutes,
+                difficulty, alternate_servings)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
             [
               mealId,
               cat ? cat.id : null,
@@ -174,6 +178,14 @@ async function createDietTree({ trainerId, clientId, name, notes, days, createdB
               it.quantity_multiplier != null ? Number(it.quantity_multiplier) : 1,
               it.client_note || null,
               ii,
+              // client-relevant extras snapshot with the macros (migration 018)
+              snap.photo_path || null,
+              snapStrArr(snap.ingredients),
+              snapStrArr(snap.allergens),
+              snapInt(snap.prep_time_minutes),
+              snapInt(snap.cook_time_minutes),
+              ['easy', 'medium', 'hard'].includes(snap.difficulty) ? snap.difficulty : null,
+              JSON.stringify(Array.isArray(snap.alternate_servings) ? snap.alternate_servings : []),
             ]
           );
         }
@@ -231,11 +243,15 @@ async function updateOwnDietPlan(clientId, planId, payload) {
         );
         for (let ii = 0; ii < (m.items || []).length; ii++) {
           const it = m.items[ii] || {};
+          const eStrArr = (v) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
+          const eInt = (v) => (v != null && v !== '' ? Math.max(0, Math.round(Number(v))) : null);
           await client.query(
             `INSERT INTO diet_plan_meal_items
                (diet_plan_meal_id, name, calories, protein_g, carbs_g, fat_g,
-                serving_size, recipe_url, quantity_multiplier, client_note, order_index)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+                serving_size, recipe_url, quantity_multiplier, client_note, order_index,
+                photo_path, ingredients, allergens, prep_time_minutes, cook_time_minutes,
+                difficulty, alternate_servings)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
             [
               mealRows[0].id,
               String(it.name || '').trim(),
@@ -248,6 +264,13 @@ async function updateOwnDietPlan(clientId, planId, payload) {
               it.quantity_multiplier != null ? Number(it.quantity_multiplier) : 1,
               it.client_note || null,
               ii,
+              it.photo_path || null,
+              eStrArr(it.ingredients),
+              eStrArr(it.allergens),
+              eInt(it.prep_time_minutes),
+              eInt(it.cook_time_minutes),
+              ['easy', 'medium', 'hard'].includes(it.difficulty) ? it.difficulty : null,
+              JSON.stringify(Array.isArray(it.alternate_servings) ? it.alternate_servings : []),
             ]
           );
         }
