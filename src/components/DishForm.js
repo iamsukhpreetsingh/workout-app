@@ -6,7 +6,6 @@ import * as FileSystem from 'expo-file-system';
 import { useColors } from '../theme';
 import { api } from '../lib/api';
 
-const PRESET_TAGS = ['vegetarian', 'vegan', 'non-veg', 'high-protein', 'low-carb', 'dairy-free', 'gluten-free'];
 const PRESET_ALLERGENS = ['nuts', 'dairy', 'gluten', 'shellfish', 'eggs', 'soy'];
 const MEAL_SLOTS = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Pre-Workout', 'Post-Workout'];
 const DIFFICULTIES = ['easy', 'medium', 'hard'];
@@ -84,6 +83,14 @@ function DishForm({ visible, dish, onClose, onSave, onUseOnce, onDelete }) {
   const [customAllergen, setCustomAllergen] = useState('');
   const [showMore, setShowMore] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [recipeTags, setRecipeTags] = useState([]);
+
+  // Load recipe tags from API
+  useEffect(() => {
+    api('/trainer/tags/recipe')
+      .then((tags) => setRecipeTags(tags?.map(t => t.name) || []))
+      .catch(() => setRecipeTags([]));
+  }, []);
 
   React.useEffect(() => {
     if (visible) {
@@ -426,7 +433,7 @@ function DishForm({ visible, dish, onClose, onSave, onUseOnce, onDelete }) {
               {/* tags stay last — preference categories, not safety */}
               <Text style={styles.fieldLabel}>Tags</Text>
               <View style={styles.tagPickRow}>
-                {PRESET_TAGS.map((t) => (
+                {recipeTags.map((t) => (
                   <TouchableOpacity
                     key={t}
                     style={[styles.tag, (form.tags || []).includes(t) && styles.tagOn]}

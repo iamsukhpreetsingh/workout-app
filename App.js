@@ -45,6 +45,7 @@ import WorkoutTemplateEditorScreen from './src/screens/WorkoutTemplateEditorScre
 import AssignWorkoutPickerScreen from './src/screens/AssignWorkoutPickerScreen';
 import ActiveWorkoutMiniBar from './src/components/ActiveWorkoutMiniBar';
 import NotificationCenterScreen from './src/screens/NotificationCenterScreen';
+import TagManagerScreen from './src/screens/TagManagerScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -207,6 +208,7 @@ function TrainerStack({ onSwitchView }) {
       <Stack.Screen name="AssignedPlanDetail" component={AssignedPlanDetailScreen} options={{ title: 'Assigned Plan' }} />
       <Stack.Screen name="CoachingPlanDetail" component={CoachingPlanDetailScreen} options={{ title: 'Plan' }} />
       <Stack.Screen name="NotificationCenter" component={NotificationCenterScreen} options={{ title: 'Notifications' }} />
+      <Stack.Screen name="TagManager" component={TagManagerScreen} options={{ title: 'Manage Tags' }} />
     </Stack.Navigator>
   );
 }

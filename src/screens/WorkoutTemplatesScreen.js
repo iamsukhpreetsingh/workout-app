@@ -4,18 +4,21 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../lib/api';
 import CatalogSearch from '../components/CatalogSearch';
+import TagEditorModal from '../components/TagEditorModal';
 import { useColors } from '../theme';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
 // Trainer's reusable workout-template library (Workouts tab). Search and
-// tag filtering share the CatalogSearch component with Recipes.
+// tag filtering now uses dynamic tags from API.
 export default function WorkoutTemplatesScreen({ navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [templates, setTemplates] = useState(null);
+  const [workoutTags, setWorkoutTags] = useState([]);
   const [query, setQuery] = useState('');
   const [tagFilter, setTagFilter] = useState(null);
+  const [showTagEditor, setShowTagEditor] = useState(false);
 
   React.useLayoutEffect(() => {
     navigation.setOptions({
@@ -33,12 +36,31 @@ export default function WorkoutTemplatesScreen({ navigation }) {
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
-      api('/trainer/workout-templates')
-        .then((rows) => { if (mounted) setTemplates(rows); })
-        .catch(() => { if (mounted) setTemplates([]); });
+      Promise.all([
+        api('/trainer/workout-templates'),
+        api('/trainer/tags/workout'),
+      ])
+        .then(([templatesData, tagsData]) => {
+          if (mounted) {
+            setTemplates(templatesData);
+            setWorkoutTags(tagsData || []);
+          }
+        })
+        .catch(() => { 
+          if (mounted) setTemplates([]); 
+        });
       return () => { mounted = false; };
     }, [])
   );
+
+  const refreshTags = useCallback(async () => {
+    try {
+      const tagsData = await api('/trainer/tags/workout');
+      setWorkoutTags(tagsData || []);
+    } catch (e) {
+      // silently fail on refresh
+    }
+  }, []);
 
   if (templates === null) {
     return (
@@ -63,8 +85,10 @@ export default function WorkoutTemplatesScreen({ navigation }) {
           onQuery={setQuery}
           tag={tagFilter}
           onTag={setTagFilter}
-          tagsFromItems={templates.flatMap((t) => t.tags || [])}
+          tagsFromItems={templates?.flatMap((t) => t.tags || []) || []}
+          customTags={workoutTags.map(t => t.name)}
           placeholder="Search workouts…"
+          onManageTags={() => setShowTagEditor(true)}
         />
       </View>
 
@@ -109,6 +133,15 @@ export default function WorkoutTemplatesScreen({ navigation }) {
             <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
           </TouchableOpacity>
         )}
+      />
+
+      <TagEditorModal
+        visible={showTagEditor}
+        type="workout"
+        onClose={() => {
+          setShowTagEditor(false);
+          refreshTags();
+        }}
       />
     </View>
   );

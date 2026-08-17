@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const users = require('../data/users');
+const tags = require('../data/tags');
 
 const router = express.Router();
 
@@ -46,6 +47,11 @@ router.post('/signup', async (req, res, next) => {
     const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
     const user = await users.createUser({ email, passwordHash, name: name.trim(), role });
 
+    // Seed default tags for trainers on signup
+    if (role === 'trainer') {
+      await tags.seedDefaultTags(user.id);
+    }
+
     const accessToken = signAccessToken(user);
     const refreshToken = signRefreshToken(user);
     const expiresAt = new Date(Date.now() + REFRESH_TTL_DAYS * 86400 * 1000);
@@ -73,6 +79,14 @@ router.post('/login', async (req, res, next) => {
     const refreshToken = signRefreshToken(user);
     const expiresAt = new Date(Date.now() + REFRESH_TTL_DAYS * 86400 * 1000);
     await users.storeRefreshToken(user.id, refreshToken, expiresAt);
+
+    // Seed default tags for trainers on first login (if not already seeded)
+    if (user.role === 'trainer') {
+      const existingTags = await tags.getTagsForTrainer(user.id);
+      if (existingTags.length === 0) {
+        await tags.seedDefaultTags(user.id);
+      }
+    }
 
     // never leak password_hash
     const { password_hash, ...safeUser } = user;

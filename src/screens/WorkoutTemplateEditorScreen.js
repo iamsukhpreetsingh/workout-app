@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,6 @@ import { groupLabels } from '../store/WorkoutContext';
 import { useColors } from '../theme';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
-const PRESET_TAGS = ['push', 'pull', 'legs', 'full body', 'beginner', 'hypertrophy', 'strength', 'conditioning'];
 
 let uid = 0;
 const nid = () => `t${Date.now()}_${++uid}`;
@@ -40,6 +39,14 @@ export default function WorkoutTemplateEditorScreen({ route, navigation }) {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [workoutTags, setWorkoutTags] = useState([]);
+
+  // Load workout tags from API
+  useEffect(() => {
+    api('/trainer/tags/workout')
+      .then((tags) => setWorkoutTags(tags?.map(t => t.name) || []))
+      .catch(() => setWorkoutTags([]));
+  }, []);
 
   React.useLayoutEffect(() => {
     navigation.setOptions({
@@ -186,7 +193,7 @@ export default function WorkoutTemplateEditorScreen({ route, navigation }) {
       />
 
       <View style={styles.tagRow}>
-        {PRESET_TAGS.map((t) => (
+        {workoutTags.map((t) => (
           <TouchableOpacity
             key={t}
             style={[styles.tagChip, tags.includes(t) && styles.tagChipOn]}

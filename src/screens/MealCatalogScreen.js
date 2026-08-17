@@ -17,6 +17,7 @@ import { api } from '../lib/api';
 import { useColors } from '../theme';
 import DishForm from '../components/DishForm';
 import CatalogSearch from '../components/CatalogSearch';
+import TagEditorModal from '../components/TagEditorModal';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -26,10 +27,12 @@ export default function MealCatalogScreen({ navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [items, setItems] = useState(null); // null = loading
+  const [recipeTags, setRecipeTags] = useState([]);
   const [query, setQuery] = useState('');
   const [tagFilter, setTagFilter] = useState(null);
   const [favOnly, setFavOnly] = useState(false);
   const [editing, setEditing] = useState(null); // null | {} | item
+  const [showTagEditor, setShowTagEditor] = useState(false);
 
   React.useLayoutEffect(() => {
     navigation.setOptions({
@@ -43,9 +46,23 @@ export default function MealCatalogScreen({ navigation }) {
 
   const load = useCallback(async () => {
     try {
-      setItems(await api('/trainer/meal-catalog'));
+      const [itemsData, tagsData] = await Promise.all([
+        api('/trainer/meal-catalog'),
+        api('/trainer/tags/recipe'),
+      ]);
+      setItems(itemsData);
+      setRecipeTags(tagsData || []);
     } catch (e) {
       setItems([]);
+    }
+  }, []);
+
+  const refreshTags = useCallback(async () => {
+    try {
+      const tagsData = await api('/trainer/tags/recipe');
+      setRecipeTags(tagsData || []);
+    } catch (e) {
+      // silently fail on refresh
     }
   }, []);
 
@@ -127,8 +144,12 @@ export default function MealCatalogScreen({ navigation }) {
           onQuery={setQuery}
           tag={tagFilter}
           onTag={setTagFilter}
+          tagsFromItems={items?.flatMap((i) => i.tags || []) || []}
+          customTags={recipeTags.map(t => t.name)}
           favOnly={favOnly}
           onFavOnly={setFavOnly}
+          placeholder="Search recipes…"
+          onManageTags={() => setShowTagEditor(true)}
         />
       </View>
 
@@ -212,6 +233,15 @@ export default function MealCatalogScreen({ navigation }) {
         onClose={() => setEditing(null)}
         onSave={save}
         onDelete={editing?.id ? confirmDelete : null}
+      />
+
+      <TagEditorModal
+        visible={showTagEditor}
+        type="recipe"
+        onClose={() => {
+          setShowTagEditor(false);
+          refreshTags();
+        }}
       />
     </View>
   );
