@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
+import { NotificationBell } from '../components/NotificationBell';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -77,6 +78,16 @@ export default function TrainerClientsScreen({ navigation }) {
   // Invite code management lives in Trainer Settings (dedicated card with
   // the code always visible) — the old header icon generated codes whose
   // display only rendered in the zero-clients empty state.
+
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <NotificationBell onPress={() => navigation.navigate('NotificationCenter')} />
+        </View>
+      ),
+    });
+  }, [navigation, colors]);
 
   const refresh = async () => {
     setRefreshing(true);

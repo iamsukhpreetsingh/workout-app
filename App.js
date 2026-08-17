@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { WorkoutProvider } from './src/store/WorkoutContext';
 import { AppProvider, useApp } from './src/store/AppContext';
 import { AuthProvider, useAuth } from './src/store/AuthContext';
+import { NotificationProvider } from './src/store/NotificationContext';
 import { setHapticsEnabled } from './src/lib/haptics';
 import { syncPendingSessions, syncPendingMeasurements } from './src/lib/syncService';
 import { getViewChoice, setViewChoice, clearViewChoice } from './src/lib/viewMode';
@@ -43,6 +44,7 @@ import WorkoutTemplatesScreen from './src/screens/WorkoutTemplatesScreen';
 import WorkoutTemplateEditorScreen from './src/screens/WorkoutTemplateEditorScreen';
 import AssignWorkoutPickerScreen from './src/screens/AssignWorkoutPickerScreen';
 import ActiveWorkoutMiniBar from './src/components/ActiveWorkoutMiniBar';
+import NotificationCenterScreen from './src/screens/NotificationCenterScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -122,6 +124,7 @@ function MainStack({ onSwitchView }) {
       <Stack.Screen name="ClientDetail" component={ClientDetailScreen} options={{ title: 'Client' }} />
       <Stack.Screen name="AssignWorkout" component={AssignWorkoutScreen} options={{ title: 'Assign Workout' }} />
       <Stack.Screen name="ClientAssignedDetail" component={ClientAssignedDetailScreen} options={{ title: 'From Your Trainer' }} />
+      <Stack.Screen name="NotificationCenter" component={NotificationCenterScreen} options={{ title: 'Notifications' }} />
       <Stack.Screen name="DietPlanBuilder" component={DietPlanBuilderScreen} options={{ title: 'Diet Plan' }} />
       <Stack.Screen name="ClientDietPlanDetail" component={ClientDietPlanDetailScreen} options={{ title: 'Diet Plan' }} />
       <Stack.Screen name="MyDishes" component={MyDishesScreen} options={{ title: 'My Dishes' }} />
@@ -203,6 +206,7 @@ function TrainerStack({ onSwitchView }) {
       <Stack.Screen name="SupplementPlanBuilder" component={CoachingPlanBuilderScreen} options={{ title: 'Supplement Plan' }} />
       <Stack.Screen name="AssignedPlanDetail" component={AssignedPlanDetailScreen} options={{ title: 'Assigned Plan' }} />
       <Stack.Screen name="CoachingPlanDetail" component={CoachingPlanDetailScreen} options={{ title: 'Plan' }} />
+      <Stack.Screen name="NotificationCenter" component={NotificationCenterScreen} options={{ title: 'Notifications' }} />
     </Stack.Navigator>
   );
 }
@@ -311,11 +315,13 @@ function AppContent() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppProvider>
-        <WorkoutProvider>
-          <AppContent />
-        </WorkoutProvider>
-      </AppProvider>
+      <NotificationProvider>
+        <AppProvider>
+          <WorkoutProvider>
+            <AppContent />
+          </WorkoutProvider>
+        </AppProvider>
+      </NotificationProvider>
     </AuthProvider>
   );
 }

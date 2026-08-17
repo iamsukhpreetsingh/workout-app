@@ -6,6 +6,7 @@ const measurements = require('../data/measurements');
 const sessionDetails = require('../data/sessionDetails');
 const mealCatalog = require('../data/mealCatalog');
 const coaching = require('../data/coachingPlans');
+const notifications = require('../data/notifications');
 const { query } = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
@@ -93,7 +94,50 @@ router.get('/trainer', requireAuth, requireRole('user'), async (req, res) => {
 // from the token, never the body.
 router.post('/session-summaries', requireAuth, async (req, res) => {
   try {
-    const rows = await sessionSummaries.upsertSummaries(req.user.id, req.body);
+    const summaries = req.body;
+    const rows = await sessionSummaries.upsertSummaries(req.user.id, summaries);
+
+    // Check for genuinely NEW sessions (not updates) and notify trainer if applicable
+    for (let i = 0; i < summaries.length; i++) {
+      const s = summaries[i];
+      const insertedRow = rows[i];
+      if (!insertedRow) continue;
+
+      // Check if this was actually a new insert (not an update)
+      const existing = await query(
+        'SELECT id, performed_at FROM session_summaries WHERE client_id = $1 AND local_session_id = $2 AND id != $3',
+        [req.user.id, String(s.local_session_id), insertedRow.id]
+      );
+
+      // If there's an older row, this is an update, not a new session
+      if (existing.rows.length > 0) continue;
+
+      // This is a genuinely new session - check if client has a trainer
+      const trainerRel = await notifications.getActiveTrainerForClient(req.user.id);
+      if (!trainerRel) continue;
+
+      // Check trainer notification preference
+      const pref = await notifications.getTrainerNotificationPreference(trainerRel.trainer_id, req.user.id);
+      if (!pref) continue; // Trainer has disabled notifications for this client
+
+      // Get client name
+      const clientUser = await notifications.getUserById(req.user.id);
+      const clientName = clientUser?.name || 'Your client';
+
+      // Format volume
+      const volume = insertedRow.total_volume ? `${Math.round(insertedRow.total_volume)}kg` : '';
+
+      notifications.createNotification({
+        recipientId: trainerRel.trainer_id,
+        actorId: req.user.id,
+        type: 'workout_completed',
+        title: `${clientName} completed a workout`,
+        body: insertedRow.name ? `'${insertedRow.name}'${volume ? ' · ' + volume + ' volume' : ''}` : `Workout completed${volume ? ' · ' + volume + ' volume' : ''}`,
+        relatedClientId: req.user.id,
+        deepLinkRef: insertedRow.id,
+      }).catch(err => console.error('Failed to create notification:', err.message));
+    }
+
     res.status(201).json(rows);
   } catch (e) {
     httpError(res, e, 400);
@@ -218,7 +262,37 @@ for (const kind of ['diet', 'supplement']) {
       if (done == null) {
         return res.status(400).json({ error: kind === 'diet' ? 'followed is required' : 'taken is required' });
       }
-      res.status(201).json(await coaching.checkIn(kind, req.user.id, req.params.planId, day, done, note));
+      const checkin = await coaching.checkIn(kind, req.user.id, req.params.planId, day, done, note);
+
+      // Check if this is a trainer-created plan and notify trainer
+      const planCreator = await notifications.getPlanCreator(kind, req.params.planId);
+      if (planCreator && planCreator.created_by === 'trainer' && planCreator.trainer_id) {
+        // Check trainer notification preference
+        const pref = await notifications.getTrainerNotificationPreference(planCreator.trainer_id, req.user.id);
+        if (pref) {
+          // Get client name
+          const clientUser = await notifications.getUserById(req.user.id);
+          const clientName = clientUser?.name || 'Your client';
+          const planName = checkin[`${kind}_plan_id`];
+
+          // Get plan name
+          const planTable = kind === 'diet' ? 'diet_plans' : 'supplement_plans';
+          const { rows: planRows } = await query(`SELECT name FROM ${planTable} WHERE id = $1`, [req.params.planId]);
+          const planNameVal = planRows[0]?.name || 'plan';
+
+          notifications.createNotification({
+            recipientId: planCreator.trainer_id,
+            actorId: req.user.id,
+            type: kind === 'diet' ? 'diet_checkin' : 'supplement_checkin',
+            title: `${clientName} checked in on their ${kind} plan`,
+            body: done ? `Followed '${planNameVal}'` : `Didn't follow '${planNameVal}'`,
+            relatedClientId: req.user.id,
+            deepLinkRef: req.params.planId,
+          }).catch(err => console.error('Failed to create notification:', err.message));
+        }
+      }
+
+      res.status(201).json(checkin);
     } catch (e) {
       httpError(res, e, 400);
     }

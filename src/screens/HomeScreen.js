@@ -12,6 +12,7 @@ import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
 import { listPins, removePin, removeStalePins, MAX_PINNED_ROUTINES } from '../db/pins';
 import { startAssignedPlan } from '../lib/startAssigned';
+import { NotificationBell } from '../components/NotificationBell';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -81,9 +82,21 @@ export default function HomeScreen({ navigation }) {
 
   // Contextual greeting; shared settings + profile icons (all screens)
   React.useLayoutEffect(() => {
-    navigation.setOptions({ title: greeting() });
-  }, [navigation]);
-  useHeaderActions(navigation);
+    navigation.setOptions({
+      title: greeting(),
+      headerRight: () => (
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <NotificationBell onPress={() => navigation.navigate('NotificationCenter')} />
+          <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={{ padding: 8 }}>
+            <Ionicons name="settings-outline" size={22} color={colors.text} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => navigation.navigate('Profile')} style={{ padding: 8 }}>
+            <Ionicons name="person-circle-outline" size={22} color={colors.text} />
+          </TouchableOpacity>
+        </View>
+      ),
+    });
+  }, [navigation, colors]);
 
   useFocusEffect(
     useCallback(() => {

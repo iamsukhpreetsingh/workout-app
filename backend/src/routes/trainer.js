@@ -8,6 +8,7 @@ const sessionDetails = require('../data/sessionDetails');
 const coaching = require('../data/coachingPlans');
 const mealCatalog = require('../data/mealCatalog');
 const workoutTemplates = require('../data/workoutTemplates');
+const notifications = require('../data/notifications');
 const { query } = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
@@ -164,6 +165,19 @@ router.post('/clients/:clientId/assigned-plans', requireAuth, requireRole('train
       return res.status(400).json({ error: 'name and a non-empty exercises array are required' });
     }
     const plan = await assignedPlans.createAssignedPlan({ trainerId: req.user.id, clientId, name, notes, exercises });
+
+    // Create notification for client (always, not gated by trainer preference)
+    const trainer = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+    const trainerName = trainer.rows[0]?.name || 'Your trainer';
+    notifications.createNotification({
+      recipientId: clientId,
+      actorId: req.user.id,
+      type: 'workout_assigned',
+      title: 'New workout assigned',
+      body: `${trainerName} assigned you '${name}'`,
+      deepLinkRef: plan.id,
+    }).catch(err => console.error('Failed to create notification:', err.message));
+
     res.status(201).json(plan);
   } catch (e) {
     httpError(res, e);
@@ -327,6 +341,21 @@ for (const kind of ['diet', 'supplement']) {
         trainerId: req.user.id, clientId: req.params.clientId, name, notes, items, days,
         ...(kind === 'diet' ? { targets } : {}),
       });
+
+      // Create notification for client (always, not gated by trainer preference)
+      const trainer = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+      const trainerName = trainer.rows[0]?.name || 'Your trainer';
+      const notifType = kind === 'diet' ? 'diet_assigned' : 'supplement_assigned';
+      const notifTitle = kind === 'diet' ? 'New diet plan assigned' : 'New supplement plan assigned';
+      notifications.createNotification({
+        recipientId: req.params.clientId,
+        actorId: req.user.id,
+        type: notifType,
+        title: notifTitle,
+        body: `${trainerName} assigned you '${name}'`,
+        deepLinkRef: plan.id,
+      }).catch(err => console.error('Failed to create notification:', err.message));
+
       res.status(201).json(plan);
     } catch (e) {
       httpError(res, e);
@@ -480,6 +509,19 @@ router.post(
         req.params.clientId,
         req.params.templateId
       );
+
+      // Create notification for client (always, not gated by trainer preference)
+      const trainer = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+      const trainerName = trainer.rows[0]?.name || 'Your trainer';
+      notifications.createNotification({
+        recipientId: req.params.clientId,
+        actorId: req.user.id,
+        type: 'workout_assigned',
+        title: 'New workout assigned',
+        body: `${trainerName} assigned you '${plan.name}'`,
+        deepLinkRef: plan.id,
+      }).catch(err => console.error('Failed to create notification:', err.message));
+
       res.status(201).json(plan);
     } catch (e) {
       httpError(res, e);
@@ -530,6 +572,24 @@ router.delete('/plans/:id', requireAuth, requireRole('trainer'), async (req, res
     }
     await assignedPlans.deleteAssignedPlan(req.params.id);
     res.json({ ok: true });
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// PATCH /trainer/clients/:clientId/notification-preference — trainer-only
+router.patch('/clients/:clientId/notification-preference', requireAuth, requireRole('trainer'), async (req, res) => {
+  try {
+    const { enabled } = req.body || {};
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: 'enabled (boolean) is required' });
+    }
+    const result = await notifications.updateTrainerNotificationPreference(
+      req.user.id,
+      req.params.clientId,
+      enabled
+    );
+    res.json(result);
   } catch (e) {
     httpError(res, e);
   }

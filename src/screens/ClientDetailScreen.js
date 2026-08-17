@@ -10,6 +10,7 @@ import {
   TextInput,
   Modal,
   Alert,
+  Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -104,6 +105,8 @@ export default function ClientDetailScreen({ route, navigation }) {
   const [supplementPlans, setSupplementPlans] = useState([]);
   const [expanded, setExpanded] = useState(null);
   const detailCache = useRef({}); // summaryId → per-set detail (per visit)
+  const [notificationPref, setNotificationPref] = useState(true);
+  const [loadingPref, setLoadingPref] = useState(false);
 
   React.useLayoutEffect(() => {
     navigation.setOptions({ title: clientName || 'Client' });
@@ -144,6 +147,60 @@ export default function ClientDetailScreen({ route, navigation }) {
     await loadContent();
     setRefreshing(false);
   };
+
+  const loadNotificationPref = useCallback(async () => {
+    try {
+      const roster = await api('/trainer/clients');
+      const client = roster.find(c => c.id === clientId);
+      if (client && client.trainer_notifications_enabled !== undefined) {
+        setNotificationPref(client.trainer_notifications_enabled);
+      }
+    } catch (e) {
+      // Default to true if we can't fetch
+      setNotificationPref(true);
+    }
+  }, [clientId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadNotificationPref();
+    }, [loadNotificationPref])
+  );
+
+  const handleNotificationToggle = async (value) => {
+    const previousValue = notificationPref;
+    setNotificationPref(value);
+    setLoadingPref(true);
+    try {
+      await api(`/trainer/clients/${clientId}/notification-preference`, {
+        method: 'PATCH',
+        body: { enabled: value },
+      });
+    } catch (e) {
+      setNotificationPref(previousValue);
+      Alert.alert('Error', 'Failed to update notification preference');
+    } finally {
+      setLoadingPref(false);
+    }
+  };
+
+  // Also load notification preference in loadContent to ensure it's available
+  useFocusEffect(
+    useCallback(() => {
+      const load = async () => {
+        try {
+          const roster = await api('/trainer/clients');
+          const client = roster.find(c => c.id === clientId);
+          if (client && client.trainer_notifications_enabled !== undefined) {
+            setNotificationPref(client.trainer_notifications_enabled);
+          }
+        } catch (e) {
+          // Ignore - use default
+        }
+      };
+      load();
+    }, [clientId])
+  );
 
   // analytics re-query — runs on tab / range / picker changes; loading state
   // prevents stale-chart flashes between tabs
@@ -414,6 +471,9 @@ export default function ClientDetailScreen({ route, navigation }) {
           supplementPlans={supplementPlans}
           activity={activity}
           onLoadActivity={loadActivity}
+          notificationPref={notificationPref}
+          onNotificationToggle={handleNotificationToggle}
+          loadingNotificationPref={loadingPref}
         />
       )}
 
@@ -694,6 +754,7 @@ const TYPE_TAG = { working: 'W', warmup: 'WU', dropset: 'DS', failure: 'F' };
 function OverviewPanel({
   styles, colors, navigation, clientId, clientName, readOnly,
   summaries, activity, onLoadActivity,
+  notificationPref, onNotificationToggle, loadingNotificationPref,
 }) {
   const confirmRemoveClient = () =>
     Alert.alert(
@@ -748,6 +809,22 @@ function OverviewPanel({
           <Text style={[styles.statVol, NUMS]}>{fmtK(mo.vol)} vol</Text>
         </View>
       </View>
+
+      <Text style={styles.groupLabel}>Notifications</Text>
+      {!readOnly && (
+        <View style={[styles.qaRow, { marginBottom: 12 }]}>
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8 }}>
+            <Text style={styles.qaText}>Notify me about this client</Text>
+            <Switch
+              value={notificationPref}
+              onValueChange={onNotificationToggle}
+              disabled={loadingNotificationPref}
+              trackColor={{ false: colors.border, true: colors.primary }}
+              thumbColor="#fff"
+            />
+          </View>
+        </View>
+      )}
 
       <Text style={styles.groupLabel}>Quick Actions</Text>
       {!readOnly ? (

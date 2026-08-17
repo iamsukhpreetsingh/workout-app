@@ -21,8 +21,6 @@ export async function ensurePermission() {
   return !!req.granted;
 }
 
-// Schedule the "rest complete" notification. Returns the notification id
-// (or null if notifications are unavailable / permission denied).
 export async function scheduleRestNotification(secondsRemaining, nextExerciseName) {
   try {
     const granted = await ensurePermission();

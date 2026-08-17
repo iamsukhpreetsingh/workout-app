@@ -70,6 +70,7 @@ async function listForClient(clientId, { limit = 20, offset = 0, from, to } = {}
 async function rosterWithArchive(trainerId) {
   const { rows } = await query(
     `SELECT u.id, u.name, u.email, tc.status, tc.archived_at, tc.archived_by, tc.purge_at,
+            tc.trainer_notifications_enabled,
             GREATEST(0, EXTRACT(DAY FROM (tc.purge_at - now()))::int) AS days_remaining,
             last.last_active_at,
             ROUND(days.recent_day_count::numeric / 30 * 100, 1) AS adherence_pct

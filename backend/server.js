@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const authRoutes = require('./src/routes/auth');
 const trainerRoutes = require('./src/routes/trainer');
 const clientRoutes = require('./src/routes/client');
+const notificationRoutes = require('./src/routes/notifications');
 const { requireAuth } = require('./src/middleware/auth');
 const { getUserById } = require('./src/data/users');
 
@@ -47,6 +48,7 @@ app.post('/uploads/dish-photo', requireAuth, async (req, res) => {
 app.use('/auth', authRoutes);
 app.use('/trainer', trainerRoutes);
 app.use('/client', clientRoutes);
+app.use('/notifications', notificationRoutes);
 
 // GET /me — current user profile (never includes password_hash)
 app.get('/me', requireAuth, async (req, res) => {
