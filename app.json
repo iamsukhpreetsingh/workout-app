@@ -13,7 +13,8 @@
       "bundleIdentifier": "com.anonymous.workouttracker"
     },
     "android": {
-      "package": "com.anonymous.workouttracker"
+      "package": "com.anonymous.workouttracker",
+      "usesCleartextTraffic": true
     },
     "plugins": [
       "expo-font",
