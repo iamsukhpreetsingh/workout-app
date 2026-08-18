@@ -13,6 +13,7 @@ import { createPlan, getPlan, updatePlan } from '../db/queries';
 import { getSettings } from '../db/settings';
 import ExercisePicker from '../components/ExercisePicker';
 import RestEditorModal from '../components/RestEditorModal';
+import ClientTagSelector from '../components/ClientTagSelector';
 import { groupLabels } from '../store/WorkoutContext';
 import { useColors } from '../theme';
 
@@ -36,6 +37,7 @@ export default function PlanEditorScreen({ navigation, route }) {
   const [selected, setSelected] = useState([]);
   const [defaultRest, setDefaultRest] = useState(90);
   const [loading, setLoading] = useState(isEditing);
+  const [tags, setTags] = useState([]);
 
   useEffect(() => {
     getSettings().then((s) => setDefaultRest(s.default_rest_seconds));
@@ -47,6 +49,7 @@ export default function PlanEditorScreen({ navigation, route }) {
         if (plan) {
           setName(plan.name);
           setNotes(plan.notes || '');
+          setTags(plan.tags || []);
           setExercises(
             plan.exercises.map((e) => ({
               id: e.exercise_id,
@@ -110,7 +113,8 @@ export default function PlanEditorScreen({ navigation, route }) {
             targetSets: e.targetSets,
             restSeconds: e.restSeconds,
             groupId: e.groupId,
-          }))
+          })),
+          tags
         );
       } else {
         await createPlan(
@@ -121,7 +125,8 @@ export default function PlanEditorScreen({ navigation, route }) {
             targetSets: e.targetSets,
             restSeconds: e.restSeconds,
             groupId: e.groupId,
-          }))
+          })),
+          tags
         );
       }
       navigation.goBack();
@@ -158,6 +163,8 @@ export default function PlanEditorScreen({ navigation, route }) {
         onChangeText={setNotes}
         multiline
       />
+
+      <ClientTagSelector value={tags} onChange={setTags} type="workout" />
 
       {/* Link-as-superset: multi-select mode, same pattern as the live session */}
       {canSuperset && (

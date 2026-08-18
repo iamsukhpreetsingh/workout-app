@@ -187,6 +187,14 @@ async function update(trainerId, id, body) {
       item.photo_path, item.ingredients, item.allergens, item.prep_time_minutes, item.cook_time_minutes, item.difficulty, item.suggested_meal_types, item.is_favorite, JSON.stringify(item.alternate_servings), trainerId]
   );
   if (!rows.length) throw new HttpError(404, 'Catalog item not found');
+  // TAG CASCADE (unlike macros): editing a recipe's tags re-tags every plan
+  // item that used it, across all clients — tags describe the recipe itself
+  // (vegetarian, high-protein…), so keeping snapshots stale would mislabel
+  // plans. Macros stay snapshotted (portion contracts with the client).
+  await query(
+    `UPDATE diet_plan_meal_items SET tags = $2 WHERE catalog_item_id = $1`,
+    [id, item.tags]
+  );
   return rows[0];
 }
 

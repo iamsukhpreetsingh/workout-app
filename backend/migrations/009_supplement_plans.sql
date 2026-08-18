@@ -25,5 +25,6 @@ CREATE TABLE IF NOT EXISTS supplement_checkins (
   client_id UUID NOT NULL REFERENCES users(id),
   date DATE NOT NULL,
   taken BOOLEAN NOT NULL,
+  note TEXT,
   UNIQUE(supplement_plan_id, date)
 );

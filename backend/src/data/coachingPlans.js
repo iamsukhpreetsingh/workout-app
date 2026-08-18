@@ -68,11 +68,12 @@ async function createPlan(kind, payload) {
   if (!Array.isArray(items) || !items.length) {
     throw new HttpError(400, 'a non-empty items array are required');
   }
+  const planTags = sanitizeTags(payload.tags);
   return transaction(async (client) => {
     const { rows } = await client.query(
-      `INSERT INTO ${c.plansTable} (trainer_id, client_id, name, notes, created_by)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [createdBy === 'trainer' ? trainerId : null, clientId, name, notes || null, createdBy]
+      `INSERT INTO ${c.plansTable} (trainer_id, client_id, name, notes, created_by, tags)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [createdBy === 'trainer' ? trainerId : null, clientId, name, notes || null, createdBy, planTags]
     );
     const plan = rows[0];
     for (let i = 0; i < items.length; i++) {
@@ -92,16 +93,17 @@ async function createPlan(kind, payload) {
 // Diet plan tree creation (one transaction). Catalog-sourced items are
 // SNAPSHOTTED server-side from the catalog at insert time, so later catalog
 // edits never alter already-assigned plans.
-async function createDietTree({ trainerId, clientId, name, notes, days, createdBy = 'trainer', targets = {} }) {
+async function createDietTree({ trainerId, clientId, name, notes, days, createdBy = 'trainer', targets = {}, tags = [] }) {
+  const planTags = sanitizeTags(tags); // plan-level (self-authored client plans)
   return transaction(async (client) => {
     const { rows } = await client.query(
       `INSERT INTO diet_plans
-         (trainer_id, client_id, name, notes, created_by,
+         (trainer_id, client_id, name, notes, created_by, tags,
           daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [
         createdBy === 'trainer' ? trainerId : null,
-        clientId, name, notes || null, createdBy,
+        clientId, name, notes || null, createdBy, planTags,
         targets.daily_calorie_target ?? null,
         targets.daily_protein_target ?? null,
         targets.daily_carbs_target ?? null,
@@ -163,8 +165,8 @@ async function createDietTree({ trainerId, clientId, name, notes, days, createdB
                (diet_plan_meal_id, catalog_item_id, name, calories, protein_g, carbs_g, fat_g,
                 serving_size, recipe_url, quantity_multiplier, client_note, order_index,
                 photo_path, ingredients, allergens, prep_time_minutes, cook_time_minutes,
-                difficulty, alternate_servings)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+                difficulty, alternate_servings, tags)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
             [
               mealId,
               cat ? cat.id : null,
@@ -186,6 +188,7 @@ async function createDietTree({ trainerId, clientId, name, notes, days, createdB
               snapInt(snap.cook_time_minutes),
               ['easy', 'medium', 'hard'].includes(snap.difficulty) ? snap.difficulty : null,
               JSON.stringify(Array.isArray(snap.alternate_servings) ? snap.alternate_servings : []),
+              snapStrArr(snap.tags), // recipe tags snapshot (migration 021)
             ]
           );
         }
@@ -193,6 +196,17 @@ async function createDietTree({ trainerId, clientId, name, notes, days, createdB
     }
     return plan;
   });
+}
+
+// Plan-level tags: max 5, REJECTED (not truncated) beyond that.
+function sanitizeTags(tags) {
+  const arr = (Array.isArray(tags) ? tags : [])
+    .map((t) => String(t).trim())
+    .filter(Boolean);
+  if (arr.length > 5) {
+    throw new HttpError(400, 'A plan can have at most 5 tags');
+  }
+  return arr;
 }
 
 // Client-side: update one of my OWN diet plans (client-authored only -
@@ -211,14 +225,15 @@ async function updateOwnDietPlan(clientId, planId, payload) {
   await transaction(async (client) => {
     await client.query(
       `UPDATE diet_plans SET
-         name = $2, notes = $3,
-         daily_calorie_target = $4, daily_protein_target = $5,
-         daily_carbs_target = $6, daily_fat_target = $7
+         name = $2, notes = $3, tags = $4,
+         daily_calorie_target = $5, daily_protein_target = $6,
+         daily_carbs_target = $7, daily_fat_target = $8
        WHERE id = $1`,
       [
         planId,
         payload.name,
         payload.notes || null,
+        sanitizeTags(payload.tags),
         (payload.targets || {}).daily_calorie_target ?? null,
         (payload.targets || {}).daily_protein_target ?? null,
         (payload.targets || {}).daily_carbs_target ?? null,
@@ -249,9 +264,9 @@ async function updateOwnDietPlan(clientId, planId, payload) {
             `INSERT INTO diet_plan_meal_items
                (diet_plan_meal_id, name, calories, protein_g, carbs_g, fat_g,
                 serving_size, recipe_url, quantity_multiplier, client_note, order_index,
-                photo_path, ingredients, allergens, prep_time_minutes, cook_time_minutes,
+                photo_path, tags, ingredients, allergens, prep_time_minutes, cook_time_minutes,
                 difficulty, alternate_servings)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
             [
               mealRows[0].id,
               String(it.name || '').trim(),
@@ -265,6 +280,7 @@ async function updateOwnDietPlan(clientId, planId, payload) {
               it.client_note || null,
               ii,
               it.photo_path || null,
+              eStrArr(it.tags),
               eStrArr(it.ingredients),
               eStrArr(it.allergens),
               eInt(it.prep_time_minutes),
@@ -278,6 +294,53 @@ async function updateOwnDietPlan(clientId, planId, payload) {
     }
   });
   return getPlanWithItems('diet', planId);
+}
+
+// Client-side: update one of my OWN supplement plans (client-authored only)
+async function updateOwnSupplementPlan(clientId, planId, payload) {
+  const { rows } = await query(
+    'SELECT id, client_id, created_by FROM supplement_plans WHERE id = $1',
+    [planId]
+  );
+  if (!rows.length || rows[0].client_id !== clientId) {
+    throw new HttpError(404, 'Plan not found');
+  }
+  if (rows[0].created_by !== 'client') {
+    throw new HttpError(403, 'Only your own plans can be edited');
+  }
+  await transaction(async (client) => {
+    await client.query(
+      `UPDATE supplement_plans SET
+         name = $2, notes = $3, tags = $4
+       WHERE id = $1`,
+      [planId, payload.name, payload.notes || null, sanitizeTags(payload.tags)]
+    );
+    await client.query('DELETE FROM supplement_plan_items WHERE supplement_plan_id = $1', [planId]);
+    const items = payload.items || [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      await client.query(
+        `INSERT INTO supplement_plan_items
+           (supplement_plan_id, supplement_name, dosage, timing, notes, order_index)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [planId, it.supplement_name, it.dosage || null, it.timing || null, it.notes || null, i]
+      );
+    }
+  });
+  return getPlanWithItems('supplement', planId);
+}
+
+// Trainer sets plan-level tags directly on an assigned supplement plan
+// (no catalog to cascade from). Ownership: trainer + active/archived pair.
+async function updateSupplementPlanTags(trainerId, clientId, planId, tags) {
+  const clean = sanitizeTags(tags);
+  const { rows } = await query(
+    `UPDATE supplement_plans SET tags = $4
+     WHERE id = $1 AND trainer_id = $2 AND client_id = $3 RETURNING *`,
+    [planId, trainerId, clientId, clean]
+  );
+  if (!rows.length) throw new HttpError(404, 'Plan not found');
+  return rows[0];
 }
 
 // Client-side: delete one of my OWN client-authored plan
@@ -317,8 +380,22 @@ async function listActiveForClient(kind, trainerId, clientId) {
 
 async function listActiveForOwner(kind, clientId) {
   const c = cfg(kind);
+  // Diet display tags: trainer-assigned plans have NO plan-level tag field —
+  // their tags are the UNION of their items' snapshotted recipe tags
+  // (computed here so list views never over-fetch the nested tree).
+  // Self-authored plans use their own plan-level tags directly.
+  const dietTagExpr = kind === 'diet'
+    ? `CASE WHEN p.created_by = 'trainer' THEN (
+         SELECT COALESCE(array_agg(DISTINCT t) FILTER (WHERE t IS NOT NULL), '{}')
+         FROM diet_plan_days d
+         JOIN diet_plan_meals m ON m.diet_plan_day_id = d.id
+         JOIN diet_plan_meal_items i ON i.diet_plan_meal_id = m.id
+         CROSS JOIN LATERAL unnest(i.tags) AS t
+         WHERE d.diet_plan_id = p.id
+       ) ELSE p.tags END`
+    : 'p.tags';
   const { rows } = await query(
-    `SELECT p.*, u.name AS trainer_name FROM ${c.plansTable} p
+    `SELECT p.*, u.name AS trainer_name, ${dietTagExpr} AS display_tags FROM ${c.plansTable} p
       LEFT JOIN users u ON u.id = p.trainer_id
       WHERE p.client_id = $1 AND p.status = 'active'
         AND (p.created_by = 'client' OR EXISTS (
@@ -461,7 +538,9 @@ async function archiveAllPlansForPair(kind, trainerId, clientId) {
 module.exports = {
   assertReadableAssociation,
   createPlan,
+  updateSupplementPlanTags,
   updateOwnDietPlan,
+  updateOwnSupplementPlan,
   deleteOwnPlan,
   listActiveForClient,
   listActiveForOwner,

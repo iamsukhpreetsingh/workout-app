@@ -160,11 +160,11 @@ router.get('/plans', requireAuth, requireRole('trainer'), async (req, res) => {
 router.post('/clients/:clientId/assigned-plans', requireAuth, requireRole('trainer'), async (req, res) => {
   try {
     const { clientId } = req.params;
-    const { name, notes, exercises } = req.body || {};
+    const { name, notes, exercises, tags } = req.body || {};
     if (!name || !Array.isArray(exercises) || !exercises.length) {
       return res.status(400).json({ error: 'name and a non-empty exercises array are required' });
     }
-    const plan = await assignedPlans.createAssignedPlan({ trainerId: req.user.id, clientId, name, notes, exercises });
+    const plan = await assignedPlans.createAssignedPlan({ trainerId: req.user.id, clientId, name, notes, exercises, tags });
 
     // Create notification for client (always, not gated by trainer preference)
     const trainer = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
@@ -339,6 +339,7 @@ for (const kind of ['diet', 'supplement']) {
         : undefined;
       const plan = await coaching.createPlan(kind, {
         trainerId: req.user.id, clientId: req.params.clientId, name, notes, items, days,
+        tags: req.body?.tags,
         ...(kind === 'diet' ? { targets } : {}),
       });
 
@@ -372,10 +373,16 @@ for (const kind of ['diet', 'supplement']) {
 
   router.patch(`/clients/:clientId/${seg}/:planId`, requireAuth, requireRole('trainer'), async (req, res) => {
     try {
-      if ((req.body || {}).status !== 'archived') {
-        return res.status(400).json({ error: "Only status='archived' updates are supported" });
+      if ((req.body || {}).status === 'archived') {
+        return res.json(await coaching.archivePlan(kind, req.user.id, req.params.clientId, req.params.planId));
       }
-      res.json(await coaching.archivePlan(kind, req.user.id, req.params.clientId, req.params.planId));
+      // supplements have no reusable catalog — plan-level tags are set
+      // directly on the assigned plan via PATCH (workout tags cascade from
+      // templates, diet tags live on recipes instead)
+      if (kind === 'supplement' && Array.isArray((req.body || {}).tags)) {
+        return res.json(await coaching.updateSupplementPlanTags(req.user.id, req.params.clientId, req.params.planId, req.body.tags));
+      }
+      return res.status(400).json({ error: "Only status='archived' updates or supplement tags are supported" });
     } catch (e) {
       httpError(res, e);
     }

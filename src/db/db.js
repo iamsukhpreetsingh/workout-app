@@ -148,6 +148,7 @@ async function ensureSchema(db) {
   await addColumnSafe(db, 'workout_sessions', 'source_assigned_plan_id', 'TEXT NULL');
   await addColumnSafe(db, 'user_settings', 'streak_tolerance', 'INTEGER NOT NULL DEFAULT 1');
   await addColumnSafe(db, 'workout_plans', 'user_id', 'TEXT');
+  await addColumnSafe(db, 'workout_plans', 'tags', 'TEXT');
   // Delete legacy plans without user_id
   await db.runAsync('DELETE FROM workout_plans WHERE user_id IS NULL OR user_id = ""');
   await addColumnSafe(db, 'user_settings', 'theme_mode', "TEXT NOT NULL DEFAULT 'system'");

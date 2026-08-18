@@ -72,6 +72,7 @@ export async function listPlans() {
     plan.exerciseCount = (
       await db.getAllAsync('SELECT COUNT(*) AS c FROM plan_exercises WHERE plan_id = ?', [plan.id])
     )[0].c;
+    plan.tags = plan.tags ? JSON.parse(plan.tags) : [];
   }
   return plans;
 }
@@ -104,17 +105,20 @@ export async function getPlan(id) {
     ex.bestReps = best?.max_reps || 0;
   }
   
+  plan.tags = plan.tags ? JSON.parse(plan.tags) : [];
   return plan;
 }
 
 // exercises: [{ exerciseId, targetSets, restSeconds, groupId }]
-export async function createPlan(name, notes, exercises) {
+// tags: optional array of strings (max 5)
+export async function createPlan(name, notes, exercises, tags = []) {
   const db = await getDb();
   const userId = currentUserId;
   if (!userId) throw new Error('User not authenticated');
+  const tagsJson = JSON.stringify(tags.slice(0, 5));
   const result = await db.runAsync(
-    'INSERT INTO workout_plans (name, notes, created_at, user_id) VALUES (?, ?, ?, ?)',
-    [name, notes || null, Date.now(), userId]
+    'INSERT INTO workout_plans (name, notes, created_at, user_id, tags) VALUES (?, ?, ?, ?, ?)',
+    [name, notes || null, Date.now(), userId, tagsJson]
   );
   const planId = result.lastInsertRowId;
   for (let i = 0; i < exercises.length; i++) {
@@ -141,13 +145,14 @@ export async function deletePlan(id) {
   await db.runAsync('DELETE FROM workout_plans WHERE id = ? AND user_id = ?', [id, userId]);
 }
 
-export async function updatePlan(id, name, notes, exercises) {
+export async function updatePlan(id, name, notes, exercises, tags = []) {
   const db = await getDb();
   const userId = currentUserId;
   if (!userId) throw new Error('User not authenticated');
+  const tagsJson = JSON.stringify(tags.slice(0, 5));
   await db.runAsync(
-    'UPDATE workout_plans SET name = ?, notes = ? WHERE id = ? AND user_id = ?',
-    [name, notes || null, id, userId]
+    'UPDATE workout_plans SET name = ?, notes = ?, tags = ? WHERE id = ? AND user_id = ?',
+    [name, notes || null, tagsJson, id, userId]
   );
   await db.runAsync('DELETE FROM plan_exercises WHERE plan_id = ?', [id]);
   for (let i = 0; i < exercises.length; i++) {

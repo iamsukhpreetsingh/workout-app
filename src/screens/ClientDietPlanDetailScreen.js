@@ -41,6 +41,9 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const { planId, self, plan: planFallback } = route.params || {};
+  const planKind = route.params?.plan?.kind || 'diet';
+  const isSupplement = planKind === 'supplement';
+
   const [plan, setPlan] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -62,20 +65,24 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
   }, [plan]);
 
   React.useLayoutEffect(() => {
-    navigation.setOptions({ title: (plan || planFallback)?.name || 'Diet Plan' });
-  }, [navigation, plan?.name, planFallback?.name]);
+    navigation.setOptions({ 
+      title: (plan || planFallback)?.name || (isSupplement ? 'Supplement Plan' : 'Diet Plan') 
+    });
+  }, [navigation, plan?.name, planFallback?.name, isSupplement]);
 
   const load = useCallback(async () => {
     try {
       setError(null);
-      // authoritative nested fetch — the list payload is only a fallback
-      const full = await api(`/client/diet-plans/${planId}`);
+      const endpoint = isSupplement 
+        ? `/client/supplement-plans/${planId}` 
+        : `/client/diet-plans/${planId}`;
+      const full = await api(endpoint);
       setPlan(full);
     } catch (e) {
       if (planFallback) setPlan(planFallback);
       else setError(e.message || 'Could not load plan');
     }
-  }, [planId, planFallback]);
+  }, [planId, planFallback, isSupplement]);
 
   useFocusEffect(
     useCallback(() => {
@@ -92,16 +99,22 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
   useEffect(() => {
     if (!planId) return;
     let mounted = true;
-    api(`/client/diet-plans/${planId}/checkins`)
+    const endpoint = isSupplement 
+      ? `/client/supplement-plans/${planId}/checkins` 
+      : `/client/diet-plans/${planId}/checkins`;
+    api(endpoint)
       .then((rows) => {
         if (!mounted) return;
         const today = new Date().toISOString().slice(0, 10);
         const todays = (rows || []).find((c) => c.date.slice(0, 10) === today);
-        if (todays) setCheckedToday(todays.followed);
+        if (todays) {
+          // supplements use 'taken', diet uses 'followed'
+          setCheckedToday(isSupplement ? todays.taken : todays.followed);
+        }
       })
       .catch(() => {});
     return () => { mounted = false; };
-  }, [planId]);
+  }, [planId, isSupplement]);
 
   const days = plan?.days || [];
   const day = days[Math.min(activeDay, Math.max(0, days.length - 1))];
@@ -148,10 +161,13 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
     setCheckBusy(true);
     const today = new Date().toISOString().slice(0, 10);
     try {
-      await api(`/client/diet-plans/${planId}/checkins`, {
-        method: 'POST',
-        body: { date: today, followed },
-      });
+      const endpoint = isSupplement 
+        ? `/client/supplement-plans/${planId}/checkins` 
+        : `/client/diet-plans/${planId}/checkins`;
+      const body = isSupplement 
+        ? { date: today, taken: followed }
+        : { date: today, followed };
+      await api(endpoint, { method: 'POST', body });
       setCheckedToday(followed);
     } catch (e) {
       Alert.alert('Check-in failed', e.message || 'Please try again.');
@@ -171,7 +187,10 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
           style: 'destructive',
           onPress: async () => {
             try {
-              await api(`/client/diet-plans/${planId}`, { method: 'DELETE' });
+              const endpoint = isSupplement 
+                ? `/client/supplement-plans/${planId}` 
+                : `/client/diet-plans/${planId}`;
+              await api(endpoint, { method: 'DELETE' });
               navigation.goBack();
             } catch (e) {
               Alert.alert('Could not delete', e.message || 'Please try again.');
@@ -189,6 +208,39 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
     }
   };
 
+  // Render supplements list (flat structure)
+  const renderSupplementItems = () => {
+    const items = plan.items || [];
+    if (items.length === 0) {
+      return (
+        <View style={{ marginTop: 16 }}>
+          <Text style={styles.emptyDay}>No supplements added yet.</Text>
+        </View>
+      );
+    }
+    return (
+      <View style={{ marginTop: 16 }}>
+        {items.map((item, idx) => (
+          <View key={item.id || idx} style={styles.itemCard}>
+            <View style={styles.itemRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.itemName} numberOfLines={2}>
+                  {item.supplement_name}
+                </Text>
+                <Text style={[styles.itemMacro, NUMS]}>
+                  {[item.dosage, item.timing].filter(Boolean).join(' · ')}
+                </Text>
+                {item.notes ? (
+                  <Text style={[styles.noteText, { marginTop: 4 }]}>{item.notes}</Text>
+                ) : null}
+              </View>
+            </View>
+          </View>
+        ))}
+      </View>
+    );
+  };
+
   return (
     <ScrollView
       style={styles.container}
@@ -200,45 +252,50 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
       ) : null}
       {plan.notes ? <Text style={styles.planNotes}>{plan.notes}</Text> : null}
 
-      {/* target summary — top */}
-      {target > 0 || tPro ? (
-        <View style={styles.targetCard}>
-          <Text style={styles.targetCal}>
-            {target > 0 ? `Daily Target: ${target.toLocaleString()} cal` : 'Daily Targets'}
-          </Text>
-          <Text style={[styles.targetMacros, NUMS]}>
-            {(tPro ? `P ${tPro}g` : '') + (tCar ? ` · C ${tCar}g` : '') + (tFat ? ` · F ${tFat}g` : '')}
-          </Text>
-        </View>
-      ) : null}
+      {/* Supplements: flat item list - no targets, no allergens for supplements */}
+      {isSupplement ? (
+        renderSupplementItems()
+      ) : (
+        <>
+          {/* Diet: target summary — top */}
+          {target > 0 || tPro ? (
+            <View style={styles.targetCard}>
+              <Text style={styles.targetCal}>
+                {target > 0 ? `Daily Target: ${target.toLocaleString()} cal` : 'Daily Targets'}
+              </Text>
+              <Text style={[styles.targetMacros, NUMS]}>
+                {(tPro ? `P ${tPro}g` : '') + (tCar ? ` · C ${tCar}g` : '') + (tFat ? ` · F ${tFat}g` : '')}
+              </Text>
+            </View>
+          ) : null}
 
-      {/* consolidated allergen notice — one glance before scrolling */}
-      {planAllergens.length > 0 && (
-        <View style={styles.planAllergenCard}>
-          <Ionicons name="warning" size={13} color={colors.red} />
-          <Text style={styles.planAllergenText}>
-            This plan contains: {planAllergens.join(', ')}
-          </Text>
-        </View>
-      )}
+          {/* consolidated allergen notice — one glance before scrolling */}
+          {planAllergens.length > 0 ? (
+            <View style={styles.planAllergenCard}>
+              <Ionicons name="warning" size={13} color={colors.red} />
+              <Text style={styles.planAllergenText}>
+                This plan contains: {planAllergens.join(', ')}
+              </Text>
+            </View>
+          ) : null}
 
-      {/* day tabs — only when the plan truly has multiple days */}
-      {multiDay && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.dayTabScroll} contentContainerStyle={{ gap: 8 }}>
-          {days.map((d, i) => (
-            <TouchableOpacity
-              key={d.id || i}
-              style={[styles.dayTab, i === activeDay && styles.dayTabOn]}
-              onPress={() => setActiveDay(i)}
-            >
-              <Text style={[styles.dayTabText, i === activeDay && { color: '#fff' }]}>{d.day_label}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
+          {/* day tabs — only when the plan truly has multiple days */}
+          {multiDay && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.dayTabScroll} contentContainerStyle={{ gap: 8 }}>
+              {days.map((d, i) => (
+                <TouchableOpacity
+                  key={d.id || i}
+                  style={[styles.dayTab, i === activeDay && styles.dayTabOn]}
+                  onPress={() => setActiveDay(i)}
+                >
+                  <Text style={[styles.dayTabText, i === activeDay && { color: '#fff' }]}>{d.day_label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
 
-      {/* meal sections for the selected day */}
-      {day && (day.meals || []).length > 0 ? (
+          {/* meal sections for the selected day */}
+          {day && (day.meals || []).length > 0 ? (
         (day.meals || []).map((m, mi) => (
           <View key={m.id || mi} style={{ marginTop: 16 }}>
             <Text style={styles.mealHeader}>{String(m.meal_type).toUpperCase()}</Text>
@@ -254,11 +311,13 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
                   : null,
                 i.difficulty ? i.difficulty[0].toUpperCase() + i.difficulty.slice(1) : null,
               ].filter(Boolean);
+              // !! — every operand here can be 0/'' which React would render
+              // as a RAW STRING inside a View ("Text strings must be
+              // rendered within a <Text> component" crash) if it leaked
+              // through the && gates below
               const hasDetail = Boolean(
-              i.client_note || i.recipe_url || (i.ingredients || []).length || altServings.length || metaBits.length
+                i.client_note || i.recipe_url || (i.ingredients || []).length || altServings.length || metaBits.length
               );
-              // const hasDetail =
-              //   i.client_note || i.recipe_url || (i.ingredients || []).length || altServings.length || metaBits.length;
               return (
                 <TouchableOpacity
                   key={itemKey}
@@ -278,27 +337,27 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
                             <Text style={styles.mult}> · {i.quantity_multiplier}x</Text>
                           ) : null}
                         </Text>
-                        {hasDetail && (
+                        {hasDetail ? (
                           <Ionicons
                             name={isOpen ? 'chevron-up' : 'chevron-down'}
                             size={15}
                             color={colors.textDim}
                           />
-                        )}
+                        ) : null}
                       </View>
                       <Text style={[styles.itemMacro, NUMS]}>{macroLine(i)}</Text>
                       {/* allergens are a safety matter — visible WITHOUT expanding */}
-                      {(i.allergens || []).length > 0 && (
+                      {(i.allergens || []).length > 0 ? (
                         <View style={styles.allergenBadge}>
                           <Ionicons name="warning" size={10} color={colors.red} />
                           <Text style={styles.allergenBadgeText}>
                             Contains: {i.allergens.join(', ')}
                           </Text>
                         </View>
-                      )}
+                      ) : null}
                     </View>
                   </View>
-                  {isOpen && (
+                  {isOpen ? (
                     <View style={styles.expandedWrap}>
                       {(i.ingredients || []).length > 0 && (
                         <View style={styles.ingWrap}>
@@ -340,40 +399,46 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
                         </TouchableOpacity>
                       ) : null}
                     </View>
-                  )}
+                  ) : null}
                 </TouchableOpacity>
               );
             })}
           </View>
-        ))
-      ) : (
-        <View style={{ marginTop: 16 }}>
-          <Text style={styles.emptyDay}>No meals added to this day yet.</Text>
-        </View>
-      )}
-
-      {/* running total — after the meal list, summed from rendered items */}
-      <View style={[styles.targetCard, { marginTop: 20 }]}>
-        <Text style={[styles.totalLine, NUMS]}>
-          {Math.round(totals.cal).toLocaleString() + (target > 0 ? ` / ${target.toLocaleString()} cal` : '')}
-        </Text>
-        {target > 0 && (
-          <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${pct}%` }]} />
+))
+        ) : (
+          <View style={{ marginTop: 16 }}>
+            <Text style={styles.emptyDay}>No meals added to this day yet.</Text>
           </View>
         )}
-        {target > 0 ? <Text style={styles.pctText}>{pct}%</Text> : null}
-        <Text style={[styles.targetMacros, NUMS]}>
-          {`P ${Math.round(totals.pro)}${tPro ? `/${tPro}` : ''}g · C ${Math.round(totals.car)}${tCar ? `/${tCar}` : ''}g · F ${Math.round(totals.fat)}${tFat ? `/${tFat}` : ''}g`}
-        </Text>
-      </View>
+
+        {/* running total — after the meal list, summed from rendered items */}
+        <View style={[styles.targetCard, { marginTop: 20 }]}>
+          <Text style={[styles.totalLine, NUMS]}>
+            {Math.round(totals.cal).toLocaleString() + (target > 0 ? ` / ${target.toLocaleString()} cal` : '')}
+          </Text>
+          {target > 0 && (
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${pct}%` }]} />
+            </View>
+          )}
+          {target > 0 ? <Text style={styles.pctText}>{pct}%</Text> : null}
+          <Text style={[styles.targetMacros, NUMS]}>
+            {`P ${Math.round(totals.pro)}${tPro ? `/${tPro}` : ''}g · C ${Math.round(totals.car)}${tCar ? `/${tCar}` : ''}g · F ${Math.round(totals.fat)}${tFat ? `/${tFat}` : ''}g`}
+          </Text>
+        </View>
+        </>
+      )}
 
       {/* check-in — clearer phrasing: one clear statement + explicit
           outcome buttons, with today's recorded state shown up front */}
       <View style={styles.checkinCard}>
-        <Text style={styles.checkinTitle}>Today's check-in</Text>
+        <Text style={styles.checkinTitle}>
+          {isSupplement ? "Today's supplements check-in" : "Today's check-in"}
+        </Text>
         {checkedToday == null ? (
-          <Text style={styles.checkinSub}>How did today go with this plan?</Text>
+          <Text style={styles.checkinSub}>
+            {isSupplement ? 'Did you take your supplements today?' : 'How did today go with this plan?'}
+          </Text>
         ) : (
           <View style={styles.checkinStateRow}>
             <Ionicons
@@ -382,7 +447,10 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
               color={checkedToday ? colors.green : colors.red}
             />
             <Text style={styles.checkinStateText}>
-              {checkedToday ? 'You followed this plan today' : 'You didn’t follow this plan today'}
+              {isSupplement 
+                ? (checkedToday ? 'You took your supplements today' : "You didn't take your supplements today")
+                : (checkedToday ? 'You followed this plan today' : "You didn't follow this plan today")
+              }
             </Text>
           </View>
         )}
@@ -394,7 +462,7 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
           >
             <Ionicons name="close" size={15} color={checkedToday === false ? '#fff' : colors.red} />
             <Text style={[styles.checkBtnLabel, checkedToday === false && { color: '#fff' }]}>
-              Not today
+              {isSupplement ? "Didn't take" : "Not today"}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -404,7 +472,7 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
           >
             <Ionicons name="checkmark" size={15} color={checkedToday === true ? '#fff' : colors.green} />
             <Text style={[styles.checkBtnLabel, checkedToday === true && { color: '#fff' }]}>
-              Followed it
+              {isSupplement ? 'Took them' : 'Followed it'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -415,7 +483,13 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
         <View style={styles.manageRow}>
           <TouchableOpacity
             style={styles.editBtn}
-            onPress={() => navigation.navigate('DietPlanBuilder', { self: true, editPlanId: planId })}
+            onPress={() => {
+              if (isSupplement) {
+                navigation.navigate('CoachingPlanBuilder', { kind: 'supplement', self: true, editPlanId: planId });
+              } else {
+                navigation.navigate('DietPlanBuilder', { self: true, editPlanId: planId });
+              }
+            }}
           >
             <Ionicons name="create-outline" size={15} color={colors.primary} />
             <Text style={styles.editBtnText}>Edit Plan</Text>

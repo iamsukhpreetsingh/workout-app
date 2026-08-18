@@ -21,13 +21,14 @@ async function assertActiveAssociation(trainerId, clientId) {
 
 // exercises: [{ exercise_name, target_sets, target_reps, target_weight_note,
 //               order_index, rest_seconds, notes }]
-async function createAssignedPlan({ trainerId, clientId, name, notes, exercises }) {
+async function createAssignedPlan({ trainerId, clientId, name, notes, exercises, tags }) {
   await assertActiveAssociation(trainerId, clientId);
+  const planTags = (Array.isArray(tags) ? tags.map((t) => String(t).trim()).filter(Boolean) : []).slice(0, 5);
   return transaction(async (client) => {
     const { rows } = await client.query(
-      `INSERT INTO assigned_plans (trainer_id, client_id, name, notes)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [trainerId, clientId, name, notes || null]
+      `INSERT INTO assigned_plans (trainer_id, client_id, name, notes, tags)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [trainerId, clientId, name, notes || null, planTags]
     );
     const plan = rows[0];
     for (const ex of exercises || []) {

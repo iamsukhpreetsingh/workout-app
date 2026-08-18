@@ -3,6 +3,7 @@ import { View, Text, TextInput, ScrollView, TouchableOpacity, Alert, StyleSheet 
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
+import ClientTagSelector from '../components/ClientTagSelector';
 
 // Generic builder for diet and supplement plans — same form pattern as the
 // routine builder, configured per kind.
@@ -44,7 +45,7 @@ const KIND_CONFIG = {
 export default function CoachingPlanBuilderScreen({ route, navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
-  const { kind, clientId, clientName, self } = route.params || {};
+  const { kind, clientId, clientName, self, editPlanId } = route.params || {};
   if (!KIND_CONFIG[kind]) {
     throw new Error(`Unknown plan kind: ${kind}`);
   }
@@ -54,15 +55,40 @@ export default function CoachingPlanBuilderScreen({ route, navigation }) {
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState([]); // [{...fieldValues}]
   const [busy, setBusy] = useState(false);
+  const [tags, setTags] = useState([]);
+  const [loading, setLoading] = useState(!!editPlanId);
 
   React.useLayoutEffect(() => {
     const prefix = kind === 'diet' ? 'Diet' : 'Supplement';
     navigation.setOptions({
-      title: self
+      title: editPlanId
+        ? `Edit ${prefix} Plan`
+        : self
         ? `New ${prefix} Plan`
         : `${prefix} Plan → ${clientName || 'Client'}`,
     });
-  }, [navigation, kind, clientName, self]);
+  }, [navigation, kind, clientName, self, editPlanId]);
+
+  React.useEffect(() => {
+    if (!editPlanId) return;
+    const endpoint = kind === 'supplement' ? 'supplement-plans' : 'diet-plans';
+    api(`/client/${endpoint}/${editPlanId}`)
+      .then((pl) => {
+        setName(pl.name || '');
+        setNotes(pl.notes || '');
+        setTags(pl.tags || []);
+        if (kind === 'supplement' && pl.items) {
+          setItems(pl.items.map((it) => ({
+            supplement_name: it.supplement_name,
+            dosage: it.dosage || '',
+            timing: it.timing || '',
+            notes: it.notes || '',
+          })));
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [editPlanId, kind]);
 
   const addItem = () => setItems((prev) => [...prev, {}]);
   const updateItem = (i, key, value) =>
@@ -78,17 +104,20 @@ export default function CoachingPlanBuilderScreen({ route, navigation }) {
     }
     setBusy(true);
     try {
+      const body = { name: name.trim(), notes: notes.trim() || null, items: items.map(cfg.toApiItem) };
       if (self) {
-        // self-authored plan — client endpoint, no trainer involved
-        await api(`/client/${cfg.endpoint}`, {
-          method: 'POST',
-          body: { name: name.trim(), notes: notes.trim() || null, items: items.map(cfg.toApiItem) },
-        });
+        body.tags = tags;
+      }
+      
+      if (editPlanId) {
+        // Edit mode - supplements only for now (diet uses DietPlanBuilder)
+        if (kind === 'supplement') {
+          await api(`/client/${cfg.endpoint}/${editPlanId}`, { method: 'PATCH', body });
+        }
+      } else if (self) {
+        await api(`/client/${cfg.endpoint}`, { method: 'POST', body });
       } else {
-        await api(`/trainer/clients/${clientId}/${cfg.endpoint}`, {
-          method: 'POST',
-          body: { name: name.trim(), notes: notes.trim() || null, items: items.map(cfg.toApiItem) },
-        });
+        await api(`/trainer/clients/${clientId}/${cfg.endpoint}`, { method: 'POST', body });
       }
       navigation.goBack(); // list refreshes on focus
     } catch (e) {
@@ -115,6 +144,14 @@ export default function CoachingPlanBuilderScreen({ route, navigation }) {
         onChangeText={setNotes}
         multiline
       />
+
+      {self && (
+        <ClientTagSelector
+          value={tags}
+          onChange={setTags}
+          type={kind === 'diet' ? 'recipe' : 'workout'}
+        />
+      )}
 
       {items.map((item, i) => (
         <View key={i} style={styles.itemCard}>
@@ -157,10 +194,12 @@ export default function CoachingPlanBuilderScreen({ route, navigation }) {
         <Text style={styles.addBtnText}>{cfg.addLabel}</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={busy}>
+      <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={busy || loading}>
         <Text style={styles.saveBtnText}>
           {busy
             ? 'Saving…'
+            : editPlanId
+            ? 'Save Changes'
             : self
             ? `Save ${kind === 'diet' ? 'Diet' : 'Supplement'} Plan`
             : `Assign ${kind === 'diet' ? 'Diet' : 'Supplement'} Plan`}

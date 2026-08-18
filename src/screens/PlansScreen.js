@@ -1,5 +1,5 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import React, { useCallback, useState, useEffect } from 'react';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { listPlans } from '../db/queries';
@@ -18,7 +18,10 @@ export default function PlansScreen({ navigation }) {
   const [assigned, setAssigned] = useState([]);
   const [tab, setTab] = useState('mine'); // 'mine' | 'trainer'
   const [pinned, setPinned] = useState(new Set());
-  const [subTab, setSubTab] = useState('workouts'); // workouts | diet
+  const [subTab, setSubTab] = useState('workouts'); // workouts | diet | supplements
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState(null);
+  const [searchLoading, setSearchLoading] = useState(false);
   const { user } = useAuth();
   const isClient = user?.role === 'user';
 
@@ -62,11 +65,158 @@ export default function PlansScreen({ navigation }) {
   useHeaderActions(navigation);
 
   const showTrainerTab = isClient && tab === 'trainer';
+  const isSearching = searchQuery.trim().length > 0;
+
+  useEffect(() => {
+    if (!isSearching) {
+      setSearchResults(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const q = searchQuery.toLowerCase();
+        const allResults = [];
+        const localPlans = await listPlans();
+        localPlans.forEach((p) => {
+          if (p.name.toLowerCase().includes(q) || (p.tags || []).some(t => t.toLowerCase().includes(q))) {
+            allResults.push({ type: 'workout', source: 'My Workout', ...p, displayName: p.name, displayTags: p.tags || [] });
+          }
+        });
+        if (isClient) {
+          const [dietPlans, suppPlans, trainerWorkouts] = await Promise.all([
+            api('/client/diet-plans').catch(() => []),
+            api('/client/supplement-plans').catch(() => []),
+            api('/client/assigned-plans').catch(() => []),
+          ]);
+          dietPlans.forEach((p) => {
+            const tags = p.display_tags || p.tags || [];
+            if (p.name.toLowerCase().includes(q) || tags.some(t => t.toLowerCase().includes(q))) {
+              allResults.push({ type: 'diet', source: p.created_by === 'client' ? 'My Diet' : 'From Trainer · Diet', ...p, displayName: p.name, displayTags: tags });
+            }
+          });
+          suppPlans.forEach((p) => {
+            const tags = p.tags || [];
+            if (p.name.toLowerCase().includes(q) || tags.some(t => t.toLowerCase().includes(q))) {
+              allResults.push({ type: 'supplement', source: p.created_by === 'client' ? 'My Supplement' : 'From Trainer · Supplement', ...p, displayName: p.name, displayTags: tags });
+            }
+          });
+          trainerWorkouts.forEach((p) => {
+            const tags = p.tags || [];
+            if (p.name.toLowerCase().includes(q) || tags.some(t => t.toLowerCase().includes(q))) {
+              allResults.push({ type: 'workout', source: 'From Trainer · Workout', ...p, displayName: p.name, displayTags: tags });
+            }
+          });
+        }
+        setSearchResults(allResults);
+      } catch (e) {
+        setSearchResults([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery, isClient, isSearching]);
+
+  const handleClearSearch = () => {
+    setSearchQuery('');
+    setSearchResults(null);
+  };
+
+  const renderSearchResult = ({ item }) => {
+    const iconMap = { workout: 'barbell-outline', diet: 'nutrition-outline', supplement: 'medkit-outline' };
+    const colorMap = { workout: colors.primary, diet: colors.primary, supplement: colors.primary };
+    return (
+      <TouchableOpacity
+        style={styles.card}
+        activeOpacity={0.8}
+        onPress={() => {
+          handleClearSearch();
+          if (item.type === 'workout') {
+            navigation.navigate(item.source.includes('From Trainer') ? 'ClientAssignedDetail' : 'PlanDetail', { planId: item.id });
+          } else {
+            navigation.navigate('ClientDietPlanDetail', { planId: item.id, self: !item.source.includes('From Trainer'), plan: { name: item.name, kind: item.type } });
+          }
+        }}
+      >
+        <View style={styles.templateTag}>
+          <Ionicons name={iconMap[item.type]} size={13} color={item.source.includes('From Trainer') ? colors.blue : colorMap[item.type]} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.name} numberOfLines={1}>{item.displayName}</Text>
+          <Text style={[styles.meta, NUMS]}>{item.source}</Text>
+          {item.displayTags.length > 0 && (
+            <View style={styles.tagRow}>
+              {item.displayTags.slice(0, 3).map((tag) => (
+                <View key={tag} style={[styles.tagChip, item.source.includes('From Trainer') && styles.tagChipTrainer]}>
+                  <Text style={[styles.tagChipText, item.source.includes('From Trainer') && styles.tagChipTextTrainer]}>{tag}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+      </TouchableOpacity>
+    );
+  };
+
+  // Search bar - always visible
+  const renderSearchBar = () => (
+    <View style={styles.searchRow}>
+      <View style={styles.searchInputWrap}>
+        <Ionicons name="search" size={16} color={colors.textDim} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search workouts, diets, supplements..."
+          placeholderTextColor={colors.textDim}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          autoFocus={isSearching}
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={handleClearSearch}>
+            <Ionicons name="close-circle" size={18} color={colors.textDim} />
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+
+  // Search results view - keeps search bar visible
+  if (isSearching) {
+    return (
+      <View style={styles.container}>
+        {renderSearchBar()}
+        {searchLoading ? (
+          <View style={styles.emptyWrap}><Text style={styles.emptySub}>Searching...</Text></View>
+        ) : searchResults && searchResults.length === 0 ? (
+          <View style={styles.emptyWrap}>
+            <Text style={styles.emptyTitle}>No results</Text>
+            <Text style={styles.emptySub}>No workouts, diets, or supplements match "{searchQuery}"</Text>
+          </View>
+        ) : searchResults ? (
+          <FlatList
+            data={searchResults}
+            keyExtractor={(item, i) => `${item.type}-${item.id}-${i}`}
+            renderItem={renderSearchResult}
+            contentContainerStyle={{ padding: 20, paddingBottom: 48 }}
+          />
+        ) : null}
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      {isClient && <SegmentedControl styles={styles} colors={colors} tab={tab} setTab={setTab} />}
-      {isClient && subTab === 'diet' ? (
+      {isClient && (
+        <>
+          {renderSearchBar()}
+          <SegmentedControl styles={styles} colors={colors} tab={tab} setTab={setTab} />
+        </>
+      )}
+      {isClient && subTab === 'supplements' ? (
+        <SupplementPlansList styles={styles} colors={colors} navigation={navigation} fromTrainer={showTrainerTab} />
+      ) : isClient && subTab === 'diet' ? (
         <DietPlansList styles={styles} colors={colors} navigation={navigation} fromTrainer={showTrainerTab} />
       ) : showTrainerTab ? (
         <AssignedList styles={styles} colors={colors} navigation={navigation} pinned={pinned} onTogglePin={onTogglePin} />
@@ -78,6 +228,7 @@ export default function PlansScreen({ navigation }) {
           {[
             { key: 'workouts', label: 'Workouts', icon: 'barbell-outline' },
             { key: 'diet', label: 'Diet', icon: 'nutrition-outline' },
+            { key: 'supplements', label: 'Supps', icon: 'medkit-outline' },
           ].map((t) => {
             const on = subTab === t.key;
             return (
@@ -127,22 +278,22 @@ function DietPlansList({ styles, colors, navigation, fromTrainer }) {
     }
   };
 
-  return (
-    <View style={{ flex: 1 }}>
-      {!fromTrainer && (
-        <View style={styles.dietSegRow}>
-          <View style={[styles.dietSegBtn, styles.dietSegBtnOn]}>
-            <Text style={[styles.dietSegText, { color: '#fff' }]}>Plans</Text>
+  if (plans.length === 0) {
+    return (
+      <View style={{ flex: 1 }}>
+        {!fromTrainer && (
+          <View style={styles.dietSegRow}>
+            <View style={[styles.dietSegBtn, styles.dietSegBtnOn]}>
+              <Text style={[styles.dietSegText, { color: '#fff' }]}>Plans</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.dietSegBtn}
+              onPress={() => navigation.navigate('MyDishes')}
+            >
+              <Text style={styles.dietSegText}>My Dishes ›</Text>
+            </TouchableOpacity>
           </View>
-          <TouchableOpacity
-            style={styles.dietSegBtn}
-            onPress={() => navigation.navigate('MyDishes')}
-          >
-            <Text style={styles.dietSegText}>My Dishes ›</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-      {plans.length === 0 && (
+        )}
         <View style={styles.emptyWrap}>
           <Ionicons name="nutrition-outline" size={38} color={colors.textDim} />
           <Text style={styles.emptyTitle}>{fromTrainer ? 'Nothing assigned yet' : 'No diet plans yet'}</Text>
@@ -160,6 +311,24 @@ function DietPlansList({ styles, colors, navigation, fromTrainer }) {
               <Text style={styles.emptyBtnText}>New Diet Plan</Text>
             </TouchableOpacity>
           )}
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ flex: 1 }}>
+      {!fromTrainer && (
+        <View style={styles.dietSegRow}>
+          <View style={[styles.dietSegBtn, styles.dietSegBtnOn]}>
+            <Text style={[styles.dietSegText, { color: '#fff' }]}>Plans</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.dietSegBtn}
+            onPress={() => navigation.navigate('MyDishes')}
+          >
+            <Text style={styles.dietSegText}>My Dishes ›</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -182,6 +351,7 @@ function DietPlansList({ styles, colors, navigation, fromTrainer }) {
           const itemCount = (plan.days || []).reduce(
             (n, d) => n + (d.meals || []).reduce((m, mm) => m + (mm.items || []).length, 0), 0
           );
+          const planTags = plan.display_tags || plan.tags || [];
           return (
             <TouchableOpacity
               style={styles.card}
@@ -198,6 +368,108 @@ function DietPlansList({ styles, colors, navigation, fromTrainer }) {
                 <Text style={[styles.meta, NUMS]}>
                   {(fromTrainer ? `From ${plan.trainer_name || 'your trainer'} · ` : '') + itemCount + ' items' + (plan.daily_calorie_target ? ` · ${plan.daily_calorie_target} cal/day` : '')}
                 </Text>
+                {planTags.length > 0 && (
+                  <View style={styles.tagRow}>
+                    {planTags.slice(0, 3).map((tag) => (
+                      <View key={tag} style={[styles.tagChip, fromTrainer && styles.tagChipTrainer]}>
+                        <Text style={[styles.tagChipText, fromTrainer && styles.tagChipTextTrainer]}>{tag}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+            </TouchableOpacity>
+          );
+        }}
+      />
+    </View>
+  );
+}
+
+function SupplementPlansList({ styles, colors, navigation, fromTrainer }) {
+  const [plans, setPlans] = useState([]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let mounted = true;
+      api('/client/supplement-plans')
+        .then((rows) => {
+          if (mounted) setPlans(rows.filter((p) => (fromTrainer ? p.created_by === 'trainer' : p.created_by === 'client')));
+        })
+        .catch(() => { if (mounted) setPlans([]); });
+      return () => { mounted = false; };
+    }, [fromTrainer])
+  );
+
+  if (plans.length === 0) {
+    return (
+      <View style={styles.emptyWrap}>
+        <Ionicons name="medkit-outline" size={38} color={colors.textDim} />
+        <Text style={styles.emptyTitle}>{fromTrainer ? 'Nothing assigned yet' : 'No supplement plans yet'}</Text>
+        <Text style={styles.emptySub}>
+          {fromTrainer
+            ? 'Supplement plans your trainer assigns will appear here.'
+            : 'Track your supplements and vitamins.'}
+        </Text>
+        {!fromTrainer && (
+          <TouchableOpacity
+            style={styles.emptyBtn}
+            onPress={() => navigation.navigate('CoachingPlanBuilder', { kind: 'supplement', self: true })}
+          >
+            <Ionicons name="add" size={17} color={colors.primary} />
+            <Text style={styles.emptyBtnText}>New Supplement Plan</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ flex: 1 }}>
+      <FlatList
+        data={plans}
+        keyExtractor={(p) => String(p.id)}
+        contentContainerStyle={{ padding: 20, paddingTop: 6, paddingBottom: 40 }}
+        ListHeaderComponent={
+          !fromTrainer ? (
+            <TouchableOpacity
+              style={styles.newRoutineBtn}
+              onPress={() => navigation.navigate('CoachingPlanBuilder', { kind: 'supplement', self: true })}
+            >
+              <Ionicons name="add" size={17} color={colors.primary} />
+              <Text style={styles.newRoutineText}>New Supplement Plan</Text>
+            </TouchableOpacity>
+          ) : null
+        }
+        renderItem={({ item: plan }) => {
+          const itemCount = (plan.items || []).length;
+          const planTags = plan.tags || plan.display_tags || [];
+          return (
+            <TouchableOpacity
+              style={styles.card}
+              activeOpacity={0.8}
+              onPress={() => navigation.navigate('ClientDietPlanDetail', { planId: plan.id, self: !fromTrainer, plan: { name: plan.name, trainer_name: plan.trainer_name, kind: 'supplement' } })}
+            >
+              <View style={styles.templateTag}>
+                <Ionicons name="medkit-outline" size={13} color={fromTrainer ? colors.blue : colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.name} numberOfLines={1}>
+                  {plan.name}
+                </Text>
+                <Text style={[styles.meta, NUMS]}>
+                  {(fromTrainer ? `From ${plan.trainer_name || 'your trainer'} · ` : '') + itemCount + ' supplements'}
+                </Text>
+                {planTags.length > 0 && (
+                  <View style={styles.tagRow}>
+                    {planTags.slice(0, 3).map((tag) => (
+                      <View key={tag} style={[styles.tagChip, fromTrainer && styles.tagChipTrainer]}>
+                        <Text style={[styles.tagChipText, fromTrainer && styles.tagChipTextTrainer]}>{tag}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
               </View>
               <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
             </TouchableOpacity>
@@ -246,7 +518,9 @@ function MyRoutinesList({ styles, colors, navigation, pinned, onTogglePin }) {
       data={plans}
       keyExtractor={(item) => String(item.id)}
       contentContainerStyle={{ padding: 20, paddingBottom: 48 }}
-      renderItem={({ item }) => (
+      renderItem={({ item }) => {
+        const planTags = item.tags || [];
+        return (
         <TouchableOpacity
           style={styles.card}
           activeOpacity={0.8}
@@ -263,6 +537,15 @@ function MyRoutinesList({ styles, colors, navigation, pinned, onTogglePin }) {
               {item.exerciseCount} exercises
               {item.used_count > 0 ? ` · used ${item.used_count}×` : ' · never used'}
             </Text>
+            {planTags.length > 0 && (
+              <View style={styles.tagRow}>
+                {planTags.slice(0, 3).map((tag) => (
+                  <View key={tag} style={styles.tagChip}>
+                    <Text style={styles.tagChipText}>{tag}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
           </View>
           <PinButton
             styles={styles}
@@ -272,7 +555,7 @@ function MyRoutinesList({ styles, colors, navigation, pinned, onTogglePin }) {
           />
           <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
         </TouchableOpacity>
-      )}
+      );}}
     />
   );
 }
@@ -312,7 +595,9 @@ function AssignedList({ styles, colors, navigation, pinned, onTogglePin }) {
       data={assigned}
       keyExtractor={(ap) => String(ap.id)}
       contentContainerStyle={{ padding: 20, paddingBottom: 48 }}
-      renderItem={({ item: ap }) => (
+      renderItem={({ item: ap }) => {
+        const planTags = ap.tags || [];
+        return (
         <TouchableOpacity
           style={styles.assignedCard}
           activeOpacity={0.8}
@@ -327,6 +612,15 @@ function AssignedList({ styles, colors, navigation, pinned, onTogglePin }) {
               Assigned by {ap.trainer_name || 'your trainer'} ·{' '}
               {ap.exercises?.length ?? 0} exercises
             </Text>
+            {planTags.length > 0 && (
+              <View style={styles.tagRow}>
+                {planTags.slice(0, 3).map((tag) => (
+                  <View key={tag} style={[styles.tagChip, styles.tagChipTrainer]}>
+                    <Text style={[styles.tagChipText, styles.tagChipTextTrainer]}>{tag}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
           </View>
           <PinButton
             styles={styles}
@@ -336,7 +630,7 @@ function AssignedList({ styles, colors, navigation, pinned, onTogglePin }) {
           />
           <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
         </TouchableOpacity>
-      )}
+      );}}
     />
   );
 }
@@ -469,4 +763,41 @@ const makeStyles = (colors) =>
     pinBtn: { padding: 6 },
     name: { color: colors.text, fontSize: 15, fontWeight: '700' },
     meta: { color: colors.textDim, fontSize: 12, marginTop: 2 },
+    tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 },
+    tagChip: {
+      backgroundColor: colors.cardLight,
+      borderRadius: 8,
+      paddingHorizontal: 8,
+      paddingVertical: 2,
+    },
+    tagChipTrainer: {
+      backgroundColor: colors.blue + '20',
+    },
+    tagChipText: {
+      color: colors.textDim,
+      fontSize: 10,
+      fontWeight: '600',
+    },
+    tagChipTextTrainer: {
+      color: colors.blue,
+    },
+    searchRow: {
+      paddingHorizontal: 20,
+      paddingTop: 12,
+      paddingBottom: 8,
+    },
+    searchInputWrap: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.cardLight,
+      borderRadius: 12,
+      paddingHorizontal: 12,
+      gap: 8,
+    },
+    searchInput: {
+      flex: 1,
+      paddingVertical: 10,
+      color: colors.text,
+      fontSize: 15,
+    },
   });

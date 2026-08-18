@@ -117,9 +117,9 @@ async function assignFromTemplate(trainerId, clientId, templateId) {
   if (!tpl) throw new HttpError(404, 'Template not found');
   return transaction(async (client) => {
     const { rows } = await client.query(
-      `INSERT INTO assigned_plans (trainer_id, client_id, name, notes, source_template_id)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [trainerId, clientId, tpl.name, tpl.notes || null, tpl.id]
+      `INSERT INTO assigned_plans (trainer_id, client_id, name, notes, source_template_id, tags)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [trainerId, clientId, tpl.name, tpl.notes || null, tpl.id, tpl.tags || []]
     );
     const plan = rows[0];
     for (const ex of tpl.exercises) {

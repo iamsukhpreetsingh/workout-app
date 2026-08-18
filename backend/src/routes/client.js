@@ -191,6 +191,7 @@ for (const kind of ['diet', 'supplement']) {
         : undefined;
       const plan = await coaching.createPlan(kind, {
         clientId: req.user.id, name, notes, items, days,
+        tags: req.body?.tags,
         ...(kind === 'diet' ? { targets } : {}),
         createdBy: 'client',
       });
@@ -220,24 +221,38 @@ for (const kind of ['diet', 'supplement']) {
   // update my own client-authored diet plan (full tree replace)
   router.patch(`/${seg}/:planId`, requireAuth, requireRole('user'), async (req, res) => {
     try {
-      if (kind !== 'diet') {
-        return res.status(400).json({ error: 'Only diet plans support editing' });
+      const { name, notes, items, days } = req.body || {};
+      
+      if (kind === 'diet') {
+        if (!name || !Array.isArray(days) || !days.length) {
+          return res.status(400).json({ error: 'name and a non-empty days array are required' });
+        }
+        res.json(
+          await coaching.updateOwnDietPlan(req.user.id, req.params.planId, {
+            name, notes, days, tags: req.body?.tags,
+            targets: {
+              daily_calorie_target: req.body?.daily_calorie_target,
+              daily_protein_target: req.body?.daily_protein_target,
+              daily_carbs_target: req.body?.daily_carbs_target,
+              daily_fat_target: req.body?.daily_fat_target,
+            },
+          })
+        );
+      } else if (kind === 'supplement') {
+        if (!name) {
+          return res.status(400).json({ error: 'name is required' });
+        }
+        if (!Array.isArray(items) || !items.length) {
+          return res.status(400).json({ error: 'items array is required' });
+        }
+        res.json(
+          await coaching.updateOwnSupplementPlan(req.user.id, req.params.planId, {
+            name, notes, items, tags: req.body?.tags,
+          })
+        );
+      } else {
+        return res.status(400).json({ error: 'Unsupported plan kind' });
       }
-      const { name, notes, days } = req.body || {};
-      if (!name || !Array.isArray(days) || !days.length) {
-        return res.status(400).json({ error: 'name and a non-empty days array are required' });
-      }
-      res.json(
-        await coaching.updateOwnDietPlan(req.user.id, req.params.planId, {
-          name, notes, days,
-          targets: {
-            daily_calorie_target: req.body?.daily_calorie_target,
-            daily_protein_target: req.body?.daily_protein_target,
-            daily_carbs_target: req.body?.daily_carbs_target,
-            daily_fat_target: req.body?.daily_fat_target,
-          },
-        })
-      );
     } catch (e) {
       httpError(res, e, 400);
     }
