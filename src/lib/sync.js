@@ -333,53 +333,76 @@ export async function pullFromCloud() {
   
   try {
     // Use the unified sync/pull endpoint
+    console.log('[SYNC] Pulling from cloud...');
     const data = await api('/client/sync/pull', { skipAuth: false });
+    console.log('[SYNC] Received:', JSON.stringify({
+      sessions: data.sessions?.length || 0,
+      workout_templates: data.workout_templates?.length || 0,
+      measurements: data.measurements?.length || 0,
+      session_details: Object.keys(data.session_details || {}).length
+    }));
     const db = await getDb();
     
     // Pull sessions with full details
     if (data.sessions?.length) {
       for (const session of data.sessions) {
-        // First, insert/update the session
-        await db.runAsync(
-          `INSERT OR REPLACE INTO workout_sessions 
-           (name, start_time, end_time, duration_sec, notes, plan_id, synced, sync_attempted_at, source_assigned_plan_id, user_id)
-           VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
-          [
-            session.name, 
-            new Date(session.performed_at).getTime(), 
-            null, 
-            session.duration_seconds,
-            session.notes || null,
-            session.plan_id || null,
-            new Date().toISOString(), 
-            session.source_assigned_plan_id || null, 
-            userId
-          ]
+        const startTime = new Date(session.performed_at).getTime();
+        const localSessionId = session.local_session_id || null;
+        
+        // Check if session already exists by start_time and user_id
+        let existingSession = await db.getFirstAsync(
+          'SELECT id FROM workout_sessions WHERE start_time = ? AND user_id = ?',
+          [startTime, userId]
         );
         
-        // Get the local session id
-        const localSession = await db.getFirstAsync(
-          'SELECT id FROM workout_sessions WHERE start_time = ? AND user_id = ? ORDER BY id DESC LIMIT 1',
-          [new Date(session.performed_at).getTime(), userId]
-        );
+        if (existingSession) {
+          // Update existing session
+          await db.runAsync(
+            `UPDATE workout_sessions SET name = ?, duration_sec = ?, notes = ?, synced = 1, local_session_id = ?
+             WHERE id = ?`,
+            [session.name, session.duration_seconds, session.notes || null, localSessionId, existingSession.id]
+          );
+        } else {
+          // Insert new session
+          const result = await db.runAsync(
+            `INSERT INTO workout_sessions 
+             (name, start_time, end_time, duration_sec, notes, plan_id, synced, sync_attempted_at, source_assigned_plan_id, local_session_id, user_id)
+             VALUES (?, ?, null, ?, ?, ?, 1, ?, ?, ?, ?)`,
+            [
+              session.name, 
+              startTime, 
+              session.duration_seconds,
+              session.notes || null,
+              session.plan_id || null,
+              new Date().toISOString(), 
+              session.source_assigned_plan_id || null,
+              localSessionId,
+              userId
+            ]
+          );
+          existingSession = { id: result.lastInsertRowId };
+        }
         
         // Insert session details if available
-        if (localSession && data.session_details && data.session_details[session.local_session_id]) {
+        if (existingSession && data.session_details && data.session_details[session.local_session_id]) {
           const details = data.session_details[session.local_session_id];
+          // Clear existing session exercises before re-inserting
+          await db.runAsync('DELETE FROM session_exercises WHERE session_id = ?', [existingSession.id]);
+          
           for (let i = 0; i < details.length; i++) {
             const ex = details[i];
-            // Find exercise id by name or create placeholder
+            // Find exercise id by name
             let exerciseId = null;
             const exerciseRow = await db.getFirstAsync(
               'SELECT id FROM exercises WHERE name = ?',
               [ex.exercise_name]
             );
-            exerciseId = exerciseRow?.id || 1; // Fallback to first exercise
+            exerciseId = exerciseRow?.id || 1;
             
             const seResult = await db.runAsync(
               `INSERT INTO session_exercises (session_id, exercise_id, position, rest_seconds, notes)
                VALUES (?, ?, ?, 90, null)`,
-              [localSession.id, exerciseId, i]
+              [existingSession.id, exerciseId, i]
             );
             
             // Insert sets for this exercise
@@ -411,9 +434,9 @@ export async function pullFromCloud() {
     // Pull workout templates/plans with full exercise details
     if (data.workout_templates?.length) {
       for (const plan of data.workout_templates) {
-        // Create a unique local ID based on the local_plan_id or generate one
         const localId = parseInt(plan.local_plan_id) || Date.now();
         
+        // Insert the plan
         await db.runAsync(
           `INSERT OR REPLACE INTO workout_plans (id, name, notes, created_at, user_id, tags)
            VALUES (?, ?, ?, ?, ?, ?)`,
@@ -421,22 +444,35 @@ export async function pullFromCloud() {
             localId,
             plan.name, 
             plan.notes || null, 
-            new Date(plan.created_at).getTime(), 
+            plan.created_at ? new Date(plan.created_at).getTime() : Date.now(), 
             userId,
             JSON.stringify(plan.tags || [])
           ]
         );
         
+        // Parse exercises if it's a string
+        let exercises = plan.exercises;
+        if (typeof exercises === 'string') {
+          try {
+            exercises = JSON.parse(exercises);
+          } catch (e) {
+            exercises = [];
+          }
+        }
+        
         // Insert exercises for the plan
-        if (plan.exercises && Array.isArray(plan.exercises)) {
+        if (exercises && Array.isArray(exercises)) {
           await db.runAsync('DELETE FROM plan_exercises WHERE plan_id = ?', [localId]);
-          for (let i = 0; i < plan.exercises.length; i++) {
-            const ex = plan.exercises[i];
-            await db.runAsync(
-              `INSERT INTO plan_exercises (plan_id, exercise_id, position, target_sets, rest_seconds, group_id)
-               VALUES (?, ?, ?, ?, ?, ?)`,
-              [localId, ex.exercise_id || ex.exerciseId, i, ex.target_sets || ex.targetSets || 3, ex.rest_seconds || ex.restSeconds || 90, ex.group_id || ex.groupId || null]
-            );
+          for (let i = 0; i < exercises.length; i++) {
+            const ex = exercises[i];
+            const exerciseId = ex.exercise_id || ex.exerciseId;
+            if (exerciseId) {
+              await db.runAsync(
+                `INSERT INTO plan_exercises (plan_id, exercise_id, position, target_sets, rest_seconds, group_id)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [localId, exerciseId, i, ex.target_sets || ex.targetSets || 3, ex.rest_seconds || ex.restSeconds || 90, ex.group_id || ex.groupId || null]
+              );
+            }
           }
         }
         

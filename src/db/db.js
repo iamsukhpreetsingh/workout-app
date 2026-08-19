@@ -54,6 +54,7 @@ async function ensureBaseTables(db) {
     end_time INTEGER, duration_sec INTEGER, notes TEXT, plan_id INTEGER,
     synced INTEGER NOT NULL DEFAULT 0, sync_attempted_at TEXT NULL,
     source_assigned_plan_id TEXT NULL,
+    local_session_id TEXT NULL,
     user_id TEXT NOT NULL
   );`);
   await db.execAsync(`CREATE TABLE IF NOT EXISTS session_exercises (
@@ -422,6 +423,7 @@ await addColumnSafe(db, 'session_exercises', 'notes', 'TEXT NULL');
   },
   // v22: sync queue and sync settings for offline-first sync
   async (db) => {
+    await addColumnSafe(db, 'workout_sessions', 'local_session_id', 'TEXT NULL');
     await db.execAsync(`CREATE TABLE IF NOT EXISTS sync_queue (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       operation_id TEXT NOT NULL UNIQUE,
