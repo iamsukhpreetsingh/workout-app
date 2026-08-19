@@ -1,15 +1,8 @@
 import { getDb } from './db';
 import { checkAndRecordPR, recomputePRsForExercise } from './pr';
+import { getCurrentUserId, setCurrentUserId } from './userId';
 
-let currentUserId = null;
-
-export function setCurrentUserId(userId) {
-  currentUserId = userId;
-}
-
-export function getCurrentUserId() {
-  return currentUserId;
-}
+export { setCurrentUserId, getCurrentUserId };
 
 // ---------- Exercises ----------
 export async function listExercises() {
@@ -28,7 +21,7 @@ export async function createExercise(name, muscleGroup) {
 
 export async function getExerciseHistory(exerciseId, limit = 50) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return [];
   return db.getAllAsync(
     `SELECT s.id AS set_id, s.weight, s.reps, s.rpe, s.set_type,
@@ -46,7 +39,7 @@ export async function getExerciseHistory(exerciseId, limit = 50) {
 
 export async function getExerciseBest(exerciseId) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return { weight: 0, reps: 0 };
   const result = await db.getFirstAsync(
     `SELECT MAX(s.weight) AS max_weight, MAX(s.reps) AS max_reps
@@ -65,7 +58,7 @@ export async function getExerciseBest(exerciseId) {
 // ---------- Plans ----------
 export async function listPlans() {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return [];
   const plans = await db.getAllAsync(
     `SELECT p.*,
@@ -84,7 +77,7 @@ export async function listPlans() {
 
 export async function getPlan(id) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return null;
   const plan = await db.getFirstAsync('SELECT * FROM workout_plans WHERE id = ? AND user_id = ?', [id, userId]);
   if (!plan) return null;
@@ -118,7 +111,7 @@ export async function getPlan(id) {
 // tags: optional array of strings (max 5)
 export async function createPlan(name, notes, exercises, tags = []) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated');
   const tagsJson = JSON.stringify(tags.slice(0, 5));
   const result = await db.runAsync(
@@ -145,14 +138,14 @@ export async function createPlan(name, notes, exercises, tags = []) {
 
 export async function deletePlan(id) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return;
   await db.runAsync('DELETE FROM workout_plans WHERE id = ? AND user_id = ?', [id, userId]);
 }
 
 export async function updatePlan(id, name, notes, exercises, tags = []) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated');
   const tagsJson = JSON.stringify(tags.slice(0, 5));
   await db.runAsync(
@@ -186,7 +179,7 @@ const SESSION_TOTALS = `
 
 export async function listSessions() {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return [];
   const sessions = await db.getAllAsync(
     'SELECT * FROM workout_sessions WHERE user_id = ? ORDER BY start_time DESC',
@@ -208,7 +201,7 @@ export async function listSessions() {
 
 export async function getSession(id) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return null;
   const session = await db.getFirstAsync('SELECT * FROM workout_sessions WHERE id = ? AND user_id = ?', [id, userId]);
   if (!session) return null;
@@ -236,7 +229,7 @@ export async function getSession(id) {
 //                          sets: [{ weight, reps, rpe, setType, completed }] }] }
 export async function saveSession(session) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated');
   let sessionId = session.id;
   if (sessionId) {
@@ -300,7 +293,7 @@ export async function saveSession(session) {
 
 export async function updateSessionName(sessionId, newName) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return;
   await db.runAsync(
     'UPDATE workout_sessions SET name = ?, synced = 0 WHERE id = ? AND user_id = ?',
@@ -310,7 +303,7 @@ export async function updateSessionName(sessionId, newName) {
 
 export async function deleteSession(id) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return;
   const exerciseIds = (
     await db.getAllAsync(
@@ -330,7 +323,7 @@ export async function deleteSession(id) {
 // stored, so they must be recomputed if a set is reclassified as a warm-up.
 export async function updateSetType(setId, setType) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   const row = await db.getFirstAsync(
     `SELECT se.exercise_id, se.session_id FROM sets s
      JOIN session_exercises se ON s.session_exercise_id = se.id
@@ -349,7 +342,7 @@ export async function updateSetType(setId, setType) {
 // ---------- Progress ----------
 export async function getProgressOverview() {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return [];
   return db.getAllAsync(
     `SELECT sess.id, sess.name, sess.start_time, sess.end_time, sess.duration_sec,
@@ -368,7 +361,7 @@ export async function getProgressOverview() {
 
 export async function getExerciseProgressList() {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return [];
   return db.getAllAsync(
     `SELECT e.id, e.name, e.muscle_group,
@@ -389,7 +382,7 @@ export async function getExerciseProgressList() {
 
 export async function getExerciseProgress(exerciseId) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return [];
   return db.getAllAsync(
     `SELECT sess.start_time,
@@ -410,7 +403,7 @@ export async function getExerciseProgress(exerciseId) {
 
 export async function getPersonalRecords(exerciseId) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return { maxWeight: 0, maxReps: 0, bestE1rm: 0, totalVolume: 0 };
   const base = `FROM sets s
        JOIN session_exercises se ON s.session_exercise_id = se.id
@@ -427,7 +420,7 @@ export async function getPersonalRecords(exerciseId) {
 // Recent sets (working only) for the RPE insight on the progress screen
 export async function getRecentSets(exerciseId, limit = 10) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return [];
   return db.getAllAsync(
     `SELECT s.weight, s.reps, s.rpe
@@ -448,7 +441,7 @@ export async function getRecentSets(exerciseId, limit = 10) {
 // Aggregate payload for one session, in the backend's summary shape
 export async function getSessionSyncAggregate(sessionId) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return null;
   const session = await db.getFirstAsync(
     'SELECT id, name, start_time, duration_sec FROM workout_sessions WHERE id = ? AND user_id = ?',
@@ -478,7 +471,7 @@ export async function getSessionSyncAggregate(sessionId) {
 
 export async function getUnsyncedSessionIds() {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return [];
   const rows = await db.getAllAsync(
     'SELECT id FROM workout_sessions WHERE synced = 0 AND user_id = ? ORDER BY start_time ASC',
@@ -490,7 +483,7 @@ export async function getUnsyncedSessionIds() {
 export async function markSessionsSynced(sessionIds) {
   if (!sessionIds.length) return;
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return;
   const placeholders = sessionIds.map(() => '?').join(',');
   await db.runAsync(
@@ -501,7 +494,7 @@ export async function markSessionsSynced(sessionIds) {
 
 export async function markSessionSyncAttempted(sessionId) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return;
   await db.runAsync(
     'UPDATE workout_sessions SET sync_attempted_at = ? WHERE id = ? AND user_id = ?',
@@ -513,7 +506,7 @@ export async function markSessionSyncAttempted(sessionId) {
 // reps, set_type, completed. RPE and notes are deliberately never included.
 export async function getSessionExerciseDetailPayload(sessionId) {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return null;
   const session = await db.getFirstAsync(
     'SELECT id FROM workout_sessions WHERE id = ? AND user_id = ?',
@@ -546,7 +539,7 @@ export async function getSessionExerciseDetailPayload(sessionId) {
 
 export async function getPendingSyncCount() {
   const db = await getDb();
-  const userId = currentUserId;
+  const userId = getCurrentUserId();
   if (!userId) return 0;
   const row = await db.getFirstAsync('SELECT COUNT(*) AS c FROM workout_sessions WHERE synced = 0 AND user_id = ?', [userId]);
   return row.c;

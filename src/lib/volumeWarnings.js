@@ -1,6 +1,6 @@
 import { getDb } from '../db/db';
 import { getSettings } from '../db/settings';
-import { getCurrentUserId } from '../db/queries';
+import { getCurrentUserId } from '../db/userId';
 
 export async function getVolumeWarnings() {
   const db = await getDb();

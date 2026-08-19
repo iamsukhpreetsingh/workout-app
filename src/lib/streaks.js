@@ -1,7 +1,7 @@
 import { getDb } from '../db/db';
 import { getSettings } from '../db/settings';
 import { toLocalDateKey, computeStreaks } from './streakCalc';
-import { getCurrentUserId } from '../db/queries';
+import { getCurrentUserId } from '../db/userId';
 
 async function loadDailyVolume(sinceMs = 0) {
   const db = await getDb();

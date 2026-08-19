@@ -1,5 +1,5 @@
 import { getDb } from './db';
-import { getCurrentUserId } from './queries';
+import { getCurrentUserId } from './userId';
 
 export async function checkAndRecordPR(exerciseId, weight, reps, setId, sessionTime) {
   const db = await getDb();

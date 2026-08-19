@@ -147,7 +147,7 @@ async function ensureSchema(db) {
   await addColumnSafe(db, 'workout_sessions', 'synced', 'INTEGER NOT NULL DEFAULT 0');
   await addColumnSafe(db, 'workout_sessions', 'sync_attempted_at', 'TEXT NULL');
   await addColumnSafe(db, 'workout_sessions', 'source_assigned_plan_id', 'TEXT NULL');
-  await addColumnSafe(db, 'workout_sessions', 'user_id', 'TEXT NOT NULL');
+  await addColumnSafe(db, 'workout_sessions', 'user_id', 'TEXT');
   await addColumnSafe(db, 'user_settings', 'streak_tolerance', 'INTEGER NOT NULL DEFAULT 1');
   await addColumnSafe(db, 'workout_plans', 'user_id', 'TEXT');
   await addColumnSafe(db, 'workout_plans', 'tags', 'TEXT');
@@ -395,7 +395,7 @@ const MIGRATIONS = [
   },
   // v21: user_id for workout_sessions - fixes user isolation bug in sessions
   async (db) => {
-    await addColumnSafe(db, 'workout_sessions', 'user_id', 'TEXT NOT NULL');
+    await addColumnSafe(db, 'workout_sessions', 'user_id', 'TEXT');
     // Delete all sessions without user_id (legacy data from before this fix)
     await db.runAsync('DELETE FROM workout_sessions WHERE user_id IS NULL OR user_id = ""');
   },
