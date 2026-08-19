@@ -377,9 +377,9 @@ export async function pullFromCloud() {
             exerciseId = exerciseRow?.id || 1; // Fallback to first exercise
             
             const seResult = await db.runAsync(
-              `INSERT INTO session_exercises (session_id, exercise_id, position, rest_seconds, muscle_group, notes)
-               VALUES (?, ?, ?, 90, ?, null)`,
-              [localSession.id, exerciseId, i, ex.muscle_group || null]
+              `INSERT INTO session_exercises (session_id, exercise_id, position, rest_seconds, notes)
+               VALUES (?, ?, ?, 90, null)`,
+              [localSession.id, exerciseId, i]
             );
             
             // Insert sets for this exercise

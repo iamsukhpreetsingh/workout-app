@@ -61,7 +61,7 @@ async function ensureBaseTables(db) {
     session_id INTEGER NOT NULL REFERENCES workout_sessions(id) ON DELETE CASCADE,
     exercise_id INTEGER NOT NULL REFERENCES exercises(id),
     position INTEGER NOT NULL,
-    rest_seconds INTEGER NOT NULL DEFAULT 90, group_id TEXT NULL, notes TEXT NULL
+    rest_seconds INTEGER NOT NULL DEFAULT 90, group_id TEXT NULL, notes TEXT NULL, muscle_group TEXT NULL
   );`);
   await db.execAsync(`CREATE TABLE IF NOT EXISTS sets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -363,7 +363,8 @@ const MIGRATIONS = [
   },
   // v13: per-exercise notes within a session
   async (db) => {
-    await addColumnSafe(db, 'session_exercises', 'notes', 'TEXT NULL');
+await addColumnSafe(db, 'session_exercises', 'notes', 'TEXT NULL');
+  await addColumnSafe(db, 'session_exercises', 'muscle_group', 'TEXT NULL');
   },
   // v14: completed flag on sets — volume/PRs only count sets the user marked
   // done. Default 1 so historical sets keep counting after upgrade.
