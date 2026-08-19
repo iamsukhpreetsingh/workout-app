@@ -1,4 +1,5 @@
 import { getDb } from './db';
+import { getCurrentUserId } from './queries';
 
 export async function checkAndRecordPR(exerciseId, weight, reps, setId, sessionTime) {
   const db = await getDb();
@@ -117,6 +118,7 @@ export async function getPRSetIdsForExercise(exerciseId) {
 
 export async function recomputePRsForExercise(exerciseId) {
   const db = await getDb();
+  const userId = getCurrentUserId();
 
   await db.runAsync('DELETE FROM personal_records WHERE exercise_id = ?', [exerciseId]);
 
@@ -125,9 +127,9 @@ export async function recomputePRsForExercise(exerciseId) {
      FROM sets s
      JOIN session_exercises se ON s.session_exercise_id = se.id
      JOIN workout_sessions sess ON se.session_id = sess.id
-     WHERE se.exercise_id = ? AND s.set_type != 'warmup' AND s.completed = 1
+     WHERE se.exercise_id = ? AND sess.user_id = ? AND s.set_type != 'warmup' AND s.completed = 1
      ORDER BY s.weight DESC, s.reps DESC`,
-    [exerciseId]
+    [exerciseId, userId]
   );
 
   const best = {

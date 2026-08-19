@@ -1,19 +1,20 @@
 import { getDb } from '../db/db';
 import { getSettings } from '../db/settings';
 import { toLocalDateKey, computeStreaks } from './streakCalc';
+import { getCurrentUserId } from '../db/queries';
 
-// Session dates + per-day working-set volume, grouped by LOCAL calendar day
-// (SQLite's date() would use UTC and split/misjoin days around midnight).
 async function loadDailyVolume(sinceMs = 0) {
   const db = await getDb();
+  const userId = getCurrentUserId();
+  if (!userId) return {};
   const rows = await db.getAllAsync(
     `SELECT sess.start_time AS ts, COALESCE(SUM(s.weight * s.reps), 0) AS volume
      FROM workout_sessions sess
      LEFT JOIN session_exercises se ON se.session_id = sess.id
      LEFT JOIN sets s ON s.session_exercise_id = se.id AND s.set_type != 'warmup' AND s.completed = 1
-     WHERE sess.start_time >= ?
+     WHERE sess.start_time >= ? AND sess.user_id = ?
      GROUP BY sess.id`,
-    [sinceMs]
+    [sinceMs, userId]
   );
   const byDay = {};
   for (const r of rows) {

@@ -53,7 +53,8 @@ async function ensureBaseTables(db) {
     name TEXT NOT NULL, start_time INTEGER NOT NULL,
     end_time INTEGER, duration_sec INTEGER, notes TEXT, plan_id INTEGER,
     synced INTEGER NOT NULL DEFAULT 0, sync_attempted_at TEXT NULL,
-    source_assigned_plan_id TEXT NULL
+    source_assigned_plan_id TEXT NULL,
+    user_id TEXT NOT NULL
   );`);
   await db.execAsync(`CREATE TABLE IF NOT EXISTS session_exercises (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,6 +147,7 @@ async function ensureSchema(db) {
   await addColumnSafe(db, 'workout_sessions', 'synced', 'INTEGER NOT NULL DEFAULT 0');
   await addColumnSafe(db, 'workout_sessions', 'sync_attempted_at', 'TEXT NULL');
   await addColumnSafe(db, 'workout_sessions', 'source_assigned_plan_id', 'TEXT NULL');
+  await addColumnSafe(db, 'workout_sessions', 'user_id', 'TEXT NOT NULL');
   await addColumnSafe(db, 'user_settings', 'streak_tolerance', 'INTEGER NOT NULL DEFAULT 1');
   await addColumnSafe(db, 'workout_plans', 'user_id', 'TEXT');
   await addColumnSafe(db, 'workout_plans', 'tags', 'TEXT');
@@ -214,7 +216,8 @@ const MIGRATIONS = [
     await db.execAsync(`CREATE TABLE IF NOT EXISTS workout_sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL, start_time INTEGER NOT NULL,
-      end_time INTEGER, duration_sec INTEGER, notes TEXT, plan_id INTEGER
+      end_time INTEGER, duration_sec INTEGER, notes TEXT, plan_id INTEGER,
+      user_id TEXT NOT NULL
     );`);
     await db.execAsync(`CREATE TABLE IF NOT EXISTS session_exercises (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -389,6 +392,12 @@ const MIGRATIONS = [
     await addColumnSafe(db, 'workout_plans', 'user_id', 'TEXT NOT NULL');
     // Delete all plans that don't have a user_id (legacy data from before this fix)
     await db.runAsync('DELETE FROM workout_plans WHERE user_id IS NULL OR user_id = ""');
+  },
+  // v21: user_id for workout_sessions - fixes user isolation bug in sessions
+  async (db) => {
+    await addColumnSafe(db, 'workout_sessions', 'user_id', 'TEXT NOT NULL');
+    // Delete all sessions without user_id (legacy data from before this fix)
+    await db.runAsync('DELETE FROM workout_sessions WHERE user_id IS NULL OR user_id = ""');
   },
 ];
 

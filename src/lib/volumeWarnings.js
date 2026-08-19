@@ -1,8 +1,11 @@
 import { getDb } from '../db/db';
 import { getSettings } from '../db/settings';
+import { getCurrentUserId } from '../db/queries';
 
 export async function getVolumeWarnings() {
   const db = await getDb();
+  const userId = getCurrentUserId();
+  if (!userId) return [];
   const settings = await getSettings();
   const thresholdHigh = settings.vol_warning_threshold_high || 30;
   const thresholdLow = settings.vol_warning_threshold_low || -30;
@@ -21,9 +24,9 @@ export async function getVolumeWarnings() {
     JOIN session_exercises se ON se.session_id = sess.id
     JOIN sets s ON s.session_exercise_id = se.id
     JOIN exercises e ON se.exercise_id = e.id
-    WHERE sess.start_time >= ? AND s.set_type != 'warmup' AND s.completed = 1
+    WHERE sess.start_time >= ? AND sess.user_id = ? AND s.set_type != 'warmup' AND s.completed = 1
     GROUP BY e.muscle_group
-  `, [weekStart.getTime()]);
+  `, [weekStart.getTime(), userId]);
 
   const priorWeeksVolume = await db.getAllAsync(`
     SELECT e.muscle_group, COALESCE(SUM(s.weight * s.reps), 0) as volume, 
@@ -32,9 +35,9 @@ export async function getVolumeWarnings() {
     JOIN session_exercises se ON se.session_id = sess.id
     JOIN sets s ON s.session_exercise_id = se.id
     JOIN exercises e ON se.exercise_id = e.id
-    WHERE sess.start_time >= ? AND sess.start_time < ? AND s.set_type != 'warmup' AND s.completed = 1
+    WHERE sess.start_time >= ? AND sess.start_time < ? AND sess.user_id = ? AND s.set_type != 'warmup' AND s.completed = 1
     GROUP BY e.muscle_group, week
-  `, [fourWeeksAgo.getTime(), weekStart.getTime()]);
+  `, [fourWeeksAgo.getTime(), weekStart.getTime(), userId]);
 
   const avgVolumeByGroup = {};
   const countByGroup = {};

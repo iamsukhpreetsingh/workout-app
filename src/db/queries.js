@@ -28,6 +28,8 @@ export async function createExercise(name, muscleGroup) {
 
 export async function getExerciseHistory(exerciseId, limit = 50) {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return [];
   return db.getAllAsync(
     `SELECT s.id AS set_id, s.weight, s.reps, s.rpe, s.set_type,
             sess.id AS session_id, sess.name AS session_name, sess.start_time,
@@ -35,21 +37,24 @@ export async function getExerciseHistory(exerciseId, limit = 50) {
      FROM sets s
      JOIN session_exercises se ON s.session_exercise_id = se.id
      JOIN workout_sessions sess ON se.session_id = sess.id
-     WHERE se.exercise_id = ? AND s.set_type != 'warmup' AND s.completed = 1
+     WHERE se.exercise_id = ? AND sess.user_id = ? AND s.set_type != 'warmup' AND s.completed = 1
      ORDER BY sess.start_time DESC, se.position ASC, s.position DESC
      LIMIT ?`,
-    [exerciseId, limit]
+    [exerciseId, userId, limit]
   );
 }
 
 export async function getExerciseBest(exerciseId) {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return { weight: 0, reps: 0 };
   const result = await db.getFirstAsync(
     `SELECT MAX(s.weight) AS max_weight, MAX(s.reps) AS max_reps
      FROM sets s
      JOIN session_exercises se ON s.session_exercise_id = se.id
-     WHERE se.exercise_id = ? AND s.set_type != 'warmup' AND s.completed = 1 AND s.weight > 0 AND s.reps > 0`,
-    [exerciseId]
+     JOIN workout_sessions sess ON se.session_id = sess.id
+     WHERE se.exercise_id = ? AND sess.user_id = ? AND s.set_type != 'warmup' AND s.completed = 1 AND s.weight > 0 AND s.reps > 0`,
+    [exerciseId, userId]
   );
   return {
     weight: result?.max_weight || 0,
@@ -64,9 +69,9 @@ export async function listPlans() {
   if (!userId) return [];
   const plans = await db.getAllAsync(
     `SELECT p.*,
-       (SELECT COUNT(*) FROM workout_sessions ws WHERE ws.plan_id = p.id) AS used_count
+       (SELECT COUNT(*) FROM workout_sessions ws WHERE ws.plan_id = p.id AND ws.user_id = ?) AS used_count
      FROM workout_plans p WHERE p.user_id = ? ORDER BY p.created_at DESC`,
-    [userId]
+    [userId, userId]
   );
   for (const plan of plans) {
     plan.exerciseCount = (
@@ -181,8 +186,11 @@ const SESSION_TOTALS = `
 
 export async function listSessions() {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return [];
   const sessions = await db.getAllAsync(
-    'SELECT * FROM workout_sessions ORDER BY start_time DESC'
+    'SELECT * FROM workout_sessions WHERE user_id = ? ORDER BY start_time DESC',
+    [userId]
   );
   for (const s of sessions) {
     const totals = (await db.getAllAsync(SESSION_TOTALS, [s.id]))[0];
@@ -200,7 +208,9 @@ export async function listSessions() {
 
 export async function getSession(id) {
   const db = await getDb();
-  const session = await db.getFirstAsync('SELECT * FROM workout_sessions WHERE id = ?', [id]);
+  const userId = currentUserId;
+  if (!userId) return null;
+  const session = await db.getFirstAsync('SELECT * FROM workout_sessions WHERE id = ? AND user_id = ?', [id, userId]);
   if (!session) return null;
   const exercises = await db.getAllAsync(
     `SELECT se.id AS session_exercise_id, se.position, se.rest_seconds, se.group_id, se.notes,
@@ -226,19 +236,21 @@ export async function getSession(id) {
 //                          sets: [{ weight, reps, rpe, setType, completed }] }] }
 export async function saveSession(session) {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) throw new Error('User not authenticated');
   let sessionId = session.id;
   if (sessionId) {
     await db.runAsync('DELETE FROM session_exercises WHERE session_id = ?', [sessionId]);
     await db.runAsync(
       `UPDATE workout_sessions SET name = ?, end_time = ?, duration_sec = ?, notes = ?
-       WHERE id = ?`,
-      [session.name, session.end_time, session.duration_sec, session.notes || null, sessionId]
+       WHERE id = ? AND user_id = ?`,
+      [session.name, session.end_time, session.duration_sec, session.notes || null, sessionId, userId]
     );
   } else {
     const result = await db.runAsync(
-      `INSERT INTO workout_sessions (name, start_time, end_time, duration_sec, notes, plan_id, source_assigned_plan_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [session.name, session.start_time, session.end_time, session.duration_sec, session.notes || null, session.plan_id || null, session.sourceAssignedPlanId || null]
+      `INSERT INTO workout_sessions (name, start_time, end_time, duration_sec, notes, plan_id, source_assigned_plan_id, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [session.name, session.start_time, session.end_time, session.duration_sec, session.notes || null, session.plan_id || null, session.sourceAssignedPlanId || null, userId]
     );
     sessionId = result.lastInsertRowId;
   }
@@ -288,13 +300,15 @@ export async function saveSession(session) {
 
 export async function deleteSession(id) {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return;
   const exerciseIds = (
     await db.getAllAsync(
       'SELECT DISTINCT exercise_id FROM session_exercises WHERE session_id = ?',
       [id]
     )
   ).map((r) => r.exercise_id);
-  await db.runAsync('DELETE FROM workout_sessions WHERE id = ?', [id]);
+  await db.runAsync('DELETE FROM workout_sessions WHERE id = ? AND user_id = ?', [id, userId]);
   // Deleted sets may have held records — demote to the next-best historical set
   for (const exId of exerciseIds) {
     await recomputePRsForExercise(exId);
@@ -306,6 +320,7 @@ export async function deleteSession(id) {
 // stored, so they must be recomputed if a set is reclassified as a warm-up.
 export async function updateSetType(setId, setType) {
   const db = await getDb();
+  const userId = currentUserId;
   const row = await db.getFirstAsync(
     `SELECT se.exercise_id, se.session_id FROM sets s
      JOIN session_exercises se ON s.session_exercise_id = se.id
@@ -316,14 +331,16 @@ export async function updateSetType(setId, setType) {
   if (row) await recomputePRsForExercise(row.exercise_id);
   // A retroactive type change alters the session's aggregates — flag the
   // session for re-sync so the trainer-facing summary reflects the fix.
-  if (row) {
-    await db.runAsync('UPDATE workout_sessions SET synced = 0 WHERE id = ?', [row.session_id]);
+  if (row && userId) {
+    await db.runAsync('UPDATE workout_sessions SET synced = 0 WHERE id = ? AND user_id = ?', [row.session_id, userId]);
   }
 }
 
 // ---------- Progress ----------
 export async function getProgressOverview() {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return [];
   return db.getAllAsync(
     `SELECT sess.id, sess.name, sess.start_time, sess.end_time, sess.duration_sec,
             COALESCE(SUM(s.weight * s.reps), 0) AS volume,
@@ -332,13 +349,17 @@ export async function getProgressOverview() {
      FROM workout_sessions sess
      LEFT JOIN session_exercises se ON se.session_id = sess.id
      LEFT JOIN sets s ON s.session_exercise_id = se.id AND s.set_type != 'warmup' AND s.completed = 1
+     WHERE sess.user_id = ?
      GROUP BY sess.id
-     ORDER BY sess.start_time ASC`
+     ORDER BY sess.start_time ASC`,
+    [userId]
   );
 }
 
 export async function getExerciseProgressList() {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return [];
   return db.getAllAsync(
     `SELECT e.id, e.name, e.muscle_group,
             COUNT(DISTINCT sess.id) AS session_count,
@@ -349,13 +370,17 @@ export async function getExerciseProgressList() {
      JOIN session_exercises se ON se.exercise_id = e.id
      JOIN sets s ON s.session_exercise_id = se.id AND s.set_type != 'warmup' AND s.completed = 1
      JOIN workout_sessions sess ON se.session_id = sess.id
+     WHERE sess.user_id = ?
      GROUP BY e.id
-     ORDER BY session_count DESC`
+     ORDER BY session_count DESC`,
+    [userId]
   );
 }
 
 export async function getExerciseProgress(exerciseId) {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return [];
   return db.getAllAsync(
     `SELECT sess.start_time,
             MAX(s.weight) AS max_weight,
@@ -366,36 +391,43 @@ export async function getExerciseProgress(exerciseId) {
      FROM workout_sessions sess
      JOIN session_exercises se ON se.session_id = sess.id AND se.exercise_id = ?
      JOIN sets s ON s.session_exercise_id = se.id AND s.set_type != 'warmup' AND s.completed = 1
+     WHERE sess.user_id = ?
      GROUP BY sess.id
      ORDER BY sess.start_time ASC`,
-    [exerciseId]
+    [exerciseId, userId]
   );
 }
 
 export async function getPersonalRecords(exerciseId) {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return { maxWeight: 0, maxReps: 0, bestE1rm: 0, totalVolume: 0 };
   const base = `FROM sets s
        JOIN session_exercises se ON s.session_exercise_id = se.id
-       WHERE se.exercise_id = ? AND s.set_type != 'warmup' AND s.completed = 1`;
+       JOIN workout_sessions sess ON se.session_id = sess.id
+       WHERE se.exercise_id = ? AND sess.user_id = ? AND s.set_type != 'warmup' AND s.completed = 1`;
   return {
-    maxWeight: (await db.getFirstAsync(`SELECT MAX(s.weight) AS v ${base}`, [exerciseId])).v,
-    maxReps: (await db.getFirstAsync(`SELECT MAX(s.reps) AS v ${base}`, [exerciseId])).v,
-    bestE1rm: (await db.getFirstAsync(`SELECT MAX(s.weight * (1 + s.reps / 30.0)) AS v ${base}`, [exerciseId])).v,
-    totalVolume: (await db.getFirstAsync(`SELECT COALESCE(SUM(s.weight * s.reps), 0) AS v ${base}`, [exerciseId])).v,
+    maxWeight: (await db.getFirstAsync(`SELECT MAX(s.weight) AS v ${base}`, [exerciseId, userId])).v,
+    maxReps: (await db.getFirstAsync(`SELECT MAX(s.reps) AS v ${base}`, [exerciseId, userId])).v,
+    bestE1rm: (await db.getFirstAsync(`SELECT MAX(s.weight * (1 + s.reps / 30.0)) AS v ${base}`, [exerciseId, userId])).v,
+    totalVolume: (await db.getFirstAsync(`SELECT COALESCE(SUM(s.weight * s.reps), 0) AS v ${base}`, [exerciseId, userId])).v,
   };
 }
 
 // Recent sets (working only) for the RPE insight on the progress screen
 export async function getRecentSets(exerciseId, limit = 10) {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return [];
   return db.getAllAsync(
     `SELECT s.weight, s.reps, s.rpe
      FROM sets s
      JOIN session_exercises se ON s.session_exercise_id = se.id
-     WHERE se.exercise_id = ? AND s.set_type != 'warmup' AND s.completed = 1
+     JOIN workout_sessions sess ON se.session_id = sess.id
+     WHERE se.exercise_id = ? AND sess.user_id = ? AND s.set_type != 'warmup' AND s.completed = 1
      ORDER BY s.id DESC
      LIMIT ?`,
-    [exerciseId, limit]
+    [exerciseId, userId, limit]
   );
 }
 
@@ -406,9 +438,11 @@ export async function getRecentSets(exerciseId, limit = 10) {
 // Aggregate payload for one session, in the backend's summary shape
 export async function getSessionSyncAggregate(sessionId) {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return null;
   const session = await db.getFirstAsync(
-    'SELECT id, name, start_time, duration_sec FROM workout_sessions WHERE id = ?',
-    [sessionId]
+    'SELECT id, name, start_time, duration_sec FROM workout_sessions WHERE id = ? AND user_id = ?',
+    [sessionId, userId]
   );
   if (!session) return null;
   const agg = await db.getFirstAsync(
@@ -434,8 +468,11 @@ export async function getSessionSyncAggregate(sessionId) {
 
 export async function getUnsyncedSessionIds() {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return [];
   const rows = await db.getAllAsync(
-    'SELECT id FROM workout_sessions WHERE synced = 0 ORDER BY start_time ASC'
+    'SELECT id FROM workout_sessions WHERE synced = 0 AND user_id = ? ORDER BY start_time ASC',
+    [userId]
   );
   return rows.map((r) => r.id);
 }
@@ -443,18 +480,22 @@ export async function getUnsyncedSessionIds() {
 export async function markSessionsSynced(sessionIds) {
   if (!sessionIds.length) return;
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return;
   const placeholders = sessionIds.map(() => '?').join(',');
   await db.runAsync(
-    `UPDATE workout_sessions SET synced = 1, sync_attempted_at = ? WHERE id IN (${placeholders})`,
-    [new Date().toISOString(), ...sessionIds]
+    `UPDATE workout_sessions SET synced = 1, sync_attempted_at = ? WHERE id IN (${placeholders}) AND user_id = ?`,
+    [new Date().toISOString(), ...sessionIds, userId]
   );
 }
 
 export async function markSessionSyncAttempted(sessionId) {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return;
   await db.runAsync(
-    'UPDATE workout_sessions SET sync_attempted_at = ? WHERE id = ?',
-    [new Date().toISOString(), sessionId]
+    'UPDATE workout_sessions SET sync_attempted_at = ? WHERE id = ? AND user_id = ?',
+    [new Date().toISOString(), sessionId, userId]
   );
 }
 
@@ -462,6 +503,13 @@ export async function markSessionSyncAttempted(sessionId) {
 // reps, set_type, completed. RPE and notes are deliberately never included.
 export async function getSessionExerciseDetailPayload(sessionId) {
   const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return null;
+  const session = await db.getFirstAsync(
+    'SELECT id FROM workout_sessions WHERE id = ? AND user_id = ?',
+    [sessionId, userId]
+  );
+  if (!session) return null;
   const exercises = await db.getAllAsync(
     `SELECT e.name AS exercise_name, e.muscle_group, se.position AS order_index
      FROM session_exercises se
@@ -488,6 +536,8 @@ export async function getSessionExerciseDetailPayload(sessionId) {
 
 export async function getPendingSyncCount() {
   const db = await getDb();
-  const row = await db.getFirstAsync('SELECT COUNT(*) AS c FROM workout_sessions WHERE synced = 0');
+  const userId = currentUserId;
+  if (!userId) return 0;
+  const row = await db.getFirstAsync('SELECT COUNT(*) AS c FROM workout_sessions WHERE synced = 0 AND user_id = ?', [userId]);
   return row.c;
 }

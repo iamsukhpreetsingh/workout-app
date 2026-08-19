@@ -14,11 +14,12 @@
     },
     "android": {
       "package": "com.anonymous.workouttracker",
-      "usesCleartextTraffic": true
+      "permissions": ["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"]
     },
     "plugins": [
       "expo-font",
-      "expo-secure-store"
+      "expo-secure-store",
+      "./plugins/withAndroidNetworkSecurity"
     ],
     "extra": {
       "eas": {

@@ -11,16 +11,19 @@ export function registerTokenHooks(hooks) {
 }
 
 async function rawRequest(path, { method = 'GET', body, headers } = {}) {
+  const url = `${API_URL}${path}`;
+  console.log('[API] Requesting:', url);
   try {
-    const res = await fetch(`${API_URL}${path}`, {
+    const res = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json', ...(headers || {}) },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
+    console.log('[API] Response status:', res.status);
     return res;
   } catch (e) {
-    console.error('Network error:', e);
-    throw new ApiError(0, 'Network request failed. Check your internet connection.');
+    console.error('[API] Network error:', e.message, e);
+    throw new ApiError(0, `Network request failed: ${e.message}`);
   }
 }
 
