@@ -1,8 +1,8 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Alert, StyleSheet } from 'react-native';
+import React, { useCallback, useState, useRef } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, Alert, StyleSheet, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { getSession, deleteSession, updateSetType } from '../db/queries';
+import { getSession, deleteSession, updateSetType, updateSessionName } from '../db/queries';
 import { getPRSetIdsForSession } from '../db/pr';
 import { shareSessionAsRoutine } from '../lib/share';
 import { useColors, fmtDate } from '../theme';
@@ -19,6 +19,9 @@ export default function SessionDetailScreen({ route, navigation }) {
   const styles = makeStyles(colors);
   const [session, setSession] = useState(null);
   const [prSetIds, setPrSetIds] = useState(new Set());
+  const [editingName, setEditingName] = useState(false);
+  const [editedName, setEditedName] = useState('');
+  const inputRef = useRef(null);
 
   // Share the performed workout structure (no notes/RPE/timestamps)
   React.useLayoutEffect(() => {
@@ -88,10 +91,67 @@ export default function SessionDetailScreen({ route, navigation }) {
 
   const labels = groupLabels(session.exercises.map((e) => ({ groupId: e.group_id })));
 
+  const startEditName = () => {
+    setEditedName(session.name);
+    setEditingName(true);
+    setTimeout(() => inputRef.current?.focus(), 100);
+  };
+
+  const cancelEditName = () => {
+    setEditingName(false);
+    setEditedName('');
+    inputRef.current?.blur();
+  };
+
+  const confirmEditName = async () => {
+    const trimmed = editedName.trim();
+    if (!trimmed) return;
+    if (trimmed === session.name) {
+      setEditingName(false);
+      setEditedName('');
+      return;
+    }
+    await updateSessionName(session.id, trimmed);
+    setSession({ ...session, name: trimmed });
+    setEditingName(false);
+    setEditedName('');
+  };
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 20, paddingBottom: 48 }}>
       {/* Identity: display-weight name, muted date/time */}
-      <Text style={styles.name}>{session.name}</Text>
+      <View style={styles.nameRow}>
+        {editingName ? (
+          <>
+            <TextInput
+              ref={inputRef}
+              style={styles.nameInput}
+              value={editedName}
+              onChangeText={setEditedName}
+              onSubmitEditing={confirmEditName}
+              returnKeyType="done"
+              selectTextOnFocus
+            />
+            <TouchableOpacity
+              onPress={confirmEditName}
+              disabled={!editedName.trim()}
+              style={[styles.iconBtn, !editedName.trim() && styles.iconBtnDisabled]}
+            >
+              <Ionicons name="checkmark" size={20} color={editedName.trim() ? colors.primary : colors.textDim} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={cancelEditName} style={styles.iconBtn}>
+              <Ionicons name="close" size={20} color={colors.textDim} />
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <Text style={styles.name}>{session.name}</Text>
+            <TouchableOpacity onPress={startEditName} style={styles.iconBtn}>
+              <Ionicons name="pencil" size={16} color={colors.textDim} />
+            </TouchableOpacity>
+          </>
+        )}
+      </View>
       {!!session.source_assigned_plan_id && (
         <View style={styles.trainerBadge}>
           <Ionicons name="fitness" size={12} color={colors.blue} />
@@ -196,7 +256,22 @@ const makeStyles = (colors) =>
     container: { flex: 1, backgroundColor: colors.bg },
     dim: { color: colors.textDim, padding: 16 },
 
-    name: { color: colors.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.4 },
+    nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    name: { color: colors.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.4, flex: 1 },
+    nameInput: {
+      flex: 1,
+      color: colors.text,
+      fontSize: 22,
+      fontWeight: '700',
+      paddingVertical: 4,
+      paddingHorizontal: 8,
+      backgroundColor: colors.card,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.primary,
+    },
+    iconBtn: { padding: 6 },
+    iconBtnDisabled: { opacity: 0.4 },
     sub: { color: colors.textDim, marginTop: 4, marginBottom: 18, fontSize: 13 },
     trainerBadge: {
       flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',

@@ -298,6 +298,16 @@ export async function saveSession(session) {
   return sessionId;
 }
 
+export async function updateSessionName(sessionId, newName) {
+  const db = await getDb();
+  const userId = currentUserId;
+  if (!userId) return;
+  await db.runAsync(
+    'UPDATE workout_sessions SET name = ?, synced = 0 WHERE id = ? AND user_id = ?',
+    [newName.trim(), sessionId, userId]
+  );
+}
+
 export async function deleteSession(id) {
   const db = await getDb();
   const userId = currentUserId;
