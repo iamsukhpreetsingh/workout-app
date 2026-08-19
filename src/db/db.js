@@ -122,6 +122,26 @@ async function ensureBaseTables(db) {
     id INTEGER PRIMARY KEY, date TEXT NOT NULL, file_path TEXT NOT NULL,
     angle TEXT, created_at TEXT NOT NULL
   );`);
+  await db.execAsync(`CREATE TABLE IF NOT EXISTS sync_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_id TEXT NOT NULL UNIQUE,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    operation TEXT NOT NULL CHECK (operation IN ('CREATE', 'UPDATE', 'DELETE')),
+    payload TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SYNCING', 'COMPLETED', 'FAILED'))
+  );`);
+  await db.execAsync(`CREATE TABLE IF NOT EXISTS sync_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    sync_mode TEXT NOT NULL DEFAULT 'auto' CHECK (sync_mode IN ('auto', 'manual', 'local')),
+    last_synced_at INTEGER,
+    sync_enabled INTEGER NOT NULL DEFAULT 1
+  );`);
+  await db.runAsync('INSERT OR IGNORE INTO sync_settings (id) VALUES (1)');
   const count = await db.getFirstAsync('SELECT COUNT(*) AS c FROM exercises');
   if (count.c === 0) {
     for (const ex of SEED_EXERCISES) {
@@ -398,6 +418,29 @@ const MIGRATIONS = [
     await addColumnSafe(db, 'workout_sessions', 'user_id', 'TEXT');
     // Delete all sessions without user_id (legacy data from before this fix)
     await db.runAsync('DELETE FROM workout_sessions WHERE user_id IS NULL OR user_id = ""');
+  },
+  // v22: sync queue and sync settings for offline-first sync
+  async (db) => {
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS sync_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      operation_id TEXT NOT NULL UNIQUE,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      operation TEXT NOT NULL CHECK (operation IN ('CREATE', 'UPDATE', 'DELETE')),
+      payload TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SYNCING', 'COMPLETED', 'FAILED'))
+    );`);
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS sync_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      sync_mode TEXT NOT NULL DEFAULT 'auto' CHECK (sync_mode IN ('auto', 'manual', 'local')),
+      last_synced_at INTEGER,
+      sync_enabled INTEGER NOT NULL DEFAULT 1
+    );`);
+    await db.runAsync('INSERT OR IGNORE INTO sync_settings (id) VALUES (1)');
   },
 ];
 

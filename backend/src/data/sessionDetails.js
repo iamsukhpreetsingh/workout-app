@@ -123,10 +123,37 @@ async function volumeByMuscleGroup(clientId, from, to) {
   return rows;
 }
 
+// List all session details for a client (for sync/pull)
+async function listForClient(clientId) {
+  const { rows } = await query(
+    `SELECT s.local_session_id, d.exercise_name, d.muscle_group, d.order_index, d.sets
+     FROM session_exercise_details d
+     JOIN session_summaries s ON s.id = d.session_summary_id
+     WHERE s.client_id = $1
+     ORDER BY s.performed_at DESC, d.order_index ASC`,
+    [clientId]
+  );
+  // Group by session
+  const result = {};
+  for (const row of rows) {
+    if (!result[row.local_session_id]) {
+      result[row.local_session_id] = [];
+    }
+    result[row.local_session_id].push({
+      exercise_name: row.exercise_name,
+      muscle_group: row.muscle_group,
+      order_index: row.order_index,
+      sets: row.sets,
+    });
+  }
+  return result;
+}
+
 module.exports = {
   upsertSessionDetails,
   getDetailsForSummary,
   listClientExercises,
   strengthTrend,
   volumeByMuscleGroup,
+  listForClient,
 };

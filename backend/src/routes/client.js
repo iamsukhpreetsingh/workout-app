@@ -7,6 +7,7 @@ const sessionDetails = require('../data/sessionDetails');
 const mealCatalog = require('../data/mealCatalog');
 const coaching = require('../data/coachingPlans');
 const notifications = require('../data/notifications');
+const workoutTemplatesSync = require('../data/workoutTemplatesSync');
 const { query } = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
@@ -371,6 +372,58 @@ router.get('/plans', requireAuth, requireRole('user'), async (req, res) => {
 router.get('/assigned-plans', requireAuth, requireRole('user'), async (req, res) => {
   try {
     res.json(await assignedPlans.listActiveForClientId(req.user.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// ---- Workout Templates Sync (offline-first) ----
+// POST /client/workout-templates — batch upsert user-created workout plans
+router.post('/workout-templates', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const rows = await workoutTemplatesSync.upsertTemplates(req.user.id, req.body);
+    res.status(201).json(rows);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+// GET /client/workout-templates — list all user's workout templates
+router.get('/workout-templates', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    res.json(await workoutTemplatesSync.listForClient(req.user.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// DELETE /client/workout-templates/:localId — delete a workout template
+router.delete('/workout-templates/:localId', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    await workoutTemplatesSync.deleteForClient(req.user.id, req.params.localId);
+    res.json({ ok: true });
+  } catch (e) {
+    httpError(res, e, 404);
+  }
+});
+
+// ---- Full Sync Pull ----
+// GET /client/sync/pull — get all user data (for initial login or restore)
+router.get('/sync/pull', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const [sessions, templates, meas, sessionDetails] = await Promise.all([
+      sessionSummaries.listForClient(req.user.id, { limit: 1000 }),
+      workoutTemplatesSync.listForClient(req.user.id).catch(() => []),
+      measurements.listMeasurements(req.user.id, {}).catch(() => []),
+      sessionDetails.listForClient(req.user.id).catch(() => []),
+    ]);
+    res.json({
+      sessions,
+      workout_templates: templates,
+      measurements: meas,
+      session_details: sessionDetails,
+      pulled_at: new Date().toISOString(),
+    });
   } catch (e) {
     httpError(res, e);
   }

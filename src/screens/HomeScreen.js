@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import { View, Text, FlatList, TouchableOpacity, Modal, StyleSheet, TextInput, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -13,6 +13,7 @@ import { api } from '../lib/api';
 import { listPins, removePin, removeStalePins, MAX_PINNED_ROUTINES } from '../db/pins';
 import { startAssignedPlan } from '../lib/startAssigned';
 import { NotificationBell } from '../components/NotificationBell';
+import { getSyncStatus, addSyncListener, initConnectivityListener, syncPending, getSyncSettings } from '../lib/sync';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -76,9 +77,28 @@ export default function HomeScreen({ navigation }) {
   const [assignedPlans, setAssignedPlans] = useState([]);
   const [pinnedItems, setPinnedItems] = useState([]);
   const { user } = useAuth();
-  // Smart default name for empty workouts (e.g. "Wednesday Workout") —
-  // non-blocking: prefilled in the choice sheet, one tap starts.
   const [emptyName, setEmptyName] = useState(smartWorkoutName());
+  const [syncStatus, setSyncStatus] = useState({ status: 'synced', pending_count: 0, isConnected: true });
+  
+  // Initialize sync and track status
+  useEffect(() => {
+    initConnectivityListener();
+    getSyncStatus().then(setSyncStatus);
+    const unsubscribe = addSyncListener((status) => {
+      if (status.type === 'SYNC_START' || status.type === 'SYNC_COMPLETE' || 
+          status.type === 'CONNECTIVITY' || status.type === 'QUEUE_CHANGED') {
+        getSyncStatus().then(setSyncStatus);
+      }
+    });
+    return unsubscribe;
+  }, []);
+  
+  const handleManualSync = async () => {
+    const result = await syncPending();
+    if (result.skipped) {
+      Alert.alert('Sync', result.reason === 'local_only' ? 'Sync is disabled (Local Only mode)' : 'No internet connection');
+    }
+  };
 
   // Contextual greeting; shared settings + profile icons (all screens)
   React.useLayoutEffect(() => {

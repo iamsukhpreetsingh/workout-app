@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { api, registerTokenHooks, tryRefresh } from '../lib/api';
 import { clearViewChoice } from '../lib/viewMode';
 import { setCurrentUserId } from '../db/queries';
+import { pullFromCloud } from '../lib/sync';
 
 // Hard auth gate for the whole app. authStatus:
 //   'checking'        → splash while restoring the session
@@ -52,6 +53,14 @@ export function AuthProvider({ children }) {
     setUser(userData);
     setCurrentUserId(userData.id);
     setAuthStatus('authenticated');
+    
+    // Pull data from cloud after successful login
+    try {
+      const result = await pullFromCloud();
+      console.log('[AUTH] Pulled from cloud:', result);
+    } catch (e) {
+      console.log('[AUTH] Pull from cloud failed (non-fatal):', e.message);
+    }
   }, []);
 
   // Launch sequence: splash → check stored tokens → silent refresh if
@@ -76,6 +85,8 @@ export function AuthProvider({ children }) {
           setUser(me);
           setCurrentUserId(me.id);
           setAuthStatus('authenticated');
+          // Pull data from cloud after session restore
+          pullFromCloud().catch(e => console.log('[AUTH] Pull failed:', e.message));
           return;
         } catch {
           // fall through to refresh attempt
@@ -88,6 +99,8 @@ export function AuthProvider({ children }) {
           setUser(me);
           setCurrentUserId(me.id);
           setAuthStatus('authenticated');
+          // Pull data from cloud after session restore
+          pullFromCloud().catch(e => console.log('[AUTH] Pull failed:', e.message));
           return;
         } catch {
           // fall through

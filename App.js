@@ -46,6 +46,8 @@ import AssignWorkoutPickerScreen from './src/screens/AssignWorkoutPickerScreen';
 import ActiveWorkoutMiniBar from './src/components/ActiveWorkoutMiniBar';
 import NotificationCenterScreen from './src/screens/NotificationCenterScreen';
 import TagManagerScreen from './src/screens/TagManagerScreen';
+import SyncSettingsScreen from './src/screens/SyncSettingsScreen';
+import { initConnectivityListener } from './src/lib/sync';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -120,6 +122,7 @@ function MainStack({ onSwitchView }) {
       <Stack.Screen name="Settings">
         {(props) => <SettingsScreen {...props} onSwitchView={isTrainer ? onSwitchView : undefined} />}
       </Stack.Screen>
+      <Stack.Screen name="SyncSettings" component={SyncSettingsScreen} options={{ title: 'Data & Sync' }} />
       <Stack.Screen name="Profile" component={ProfileScreen} options={{ title: 'Profile' }} />
       <Stack.Screen name="Body" component={BodyScreen} options={{ title: 'Body' }} />
       <Stack.Screen name="ClientDetail" component={ClientDetailScreen} options={{ title: 'Client' }} />
@@ -261,6 +264,8 @@ function AppContent() {
   // Invisible sync catch-up on foreground while authenticated.
   useEffect(() => {
     if (authStatus !== 'authenticated') return;
+    // Initialize connectivity listener for offline-first sync
+    initConnectivityListener();
     syncPendingSessions();
     syncPendingMeasurements();
     const sub = AppState.addEventListener('change', (state) => {

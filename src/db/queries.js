@@ -1,6 +1,7 @@
 import { getDb } from './db';
 import { checkAndRecordPR, recomputePRsForExercise } from './pr';
 import { getCurrentUserId, setCurrentUserId } from './userId';
+import { addToSyncQueue, ENTITY_TYPES, syncPending } from '../lib/sync';
 
 export { setCurrentUserId, getCurrentUserId };
 
@@ -133,6 +134,23 @@ export async function createPlan(name, notes, exercises, tags = []) {
       ]
     );
   }
+  
+  // Add to sync queue
+  await addToSyncQueue(ENTITY_TYPES.WORKOUT_PLAN, String(planId), 'CREATE', {
+    local_plan_id: String(planId),
+    name,
+    notes: notes || null,
+    exercises: exercises.map((e, i) => ({
+      exercise_id: e.exerciseId,
+      target_sets: e.targetSets || 3,
+      rest_seconds: e.restSeconds || 90,
+      order_index: i,
+    })),
+    tags,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  
   return planId;
 }
 
@@ -140,7 +158,18 @@ export async function deletePlan(id) {
   const db = await getDb();
   const userId = getCurrentUserId();
   if (!userId) return;
+  
+  // Get plan details before delete for sync
+  const plan = await db.getFirstAsync('SELECT * FROM workout_plans WHERE id = ? AND user_id = ?', [id, userId]);
+  
   await db.runAsync('DELETE FROM workout_plans WHERE id = ? AND user_id = ?', [id, userId]);
+  
+  // Add to sync queue for delete
+  if (plan) {
+    await addToSyncQueue(ENTITY_TYPES.WORKOUT_PLAN, String(id), 'DELETE', {
+      local_plan_id: String(id),
+    });
+  }
 }
 
 export async function updatePlan(id, name, notes, exercises, tags = []) {
@@ -167,6 +196,22 @@ export async function updatePlan(id, name, notes, exercises, tags = []) {
       ]
     );
   }
+  
+  // Add to sync queue
+  await addToSyncQueue(ENTITY_TYPES.WORKOUT_PLAN, String(id), 'UPDATE', {
+    local_plan_id: String(id),
+    name,
+    notes: notes || null,
+    exercises: exercises.map((e, i) => ({
+      exercise_id: e.exerciseId,
+      target_sets: e.targetSets || 3,
+      rest_seconds: e.restSeconds || 90,
+      order_index: i,
+    })),
+    tags,
+    updated_at: new Date().toISOString(),
+  });
+  
   return id;
 }
 
@@ -235,17 +280,33 @@ export async function saveSession(session) {
   if (sessionId) {
     await db.runAsync('DELETE FROM session_exercises WHERE session_id = ?', [sessionId]);
     await db.runAsync(
-      `UPDATE workout_sessions SET name = ?, end_time = ?, duration_sec = ?, notes = ?
+      `UPDATE workout_sessions SET name = ?, end_time = ?, duration_sec = ?, notes = ?, synced = 0
        WHERE id = ? AND user_id = ?`,
       [session.name, session.end_time, session.duration_sec, session.notes || null, sessionId, userId]
     );
+    // Add to sync queue for update
+    await addToSyncQueue(ENTITY_TYPES.SESSION, String(sessionId), 'UPDATE', {
+      local_session_id: String(sessionId),
+      name: session.name,
+      performed_at: new Date(session.start_time).toISOString(),
+      duration_seconds: session.duration_sec,
+    });
   } else {
     const result = await db.runAsync(
-      `INSERT INTO workout_sessions (name, start_time, end_time, duration_sec, notes, plan_id, source_assigned_plan_id, user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO workout_sessions (name, start_time, end_time, duration_sec, notes, plan_id, source_assigned_plan_id, user_id, synced)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       [session.name, session.start_time, session.end_time, session.duration_sec, session.notes || null, session.plan_id || null, session.sourceAssignedPlanId || null, userId]
     );
     sessionId = result.lastInsertRowId;
+    
+    // Add to sync queue for create
+    await addToSyncQueue(ENTITY_TYPES.SESSION, String(sessionId), 'CREATE', {
+      local_session_id: String(sessionId),
+      name: session.name,
+      performed_at: new Date(session.start_time).toISOString(),
+      duration_seconds: session.duration_sec,
+      exercise_count: session.exercises?.length || 0,
+    });
   }
   for (let i = 0; i < session.exercises.length; i++) {
     const ex = session.exercises[i];
@@ -299,6 +360,13 @@ export async function updateSessionName(sessionId, newName) {
     'UPDATE workout_sessions SET name = ?, synced = 0 WHERE id = ? AND user_id = ?',
     [newName.trim(), sessionId, userId]
   );
+  // Add to sync queue for update
+  await addToSyncQueue(ENTITY_TYPES.SESSION, String(sessionId), 'UPDATE', {
+    local_session_id: String(sessionId),
+    name: newName.trim(),
+  });
+  // Trigger immediate sync attempt
+  syncPending().catch(e => console.log('[SYNC] Background sync failed:', e.message));
 }
 
 export async function deleteSession(id) {

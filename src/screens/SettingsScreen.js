@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Switch, ScrollView, Alert } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { getSettings, updateSettings } from '../db/settings';
 import { useColors } from '../theme';
 import { useApp } from '../store/AppContext';
@@ -10,6 +12,7 @@ import { getPendingSyncCount } from '../db/queries';
 export default function SettingsScreen({ onSwitchView }) {
   const { themeMode, setThemeMode } = useApp();
   const { logout } = useAuth();
+  const navigation = useNavigation();
   const [trainer, setTrainer] = useState(null); // active association state
 
   useEffect(() => {
@@ -221,6 +224,18 @@ export default function SettingsScreen({ onSwitchView }) {
         />
         <Text style={[styles.hint, { color: colors.textDim }]}>Compare current week vs. 4-week average.</Text>
       </View>
+
+      <TouchableOpacity 
+        style={[styles.card, { backgroundColor: colors.card, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
+        onPress={() => navigation.navigate('SyncSettings')}
+      >
+        <View>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Data & Sync</Text>
+          <Text style={[styles.hint, { color: colors.textDim }]}>Backup settings, sync preferences, offline mode</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
+      </TouchableOpacity>
+
       {trainer ? (
         <View style={[styles.card, { backgroundColor: colors.card }]}>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Trainer</Text>
