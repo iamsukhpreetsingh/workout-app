@@ -411,17 +411,17 @@ router.delete('/workout-templates/:localId', requireAuth, requireRole('user'), a
 // GET /client/sync/pull — get all user data (for initial login or restore)
 router.get('/sync/pull', requireAuth, requireRole('user'), async (req, res) => {
   try {
-    const [sessions, templates, meas, sessionDetails] = await Promise.all([
+    const [sessions, templates, meas, sessionDetailsData] = await Promise.all([
       sessionSummaries.listForClient(req.user.id, { limit: 1000 }),
       workoutTemplatesSync.listForClient(req.user.id).catch(() => []),
       measurements.listMeasurements(req.user.id, {}).catch(() => []),
-      sessionDetails.listForClient(req.user.id).catch(() => []),
+      sessionDetails.listForClient ? sessionDetails.listForClient(req.user.id).catch(() => ({})) : Promise.resolve({}),
     ]);
     res.json({
       sessions,
       workout_templates: templates,
       measurements: meas,
-      session_details: sessionDetails,
+      session_details: sessionDetailsData,
       pulled_at: new Date().toISOString(),
     });
   } catch (e) {
