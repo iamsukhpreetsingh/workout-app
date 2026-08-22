@@ -96,7 +96,7 @@ export async function createRecipe(item) {
         carbs_g, fat_g, serving_size, recipe_url, photo_path, ingredients, allergens,
         prep_time_minutes, cook_time_minutes, difficulty, suggested_meal_types,
         is_favorite, alternate_servings, tags, created_at, updated_at)
-     VALUES (?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     VALUES (?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [localId, userId, String(item.name || '').trim(), item.description ?? null, item.prep_notes ?? null,
      item.calories ?? null, item.protein_g ?? null, item.carbs_g ?? null, item.fat_g ?? null,
      item.serving_size ?? null, item.recipe_url ?? null, item.photo_path ?? null,
