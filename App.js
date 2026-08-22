@@ -54,6 +54,8 @@ import { initSyncEngine } from './src/lib/syncEngine';
 import { runBackfillIfNeeded } from './src/lib/backfill';
 import { isRestoreNeeded } from './src/lib/restore';
 import RestoreScreen from './src/screens/RestoreScreen';
+import { getLocalOnlyReminderState, markLocalOnlyReminderShown, hasUnsyncedBackupData } from './src/lib/localOnly';
+import { getSyncSettings, setSyncMode } from './src/lib/sync';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -408,6 +410,28 @@ function AppContent() {
         setRestorePending(true); // couldn't even check — overlay handles retry
       }
     })();
+
+
+        // System 7 #3: 14-day periodic Local Only reminder (once per session at
+    // most, dismissible, non-blocking)
+    (async () => {
+      try {
+        const settings = await getSyncSettings();
+        if (settings.sync_mode !== 'local') return;
+        const state = await getLocalOnlyReminderState();
+        if (!state.due) return;
+        markLocalOnlyReminderShown();
+        Alert.alert(
+          'Reminder',
+          'your data is still Local Only and not backed up. [Switch to Automatic] [Dismiss]',
+          [
+            { text: 'Dismiss', style: 'cancel' },
+            { text: 'Switch to Automatic', onPress: () => setSyncMode('auto') },
+          ]
+        );
+      } catch {}
+    })();
+
 
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {

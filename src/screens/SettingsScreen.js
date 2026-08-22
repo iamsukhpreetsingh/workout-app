@@ -8,12 +8,19 @@ import { useApp } from '../store/AppContext';
 import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
 import { getPendingSyncCount } from '../db/queries';
+import { getSyncSettings } from '../lib/sync';
 
 export default function SettingsScreen({ onSwitchView }) {
   const { themeMode, setThemeMode } = useApp();
   const { user, logout } = useAuth();
   const navigation = useNavigation();
   const [trainer, setTrainer] = useState(null); // active association state
+
+  const [isLocalOnly, setIsLocalOnly] = useState(false);
+
+  useEffect(() => {
+    getSyncSettings().then((s) => setIsLocalOnly(s.sync_mode === 'local')).catch(() => {});
+  }, []);
 
   useEffect(() => {
     api('/client/trainer')
@@ -113,6 +120,12 @@ export default function SettingsScreen({ onSwitchView }) {
 
   return (
     <ScrollView style={[styles.container, { backgroundColor: colors.bg }]} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+      {isLocalOnly && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1.5, borderColor: colors.red, borderRadius: 12, padding: 12, marginBottom: 12, backgroundColor: colors.card }}>
+          <Ionicons name="lock-closed" size={15} color={colors.red} />
+          <Text style={{ color: colors.red, fontWeight: '800', fontSize: 13, flex: 1 }}>Local Only — not backed up</Text>
+        </View>
+      )}
 
       <View style={[styles.card, { backgroundColor: colors.card }]}>
         <Text style={[styles.cardTitle, { color: colors.text }]}>Appearance</Text>

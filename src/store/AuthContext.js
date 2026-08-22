@@ -4,6 +4,9 @@ import { api, registerTokenHooks, tryRefresh } from '../lib/api';
 import { clearViewChoice } from '../lib/viewMode';
 import { setCurrentUserId } from '../db/queries';
 import { pullFromCloud } from '../lib/sync';
+import { getSyncSettings } from '../lib/sync';
+import { hasUnsyncedBackupData } from '../lib/localOnly';
+import { Alert } from 'react-native';
 
 // Hard auth gate for the whole app. authStatus:
 //   'checking'        → splash while restoring the session
@@ -146,7 +149,29 @@ export function AuthProvider({ children }) {
     [applySession]
   );
 
-  const logout = useCallback(async () => {
+  // const logout = useCallback(async () => {
+
+      const logout = useCallback(async () => {
+    // System 7 #4: blocking confirmation when local_only + genuinely
+    // unsynced data exists (local data is NOT deleted on same-device
+    // logout — the warning corrects the "data follows the account" assumption)
+    try {
+      const settings = await getSyncSettings();
+      if (settings.sync_mode === 'local' && (await hasUnsyncedBackupData())) {
+        const proceed = await new Promise((resolve) => {
+          Alert.alert(
+            'Unsynced local-only data',
+            'You have local-only data that has never been backed up. Logging out will not delete it from this device, but if you log in again on a different device, this data will not be there. Continue?',
+            [
+              { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Continue', style: 'destructive', onPress: () => resolve(true) },
+            ],
+            { cancelable: true }
+          );
+        });
+        if (!proceed) return;
+      }
+    } catch { /* warning is best-effort; logout proceeds */ }
     // logging out clears the trainer's persisted view choice — they choose
     // again on next login
     clearViewChoice();

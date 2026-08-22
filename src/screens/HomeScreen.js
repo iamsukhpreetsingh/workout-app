@@ -85,8 +85,11 @@ export default function HomeScreen({ navigation }) {
     initConnectivityListener();
     getSyncStatus().then(setSyncStatus);
     const unsubscribe = addSyncListener((status) => {
-      if (status.type === 'SYNC_START' || status.type === 'SYNC_COMPLETE' || 
-          status.type === 'CONNECTIVITY' || status.type === 'QUEUE_CHANGED') {
+      // if (status.type === 'SYNC_START' || status.type === 'SYNC_COMPLETE' || 
+      //     status.type === 'CONNECTIVITY' || status.type === 'QUEUE_CHANGED') {
+          if (status.type === 'SYNC_START' || status.type === 'SYNC_COMPLETE' ||
+          status.type === 'CONNECTIVITY' || status.type === 'QUEUE_CHANGED' ||
+          status.type === 'SETTINGS_CHANGED') {
         getSyncStatus().then(setSyncStatus);
       }
     });
@@ -288,6 +291,15 @@ export default function HomeScreen({ navigation }) {
                 <Ionicons name="arrow-forward" size={18} color={colors.primary} />
               </View>
             </TouchableOpacity>
+
+            {/* Local Only echo — subtle, always visible while active */}
+            {syncStatus.sync_mode === 'local' && (
+              <View style={styles.localOnlyEcho}>
+                <Ionicons name="lock-closed" size={11} color={colors.textDim} />
+                <Text style={styles.localOnlyEchoText}>Local Only — not backed up</Text>
+              </View>
+            )}
+
 
             {/* ── Zone 2: quiet streak pip ──────────────────────────── */}
             {streak.current > 0 && (
@@ -520,6 +532,11 @@ const makeStyles = (colors) =>
     streakNum: { color: colors.text, fontSize: 19, fontWeight: '800' },
     streakWord: { color: colors.textDim, fontSize: 13, marginRight: 8 },
     streakBest: { color: colors.textDim, fontSize: 11, opacity: 0.7 },
+        localOnlyEcho: {
+      flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start',
+      marginTop: 10, paddingLeft: 4,
+    },
+    localOnlyEchoText: { color: colors.textDim, fontSize: 11, fontWeight: '700' },
 
     // ── Section headers
     sectionHeaderRow: {
