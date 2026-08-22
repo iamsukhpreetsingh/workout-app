@@ -20,11 +20,24 @@ async function enqueueUnsyncedPRs() {
 
 
 
-// ---------- Exercises ----------
+// // ---------- Exercises ----------
+// export async function listExercises() {
+//   const db = await getDb();
+//   return db.getAllAsync('SELECT * FROM exercises ORDER BY muscle_group, name');
+// }
+
+
 export async function listExercises() {
   const db = await getDb();
-  return db.getAllAsync('SELECT * FROM exercises ORDER BY muscle_group, name');
+  const userId = getCurrentUserId();
+  if (!userId) return [];
+  // seeds (user_id NULL) are device-shared; customs are account-scoped
+  return db.getAllAsync(
+    `SELECT * FROM exercises WHERE user_id IS NULL OR user_id = ? ORDER BY muscle_group, name`,
+    [userId]
+  );
 }
+
 
 // export async function createExercise(name, muscleGroup) {
 //   const db = await getDb();
@@ -36,17 +49,38 @@ export async function listExercises() {
 // }
 
 
+// export async function createExercise(name, muscleGroup) {
+//   const db = await getDb();
+//   const result = await db.runAsync(
+//     'INSERT INTO exercises (name, muscle_group, is_custom) VALUES (?, ?, 1)',
+//     [name.trim(), muscleGroup]
+//   );
+//   // custom exercises are real user data — queue the backup (the old system
+//   // never synced these, which corrupted restores on fresh devices)
+//   await enqueueUpsert('custom_exercise', String(result.lastInsertRowId));
+//   return result.lastInsertRowId;
+// }
+
+
+
 export async function createExercise(name, muscleGroup) {
   const db = await getDb();
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('User not authenticated');
+  const trimmed = name.trim();
+  const clash = await db.getFirstAsync('SELECT id FROM exercises WHERE name = ?', [trimmed]);
+  if (clash) throw new Error(`An exercise named "${trimmed}" already exists`);
   const result = await db.runAsync(
-    'INSERT INTO exercises (name, muscle_group, is_custom) VALUES (?, ?, 1)',
-    [name.trim(), muscleGroup]
+    'INSERT INTO exercises (name, muscle_group, is_custom, user_id) VALUES (?, ?, 1, ?)',
+    [trimmed, muscleGroup, userId]
   );
-  // custom exercises are real user data — queue the backup (the old system
-  // never synced these, which corrupted restores on fresh devices)
   await enqueueUpsert('custom_exercise', String(result.lastInsertRowId));
   return result.lastInsertRowId;
 }
+
+
+
+
 
 
 export async function getExerciseHistory(exerciseId, limit = 50) {

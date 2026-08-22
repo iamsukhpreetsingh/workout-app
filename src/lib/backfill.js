@@ -27,9 +27,26 @@ async function stampBackfillFor(userId) {
   await db.runAsync('UPDATE user_settings SET backfill_v1_done = ? WHERE id = 1', [JSON.stringify(map)]);
 }
 
+
+// One-time claim: pre-upgrade custom exercises have no owner; the first
+// account to log in after the v26 upgrade takes them. Idempotent — no NULL
+// customs remain after the first claim, so later logins no-op.
+async function adoptLegacyCustomExercises(userId) {
+  const db = await getDb();
+  await db.runAsync(
+    'UPDATE exercises SET user_id = ? WHERE is_custom = 1 AND user_id IS NULL',
+    [userId]
+  );
+}
+
+
+
 export async function runBackfillIfNeeded() {
   const userId = getCurrentUserId();
+  // if (!userId) return false;
+  // if (await backfillDoneFor(userId)) return false;
   if (!userId) return false;
+  await adoptLegacyCustomExercises(userId);
   if (await backfillDoneFor(userId)) return false;
   const db = await getDb();
 
@@ -45,8 +62,11 @@ export async function runBackfillIfNeeded() {
   for (const p of plans) await enqueueUpsert('workout_plan', String(p.id));
 
   // exercises/PRs/photos aren't user-scoped (single-owner-per-device design)
-  const customs = await db.getAllAsync(
-    'SELECT id FROM exercises WHERE is_custom = 1 AND synced = 0');
+  // const customs = await db.getAllAsync(
+  //   'SELECT id FROM exercises WHERE is_custom = 1 AND synced = 0');
+    const customs = await db.getAllAsync(
+    'SELECT id FROM exercises WHERE is_custom = 1 AND synced = 0 AND (user_id = ? OR user_id IS NULL)',
+    [userId]);
   for (const e of customs) await enqueueUpsert('custom_exercise', String(e.id));
 
   const prs = await db.getAllAsync('SELECT id FROM personal_records WHERE synced = 0');

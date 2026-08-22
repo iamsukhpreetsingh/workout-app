@@ -50,7 +50,8 @@ import NotificationCenterScreen from './src/screens/NotificationCenterScreen';
 import TagManagerScreen from './src/screens/TagManagerScreen';
 import SyncSettingsScreen from './src/screens/SyncSettingsScreen';
 import { initConnectivityListener } from './src/lib/sync';
-import { initSyncEngine } from './src/lib/syncEngine';
+// import { initSyncEngine } from './src/lib/syncEngine';
+import { initSyncEngine, resyncQueueForCurrentUser } from './src/lib/syncEngine';
 import { runBackfillIfNeeded } from './src/lib/backfill';
 import { isRestoreNeeded } from './src/lib/restore';
 import RestoreScreen from './src/screens/RestoreScreen';
@@ -391,6 +392,10 @@ function AppContent() {
     if (authStatus !== 'authenticated') return;
     // unified engine: connectivity listener, crash reset, 10-min safety net
     initSyncEngine();
+        // rebuild the sync queue from ONLY this account's unsynced data —
+    // another account's pending items are never uploaded or failed under
+    // the wrong user
+    resyncQueueForCurrentUser();
     // legacy shim + trainer-facing (redacted) pushes — mode-gated
     initConnectivityListener();
     syncPendingSessions();

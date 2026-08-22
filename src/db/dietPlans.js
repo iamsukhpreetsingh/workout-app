@@ -185,33 +185,112 @@ export async function createDietPlan(payload) {
   return localId;
 }
 
+// export async function updateDietPlan(localId, payload) {
+//   const db = await getDb();
+//   const userId = getCurrentUserId();
+//   if (!userId) return;
+//   await deletePlanTree(db, localId);
+//   await writePlanTree(db, userId, localId, payload, Date.now());
+//   await db.runAsync('UPDATE local_diet_plans SET synced = 0, updated_at = ? WHERE local_id = ?', [Date.now(), localId]);
+//   await enqueueUpsert('diet_plan', localId);
+// }
+
+// async function writePlanTree(db, userId, planLocalId, payload, now) {
+//   const p = payload || {};
+//   await db.runAsync(
+//     `INSERT INTO local_diet_plans
+//        (local_id, user_id, synced, name, notes, tags,
+//         daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
+//         created_at, updated_at)
+//      VALUES (?,?,0,?,?,?,?,?,?,?,?,?)`,
+//     [planLocalId, userId, String(p.name || 'Diet Plan').trim(), p.notes ?? null, arr(p.tags),
+//      p.daily_calorie_target ?? null, p.daily_protein_target ?? null,
+//      p.daily_carbs_target ?? null, p.daily_fat_target ?? null, now, now]
+//   );
+//   for (let di = 0; di < (p.days || []).length; di++) {
+//     const d = p.days[di] || {};
+//     const dayLocal = `${planLocalId}:d${di}`;
+//     await db.runAsync(
+//       `INSERT INTO local_diet_plan_days (local_id, diet_plan_local_id, day_label, order_index)
+//        VALUES (?,?,?,?)`,
+//       [dayLocal, planLocalId, d.day_label || `Day ${di + 1}`, di]
+//     );
+//     for (let mi = 0; mi < (d.meals || []).length; mi++) {
+//       const m = d.meals[mi] || {};
+//       const mealLocal = `${dayLocal}:m${mi}`;
+//       await db.runAsync(
+//         `INSERT INTO local_diet_plan_meals (local_id, diet_day_local_id, meal_type, order_index, slot_note)
+//          VALUES (?,?,?,?,?)`,
+//         [mealLocal, dayLocal, m.meal_type || 'Meal', mi, m.slot_note || null]
+//       );
+//       for (let ii = 0; ii < (m.items || []).length; ii++) {
+//         const it = m.items[ii] || {};
+//         await db.runAsync(
+//           `INSERT INTO local_diet_plan_meal_items
+//              (local_id, diet_meal_local_id, local_recipe_id, name, calories, protein_g, carbs_g, fat_g,
+//               serving_size, recipe_url, quantity_multiplier, client_note, order_index, photo_path,
+//               ingredients, allergens, prep_time_minutes, cook_time_minutes, difficulty,
+//               alternate_servings, tags)
+//            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+//           [`${mealLocal}:i${ii}`, mealLocal,
+//            it.catalog_item_id || it.local_recipe_id || null, // recipe local id
+//            String(it.name || 'Item').trim(),
+//            it.calories ?? null, it.protein_g ?? null, it.carbs_g ?? null, it.fat_g ?? null,
+//            it.serving_size ?? null, it.recipe_url ?? null, it.quantity_multiplier ?? 1,
+//            it.client_note || null, ii, it.photo_path ?? null,
+//            arr(it.ingredients), arr(it.allergens), it.prep_time_minutes ?? null,
+//            it.cook_time_minutes ?? null, it.difficulty ?? null,
+//            JSON.stringify(Array.isArray(it.alternate_servings) ? it.alternate_servings : []),
+//            arr(it.tags)]
+//         );
+//       }
+//     }
+//   }
+// }
+
+
+
 export async function updateDietPlan(localId, payload) {
   const db = await getDb();
   const userId = getCurrentUserId();
   if (!userId) return;
+  // capture created_at so an edit doesn't reset the plan's creation date
+  const existing = await db.getFirstAsync(
+    'SELECT created_at FROM local_diet_plans WHERE local_id = ? AND user_id = ?',
+    [localId, userId]
+  );
+  const createdAt = existing?.created_at || Date.now();
+  // BUGFIX: the previous version deleted the plan's days/meals/items but
+  // NOT the plan row itself — writePlanTree's INSERT then crashed with
+  // "UNIQUE constraint failed: local_diet_plans.local_id" on every edit.
+  // The plan row must be removed too before the tree is rewritten.
   await deletePlanTree(db, localId);
-  await writePlanTree(db, userId, localId, payload, Date.now());
-  await db.runAsync('UPDATE local_diet_plans SET synced = 0, updated_at = ? WHERE local_id = ?', [Date.now(), localId]);
+  await db.runAsync('DELETE FROM local_diet_plans WHERE local_id = ?', [localId]);
+  await writePlanTree(db, userId, localId, payload, Date.now(), createdAt);
   await enqueueUpsert('diet_plan', localId);
 }
 
-async function writePlanTree(db, userId, planLocalId, payload, now) {
+// payload shape: exactly what DietPlanBuilderScreen.save() builds today
+// ({ name, notes, daily_*_target, days: [{ day_label, meals: [{ meal_type,
+// slot_note, items: [...] }] }] }). catalog_item_id carries the recipe's
+// local id in self mode.
+async function writePlanTree(db, userId, planLocalId, payload, now, createdAt) {
   const p = payload || {};
   await db.runAsync(
-    `INSERT INTO local_diet_plans
+    `INSERT OR REPLACE INTO local_diet_plans
        (local_id, user_id, synced, name, notes, tags,
         daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
         created_at, updated_at)
      VALUES (?,?,0,?,?,?,?,?,?,?,?,?)`,
     [planLocalId, userId, String(p.name || 'Diet Plan').trim(), p.notes ?? null, arr(p.tags),
      p.daily_calorie_target ?? null, p.daily_protein_target ?? null,
-     p.daily_carbs_target ?? null, p.daily_fat_target ?? null, now, now]
+     p.daily_carbs_target ?? null, p.daily_fat_target ?? null, createdAt ?? now, now]
   );
   for (let di = 0; di < (p.days || []).length; di++) {
     const d = p.days[di] || {};
     const dayLocal = `${planLocalId}:d${di}`;
     await db.runAsync(
-      `INSERT INTO local_diet_plan_days (local_id, diet_plan_local_id, day_label, order_index)
+      `INSERT OR REPLACE INTO local_diet_plan_days (local_id, diet_plan_local_id, day_label, order_index)
        VALUES (?,?,?,?)`,
       [dayLocal, planLocalId, d.day_label || `Day ${di + 1}`, di]
     );
@@ -219,21 +298,21 @@ async function writePlanTree(db, userId, planLocalId, payload, now) {
       const m = d.meals[mi] || {};
       const mealLocal = `${dayLocal}:m${mi}`;
       await db.runAsync(
-        `INSERT INTO local_diet_plan_meals (local_id, diet_day_local_id, meal_type, order_index, slot_note)
+        `INSERT OR REPLACE INTO local_diet_plan_meals (local_id, diet_day_local_id, meal_type, order_index, slot_note)
          VALUES (?,?,?,?,?)`,
         [mealLocal, dayLocal, m.meal_type || 'Meal', mi, m.slot_note || null]
       );
       for (let ii = 0; ii < (m.items || []).length; ii++) {
         const it = m.items[ii] || {};
         await db.runAsync(
-          `INSERT INTO local_diet_plan_meal_items
+          `INSERT OR REPLACE INTO local_diet_plan_meal_items
              (local_id, diet_meal_local_id, local_recipe_id, name, calories, protein_g, carbs_g, fat_g,
               serving_size, recipe_url, quantity_multiplier, client_note, order_index, photo_path,
               ingredients, allergens, prep_time_minutes, cook_time_minutes, difficulty,
               alternate_servings, tags)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [`${mealLocal}:i${ii}`, mealLocal,
-           it.catalog_item_id || it.local_recipe_id || null, // recipe local id
+           it.catalog_item_id || it.local_recipe_id || null,
            String(it.name || 'Item').trim(),
            it.calories ?? null, it.protein_g ?? null, it.carbs_g ?? null, it.fat_g ?? null,
            it.serving_size ?? null, it.recipe_url ?? null, it.quantity_multiplier ?? 1,
@@ -247,6 +326,8 @@ async function writePlanTree(db, userId, planLocalId, payload, now) {
     }
   }
 }
+
+
 
 async function deletePlanTree(db, planLocalId) {
   await db.runAsync(

@@ -5,8 +5,11 @@ import {
   FlatList,
   Text,
   TextInput,
+  // TouchableOpacity,
+  // Pressable,
   TouchableOpacity,
   Pressable,
+  Alert,
 } from 'react-native';
 import { listExercises, createExercise, getExerciseHistory, getExerciseBest } from '../db/queries';
 import { MUSCLE_GROUPS } from '../seed/exercises';
@@ -91,12 +94,24 @@ export default function ExercisePicker({ visible, onClose, onPick }) {
     onClose();
   };
 
-  const addCustom = async () => {
+  // const addCustom = async () => {
+  //   if (!newName.trim()) return;
+  //   const id = await createExercise(newName, newGroup);
+  //   setExercises(await listExercises());
+  //   setNewName('');
+  //   setShowAdd(false);
+  // };
+
+    const addCustom = async () => {
     if (!newName.trim()) return;
-    const id = await createExercise(newName, newGroup);
-    setExercises(await listExercises());
-    setNewName('');
-    setShowAdd(false);
+    try {
+      const id = await createExercise(newName, newGroup);
+      setExercises(await listExercises());
+      setNewName('');
+      setShowAdd(false);
+    } catch (e) {
+      Alert.alert('Could not add exercise', e.message || 'Please try again.');
+    }
   };
 
   return (

@@ -172,7 +172,11 @@ export async function enqueueDelete(entityType, localId, hadServerBackup) {
 // ── payload builders (fresh from DB — the anti-zeroing guarantee) ───────
 async function buildSessionPayload(sid) {
   const db = await getDb();
-  const s = await db.getFirstAsync('SELECT * FROM workout_sessions WHERE id = ?', [sid]);
+  // const s = await db.getFirstAsync('SELECT * FROM workout_sessions WHERE id = ?', [sid]);
+    const s = await db.getFirstAsync(
+    'SELECT * FROM workout_sessions WHERE id = ? AND user_id = ?',
+    [sid, getCurrentUserId()]
+  );
   if (!s) return null;
   const exs = await db.getAllAsync(
     `SELECT se.*, e.name AS exercise_name, e.muscle_group AS ex_muscle
@@ -221,7 +225,11 @@ async function buildSessionPayload(sid) {
 
 async function buildPlanPayload(pid) {
   const db = await getDb();
-  const p = await db.getFirstAsync('SELECT * FROM workout_plans WHERE id = ?', [pid]);
+  // const p = await db.getFirstAsync('SELECT * FROM workout_plans WHERE id = ?', [pid]);
+    const p = await db.getFirstAsync(
+    'SELECT * FROM workout_plans WHERE id = ? AND user_id = ?',
+    [pid, getCurrentUserId()]
+  );
   if (!p) return null;
   const exs = await db.getAllAsync(
     `SELECT pe.*, e.name AS exercise_name
@@ -254,7 +262,11 @@ function parseJsonArr(v) {
 
 async function buildRecipePayload(localId) {
   const db = await getDb();
-  const r = await db.getFirstAsync('SELECT * FROM local_recipes WHERE local_id = ?', [localId]);
+  // const r = await db.getFirstAsync('SELECT * FROM local_recipes WHERE local_id = ?', [localId]);
+    const r = await db.getFirstAsync(
+    'SELECT * FROM local_recipes WHERE local_id = ? AND user_id = ?',
+    [localId, getCurrentUserId()]
+  );
   if (!r) return null;
   return {
     local_entity_id: r.local_id,
@@ -271,7 +283,11 @@ async function buildRecipePayload(localId) {
 
 async function buildDietPlanPayload(localId) {
   const db = await getDb();
-  const p = await db.getFirstAsync('SELECT * FROM local_diet_plans WHERE local_id = ?', [localId]);
+  // const p = await db.getFirstAsync('SELECT * FROM local_diet_plans WHERE local_id = ?', [localId]);
+    const p = await db.getFirstAsync(
+    'SELECT * FROM local_diet_plans WHERE local_id = ? AND user_id = ?',
+    [localId, getCurrentUserId()]
+  );
   if (!p) return null;
   const days = await db.getAllAsync(
     'SELECT * FROM local_diet_plan_days WHERE diet_plan_local_id = ? ORDER BY order_index', [localId]);
@@ -309,7 +325,11 @@ async function buildDietPlanPayload(localId) {
 
 async function buildSupplementPlanPayload(localId) {
   const db = await getDb();
-  const p = await db.getFirstAsync('SELECT * FROM local_supplement_plans WHERE local_id = ?', [localId]);
+  // const p = await db.getFirstAsync('SELECT * FROM local_supplement_plans WHERE local_id = ?', [localId]);
+    const p = await db.getFirstAsync(
+    'SELECT * FROM local_supplement_plans WHERE local_id = ? AND user_id = ?',
+    [localId, getCurrentUserId()]
+  );
   if (!p) return null;
   const items = await db.getAllAsync(
     'SELECT * FROM local_supplement_plan_items WHERE supplement_plan_local_id = ? ORDER BY order_index', [localId]);
@@ -352,12 +372,40 @@ const HANDLERS = {
     async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
     deps: null,
   },
-  custom_exercise: {
+
+
+  // custom_exercise: {
+  //   path: '/user/backup/custom-exercises',
+  //   async upsert(id) {
+  //     const db = await getDb();
+  //     const e = await db.getFirstAsync('SELECT * FROM exercises WHERE id = ? AND is_custom = 1', [id]);
+  //     if (!e) return;
+  //     const rows = await api(this.path, {
+  //       method: 'POST',
+  //       body: [{ local_entity_id: String(e.id), name: e.name, muscle_group: e.muscle_group, instructions: e.instructions, thumbnail_path: e.thumbnail_path }],
+  //     });
+  //     await db.runAsync('UPDATE exercises SET synced = 1, server_id = ? WHERE id = ?', [rows?.[0]?.id || null, id]);
+  //   },
+  //   async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
+  //   deps: null,
+  // },
+
+    custom_exercise: {
     path: '/user/backup/custom-exercises',
     async upsert(id) {
       const db = await getDb();
-      const e = await db.getFirstAsync('SELECT * FROM exercises WHERE id = ? AND is_custom = 1', [id]);
-      if (!e) return;
+      const userId = getCurrentUserId();
+      const e = await db.getFirstAsync(
+        'SELECT * FROM exercises WHERE id = ? AND is_custom = 1 AND (user_id IS NULL OR user_id = ?)',
+        [id, userId]
+      );
+      // if (!e) {
+      //   // owned by another account on this device — mark FAILED so it
+      //   // retries automatically when THAT account logs in
+      //   throw new Error('Exercise belongs to another account on this device');
+      // }
+            if (!e) return; // not found or owned by ANOTHER account on this device —
+                      // skip cleanly: never back up another account's data, never fail
       const rows = await api(this.path, {
         method: 'POST',
         body: [{ local_entity_id: String(e.id), name: e.name, muscle_group: e.muscle_group, instructions: e.instructions, thumbnail_path: e.thumbnail_path }],
@@ -367,6 +415,11 @@ const HANDLERS = {
     async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
     deps: null,
   },
+
+
+
+
+
   measurement: {
     // entity_id is "date|metric_type" (composite natural key)
     path: '/user/backup/measurements',
@@ -426,8 +479,12 @@ const HANDLERS = {
     async upsert(entityId) {
       const [planLocalId, date] = String(entityId).split('|');
       const db = await getDb();
-      const c = await db.getFirstAsync(
-        'SELECT * FROM local_diet_checkins WHERE diet_plan_local_id = ? AND date = ?', [planLocalId, date]);
+
+        const c = await db.getFirstAsync(
+        'SELECT * FROM local_diet_checkins WHERE diet_plan_local_id = ? AND date = ? AND (user_id IS NULL OR user_id = ?)',
+        [planLocalId, date, getCurrentUserId()]);
+      // const c = await db.getFirstAsync(
+      //   'SELECT * FROM local_diet_checkins WHERE diet_plan_local_id = ? AND date = ?', [planLocalId, date]);
       if (!c) return;
       await api(this.path, {
         method: 'POST',
@@ -465,8 +522,12 @@ const HANDLERS = {
     async upsert(entityId) {
       const [planLocalId, date] = String(entityId).split('|');
       const db = await getDb();
-      const c = await db.getFirstAsync(
-        'SELECT * FROM local_supplement_checkins WHERE supplement_plan_local_id = ? AND date = ?', [planLocalId, date]);
+      // const c = await db.getFirstAsync(
+      //   'SELECT * FROM local_supplement_checkins WHERE supplement_plan_local_id = ? AND date = ?', [planLocalId, date]);
+        const c = await db.getFirstAsync(
+        'SELECT * FROM local_supplement_checkins WHERE supplement_plan_local_id = ? AND date = ? AND (user_id IS NULL OR user_id = ?)',
+        [planLocalId, date, getCurrentUserId()]);
+
       if (!c) return;
       await api(this.path, {
         method: 'POST',
@@ -657,6 +718,38 @@ export async function processQueue({ manual = false } = {}) {
   }
 }
 
+
+// Failed-item detail for the settings UI: which entity, which local id,
+// how many attempts, and the last recorded error. readAgo makes the
+// backoff wait human-readable ("retry in ~2m").
+export async function getFailedItems() {
+  const db = await getDb();
+  const rows = await db.getAllAsync(
+    `SELECT entity_type, entity_id, operation, retry_count, last_error, last_attempt_at
+     FROM sync_queue WHERE status = 'FAILED'
+     ORDER BY last_attempt_at DESC LIMIT 50`
+  );
+  const now = Date.now();
+  const WAIT_LABELS = ['30s', '2m', '10m', '1h'];
+  return rows.map((r) => {
+    const attempts = r.retry_count || 0;
+    const capped = attempts >= MAX_ATTEMPTS;
+    const waited = r.last_attempt_at ? now - r.last_attempt_at : Infinity;
+    // next retry is due when the current backoff window has elapsed
+    const idx = Math.min(Math.max(attempts - 1, 0), BACKOFF_MS.length - 1);
+    const remaining = Math.max(0, BACKOFF_MS[idx] - waited);
+    return {
+      entity_type: r.entity_type,
+      entity_id: r.entity_id,
+      operation: r.operation,
+      attempts,
+      capped,
+      error: r.last_error || 'Unknown error',
+      retry_in: capped ? null : remaining > 60000 ? `${Math.ceil(remaining / 60000)}m` : `${Math.ceil(remaining / 1000)}s`,
+    };
+  });
+}
+
 // ── engine status (drives the Settings UI in Phase 5) ───────────────────
 export async function getEngineStatus() {
   const db = await getDb();
@@ -671,6 +764,68 @@ export async function getEngineStatus() {
     isConnected: connectivity.isConnected,
   };
 }
+
+
+// Rebuild the queue for the account that just logged in. The queue is
+// DERIVED state — durable truth lives in each table's synced/server_id
+// flags — so every non-DELETE row is wiped and re-derived from ONLY the
+// current user's unsynced data. The queue therefore never carries another
+// account's items. DELETE rows are kept: they're user-scoped server-side
+// (a foreign delete safely no-ops) and can't be re-derived locally.
+export async function resyncQueueForCurrentUser() {
+  const userId = getCurrentUserId();
+  if (!userId || processing) return;
+  const db = await getDb();
+  await db.runAsync(`DELETE FROM sync_queue WHERE operation != 'DELETE'`);
+
+  const enqueueAll = async (rows, entityType, toId) => {
+    for (const r of rows) await enqueueUpsert(entityType, toId(r));
+  };
+
+  await enqueueAll(
+    await db.getAllAsync('SELECT id FROM workout_sessions WHERE synced = 0 AND user_id = ?', [userId]),
+    'session', (r) => String(r.id));
+  await enqueueAll(
+    await db.getAllAsync('SELECT id FROM workout_plans WHERE synced = 0 AND user_id = ?', [userId]),
+    'workout_plan', (r) => String(r.id));
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT id FROM exercises WHERE is_custom = 1 AND synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'custom_exercise', (r) => String(r.id));
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT date, metric_type FROM body_metrics WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'measurement', (r) => `${r.date}|${r.metric_type}`);
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT local_id FROM local_recipes WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'recipe', (r) => r.local_id);
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT local_id FROM local_diet_plans WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'diet_plan', (r) => r.local_id);
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT diet_plan_local_id, date FROM local_diet_checkins WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'diet_checkin', (r) => `${r.diet_plan_local_id}|${r.date}`);
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT local_id FROM local_supplement_plans WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'supplement_plan', (r) => r.local_id);
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT supplement_plan_local_id, date FROM local_supplement_checkins WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'supplement_checkin', (r) => `${r.supplement_plan_local_id}|${r.date}`);
+  // PRs and photos are device-level (not user-scoped by design) — they
+  // back up to the signed-in account
+  await enqueueAll(
+    await db.getAllAsync('SELECT id FROM personal_records WHERE synced = 0'),
+    'personal_record', (r) => String(r.id));
+  await enqueueAll(
+    await db.getAllAsync('SELECT id FROM progress_photos WHERE synced = 0'),
+    'progress_photo', (r) => String(r.id));
+}
+
 
 // ── initialization (App.js calls this once after auth — Part D) ─────────
 export function initSyncEngine() {

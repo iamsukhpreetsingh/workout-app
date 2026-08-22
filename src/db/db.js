@@ -143,14 +143,27 @@ async function ensureBaseTables(db) {
     sync_enabled INTEGER NOT NULL DEFAULT 1
   );`);
   await db.runAsync('INSERT OR IGNORE INTO sync_settings (id) VALUES (1)');
-  const count = await db.getFirstAsync('SELECT COUNT(*) AS c FROM exercises');
-  if (count.c === 0) {
-    for (const ex of SEED_EXERCISES) {
-      await db.runAsync(
-        'INSERT OR IGNORE INTO exercises (name, muscle_group) VALUES (?, ?)',
-        [ex.name, ex.muscle]
-      );
-    }
+  // const count = await db.getFirstAsync('SELECT COUNT(*) AS c FROM exercises');
+  // if (count.c === 0) {
+  //   for (const ex of SEED_EXERCISES) {
+  //     await db.runAsync(
+  //       'INSERT OR IGNORE INTO exercises (name, muscle_group) VALUES (?, ?)',
+  //       [ex.name, ex.muscle]
+  //     );
+  //   }
+  // }
+    // Seed the exercise library. Runs UNCONDITIONALLY on every launch:
+  // INSERT OR IGNORE makes it a no-op for rows that already exist, and
+  // unconditional execution HEALS devices whose seed silently failed.
+  // BUGFIX: this used to bind `ex.muscle`, but the seed data's key is
+  // `muscle_group` — every insert put NULL into a NOT NULL column and
+  // INSERT OR IGNORE silently skipped ALL 39 rows, leaving fresh installs
+  // with an empty exercise library.
+  for (const ex of SEED_EXERCISES) {
+    await db.runAsync(
+      'INSERT OR IGNORE INTO exercises (name, muscle_group) VALUES (?, ?)',
+      [ex.name, ex.muscle_group]
+    );
   }
 }
 
@@ -176,6 +189,7 @@ async function ensureSchema(db) {
   await db.runAsync('DELETE FROM workout_plans WHERE user_id IS NULL OR user_id = ""');
   await addColumnSafe(db, 'user_settings', 'theme_mode', "TEXT NOT NULL DEFAULT 'system'");
   await addColumnSafe(db, 'user_settings', 'length_unit', "TEXT NOT NULL DEFAULT 'cm'");
+  await addColumnSafe(db, 'exercises', 'user_id', 'TEXT');
 
   const tables = ['personal_records', 'body_metrics', 'progress_photos'];
   for (const table of tables) {
@@ -257,7 +271,7 @@ const MIGRATIONS = [
       for (const ex of SEED_EXERCISES) {
         await db.runAsync(
           'INSERT OR IGNORE INTO exercises (name, muscle_group) VALUES (?, ?)',
-          [ex.name, ex.muscle]
+          [ex.name, ex.muscle_group]
         );
       }
     }
@@ -654,6 +668,14 @@ const MIGRATIONS = [
         // legacy rows only — the old system always stored payloads; the new
     // engine never does. New-format pending rows survive this wipe.
     await db.runAsync('DELETE FROM sync_queue WHERE payload IS NOT NULL');
+  },
+    // v26: user-scoped custom exercises — a custom exercise created by one
+  // account is invisible to other accounts on the same device. Seed
+  // exercises keep user_id NULL (device-shared by design). Existing
+  // customs (user_id NULL) are claimed by the first account to log in
+  // after this upgrade (adoptLegacyCustomExercises in backfill.js).
+  async (db) => {
+    await addColumnSafe(db, 'exercises', 'user_id', 'TEXT');
   },
 ];
 

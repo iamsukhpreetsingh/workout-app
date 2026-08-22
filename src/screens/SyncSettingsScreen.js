@@ -231,8 +231,26 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'rea
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '../theme';
 import { getSyncSettings } from '../lib/sync';
-import { processQueue, getEngineStatus } from '../lib/syncEngine';
+// import { processQueue, getEngineStatus } from '../lib/syncEngine';
+import { processQueue, getEngineStatus, getFailedItems } from '../lib/syncEngine';
 import { getLocalOnlyReminderState, markLocalOnlyReminderShown, hasUnsyncedBackupData } from '../lib/localOnly';
+
+
+// Human-readable names for each syncable entity, used in the failed list
+const ENTITY_LABELS = {
+  session: 'Workout session',
+  workout_plan: 'Workout routine',
+  custom_exercise: 'Custom exercise',
+  measurement: 'Body measurement',
+  recipe: 'Dish (My Dishes)',
+  diet_plan: 'Diet plan',
+  diet_checkin: 'Diet check-in',
+  supplement_plan: 'Supplement plan',
+  supplement_checkin: 'Supplement check-in',
+  personal_record: 'Personal record',
+  progress_photo: 'Progress photo',
+};
+
 
 const MODES = [
   { key: 'auto', icon: 'sync', title: 'Automatic Sync', desc: 'Syncs whenever you\'re online — foreground, reconnect, and every 10 minutes.' },
@@ -249,11 +267,19 @@ export default function SyncSettingsScreen() {
   const [settings, setSettings] = useState({ sync_mode: 'auto', last_synced_at: null });
   const [status, setStatus] = useState({ pending_count: 0, failed_count: 0, isConnected: true });
   const [isSyncing, setIsSyncing] = useState(false);
+  const [failedItems, setFailedItems] = useState([]);
+  const [failedExpanded, setFailedExpanded] = useState(false);
+
+
 
   const loadData = useCallback(async () => {
     const [s, st] = await Promise.all([getSyncSettings(), getEngineStatus()]);
+  //   setSettings(s);
+  //   setStatus(st);
+  // }, []);
     setSettings(s);
     setStatus(st);
+    setFailedItems(await getFailedItems());
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -313,10 +339,25 @@ export default function SyncSettingsScreen() {
         } else if (result.reason === 'local_only') {
           Alert.alert('Sync Disabled', 'Sync is set to Local Only. Change your sync mode to enable cloud backup.');
         }
-      } else {
+      // } else {
+      //   const msg = `Uploaded: ${result.uploaded}`;
+      //   Alert.alert('Sync Complete', result.failed > 0
+      //     ? `${msg}\nFailed: ${result.failed} (will retry automatically)` : msg);
+      // }
+
+            } else {
         const msg = `Uploaded: ${result.uploaded}`;
-        Alert.alert('Sync Complete', result.failed > 0
-          ? `${msg}\nFailed: ${result.failed} (will retry automatically)` : msg);
+        if (result.failed > 0) {
+          const failedDetail = await getFailedItems();
+          const lines = failedDetail.slice(0, 5).map((f) =>
+            `• ${ENTITY_LABELS[f.entity_type] || f.entity_type}: ${f.error}`
+          );
+          const more = failedDetail.length > 5 ? `\n…and ${failedDetail.length - 5} more` : '';
+          Alert.alert('Sync Complete',
+            `${msg}\nFailed: ${result.failed}\n\n${lines.join('\n')}${more}\n\nThey'll retry automatically — or see details in Sync Status.`);
+        } else {
+          Alert.alert('Sync Complete', msg);
+        }
       }
     } catch (e) {
       Alert.alert('Sync Failed', e.message || 'Please try again.');
@@ -389,8 +430,51 @@ export default function SyncSettingsScreen() {
           {status.pending_count > 0 && (
             <Text style={styles.pending}>Pending changes: {status.pending_count}</Text>
           )}
-          {status.failed_count > 0 && (
+          {/* {status.failed_count > 0 && (
             <Text style={styles.failedText}>Failed items: {status.failed_count} — tap Sync Now to retry</Text>
+          )} */}
+
+                    {failedItems.length > 0 && (
+            <TouchableOpacity
+              style={styles.failedHeader}
+              onPress={() => setFailedExpanded((v) => !v)}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={failedExpanded ? 'chevron-down' : 'chevron-forward'}
+                size={14}
+                color={colors.red}
+              />
+              <Text style={styles.failedText}>
+                {failedItems.length} item{failedItems.length === 1 ? '' : 's'} failed to sync — tap to{' '}
+                {failedExpanded ? 'hide' : 'see which'}
+              </Text>
+            </TouchableOpacity>
+          )}
+          {failedItems.length > 0 && failedExpanded && (
+            <View style={styles.failedList}>
+              {failedItems.map((f, i) => (
+                <View key={`${f.entity_type}-${f.entity_id}-${i}`} style={styles.failedRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.failedRowTitle}>
+                      {ENTITY_LABELS[f.entity_type] || f.entity_type} {f.operation === 'DELETE' ? '(delete)' : ''}
+                    </Text>
+                    <Text style={styles.failedRowError} numberOfLines={3}>
+                      {f.error}
+                    </Text>
+                  </View>
+                  <View style={styles.failedMeta}>
+                    <Text style={styles.failedMetaText}>attempt {f.attempts}</Text>
+                    <Text style={styles.failedMetaText}>
+                      {f.capped ? 'needs manual retry' : `retry in ~${f.retry_in}`}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+              <Text style={styles.failedHint}>
+                Tap Sync Now to retry now regardless of the schedule.
+              </Text>
+            </View>
           )}
         </View>
 
@@ -447,7 +531,24 @@ const makeStyles = (colors) =>
     statusText: { color: colors.text, fontSize: 15, fontWeight: '600' },
     lastSync: { color: colors.textDim, fontSize: 13 },
     pending: { color: colors.yellow, fontSize: 13, marginTop: 4 },
-    failedText: { color: colors.red, fontSize: 13, marginTop: 4 },
+    // failedText: { color: colors.red, fontSize: 13, marginTop: 4 },
+
+    failedText: { color: colors.red, fontSize: 13, marginTop: 4, flex: 1 },
+    failedHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+    failedList: {
+      marginTop: 8, backgroundColor: colors.cardLight, borderRadius: 10, padding: 10,
+    },
+    failedRow: {
+      flexDirection: 'row', gap: 10, paddingVertical: 8,
+      borderTopWidth: 1, borderTopColor: colors.border,
+    },
+    failedRowTitle: { color: colors.text, fontSize: 12, fontWeight: '700' },
+    failedRowError: { color: colors.textDim, fontSize: 11, marginTop: 2 },
+    failedMeta: { alignItems: 'flex-end' },
+    failedMetaText: { color: colors.textDim, fontSize: 10 },
+    failedHint: { color: colors.textDim, fontSize: 10, fontStyle: 'italic', marginTop: 6 },
+
+
     buttonRow: { flexDirection: 'row', gap: 12 },
     button: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12, borderRadius: 10 },
     buttonPrimary: { backgroundColor: colors.primary },
