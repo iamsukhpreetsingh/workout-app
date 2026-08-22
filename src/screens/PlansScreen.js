@@ -6,6 +6,9 @@ import { listPlans } from '../db/queries';
 import { getPinnedSet, togglePin } from '../db/pins';
 import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
+import { listLocalDietPlans } from '../db/dietPlans';
+import { listLocalSupplementPlans } from '../db/supplementPlans';
+import { fetchAndCacheTrainerContent } from '../lib/trainerCache';
 import { useColors } from '../theme';
 import { useHeaderActions } from '../components/HeaderActions';
 
@@ -23,7 +26,7 @@ export default function PlansScreen({ navigation }) {
   const [searchResults, setSearchResults] = useState(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const { user } = useAuth();
-  const isClient = user?.role === 'user';
+  const isClient = user?.role === 'user' || user?.role === 'trainer';
 
   useFocusEffect(
     useCallback(() => {
@@ -83,31 +86,77 @@ export default function PlansScreen({ navigation }) {
             allResults.push({ type: 'workout', source: 'My Workout', ...p, displayName: p.name, displayTags: p.tags || [] });
           }
         });
-        if (isClient) {
-          const [dietPlans, suppPlans, trainerWorkouts] = await Promise.all([
+        // if (isClient) {
+        //   const [dietPlans, suppPlans, trainerWorkouts] = await Promise.all([
+        //     api('/client/diet-plans').catch(() => []),
+        //     api('/client/supplement-plans').catch(() => []),
+        //     api('/client/assigned-plans').catch(() => []),
+        //   ]);
+        //   dietPlans.forEach((p) => {
+        //     const tags = p.display_tags || p.tags || [];
+        //     if (p.name.toLowerCase().includes(q) || tags.some(t => t.toLowerCase().includes(q))) {
+        //       allResults.push({ type: 'diet', source: p.created_by === 'client' ? 'My Diet' : 'From Trainer · Diet', ...p, displayName: p.name, displayTags: tags });
+        //     }
+        //   });
+        //   suppPlans.forEach((p) => {
+        //     const tags = p.tags || [];
+        //     if (p.name.toLowerCase().includes(q) || tags.some(t => t.toLowerCase().includes(q))) {
+        //       allResults.push({ type: 'supplement', source: p.created_by === 'client' ? 'My Supplement' : 'From Trainer · Supplement', ...p, displayName: p.name, displayTags: tags });
+        //     }
+        //   });
+        //   trainerWorkouts.forEach((p) => {
+        //     const tags = p.tags || [];
+        //     if (p.name.toLowerCase().includes(q) || tags.some(t => t.toLowerCase().includes(q))) {
+        //       allResults.push({ type: 'workout', source: 'From Trainer · Workout', ...p, displayName: p.name, displayTags: tags });
+        //     }
+        //   });
+        // }
+
+
+                if (isClient) {
+          // self-authored diet/supplement plans come from LOCAL tables;
+          // trainer-assigned content stays server-fetched
+          const [localDiet, localSupp, remoteDiet, remoteSupp, trainerWorkouts] = await Promise.all([
+            listLocalDietPlans().catch(() => []),
+            listLocalSupplementPlans().catch(() => []),
             api('/client/diet-plans').catch(() => []),
             api('/client/supplement-plans').catch(() => []),
             api('/client/assigned-plans').catch(() => []),
           ]);
-          dietPlans.forEach((p) => {
-            const tags = p.display_tags || p.tags || [];
-            if (p.name.toLowerCase().includes(q) || tags.some(t => t.toLowerCase().includes(q))) {
-              allResults.push({ type: 'diet', source: p.created_by === 'client' ? 'My Diet' : 'From Trainer · Diet', ...p, displayName: p.name, displayTags: tags });
+          localDiet.forEach((p) => {
+            if (p.name.toLowerCase().includes(q) || (p.tags || []).some((t) => t.toLowerCase().includes(q))) {
+              allResults.push({ type: 'diet', source: 'My Diet', ...p, displayName: p.name, displayTags: p.tags || [] });
             }
           });
-          suppPlans.forEach((p) => {
+          remoteDiet.filter((p) => p.created_by === 'trainer').forEach((p) => {
+            const tags = p.display_tags || p.tags || [];
+            if (p.name.toLowerCase().includes(q) || tags.some((t) => t.toLowerCase().includes(q))) {
+              allResults.push({ type: 'diet', source: 'From Trainer · Diet', ...p, displayName: p.name, displayTags: tags });
+            }
+          });
+          localSupp.forEach((p) => {
+            if (p.name.toLowerCase().includes(q) || (p.tags || []).some((t) => t.toLowerCase().includes(q))) {
+              allResults.push({ type: 'supplement', source: 'My Supplement', ...p, displayName: p.name, displayTags: p.tags || [] });
+            }
+          });
+          remoteSupp.filter((p) => p.created_by === 'trainer').forEach((p) => {
             const tags = p.tags || [];
-            if (p.name.toLowerCase().includes(q) || tags.some(t => t.toLowerCase().includes(q))) {
-              allResults.push({ type: 'supplement', source: p.created_by === 'client' ? 'My Supplement' : 'From Trainer · Supplement', ...p, displayName: p.name, displayTags: tags });
+            if (p.name.toLowerCase().includes(q) || tags.some((t) => t.toLowerCase().includes(q))) {
+              allResults.push({ type: 'supplement', source: 'From Trainer · Supplement', ...p, displayName: p.name, displayTags: tags });
             }
           });
           trainerWorkouts.forEach((p) => {
             const tags = p.tags || [];
-            if (p.name.toLowerCase().includes(q) || tags.some(t => t.toLowerCase().includes(q))) {
+            if (p.name.toLowerCase().includes(q) || tags.some((t) => t.toLowerCase().includes(q))) {
               allResults.push({ type: 'workout', source: 'From Trainer · Workout', ...p, displayName: p.name, displayTags: tags });
             }
           });
         }
+
+
+
+
+
         setSearchResults(allResults);
       } catch (e) {
         setSearchResults([]);
@@ -248,35 +297,171 @@ export default function PlansScreen({ navigation }) {
   );
 }
 
-// Client diet plans surface: self-authored (My Routines context) and
-// trainer-assigned (From Trainer context) share this list; the builder
-// and viewer are shared too — only catalog access differs (trainer-only).
+// // Client diet plans surface: self-authored (My Routines context) and
+// // trainer-assigned (From Trainer context) share this list; the builder
+// // and viewer are shared too — only catalog access differs (trainer-only).
+// function DietPlansList({ styles, colors, navigation, fromTrainer }) {
+//   const [plans, setPlans] = useState([]);
+
+//   useFocusEffect(
+//     useCallback(() => {
+//       let mounted = true;
+//       api('/client/diet-plans')
+//         .then((rows) => {
+//           if (mounted) setPlans(rows.filter((p) => (fromTrainer ? p.created_by === 'trainer' : p.created_by === 'client')));
+//         })
+//         .catch(() => { if (mounted) setPlans([]); });
+//       return () => { mounted = false; };
+//     }, [fromTrainer])
+//   );
+
+//   const checkIn = async (plan, followed) => {
+//     const today = new Date().toISOString().slice(0, 10);
+//     try {
+//       await api(`/client/diet-plans/${plan.id}/checkins`, {
+//         method: 'POST',
+//         body: { date: today, followed },
+//       });
+//     } catch (e) {
+//       Alert.alert('Check-in failed', e.message || 'Please try again.');
+//     }
+//   };
+
+//   if (plans.length === 0) {
+//     return (
+//       <View style={{ flex: 1 }}>
+//         {!fromTrainer && (
+//           <View style={styles.dietSegRow}>
+//             <View style={[styles.dietSegBtn, styles.dietSegBtnOn]}>
+//               <Text style={[styles.dietSegText, { color: '#fff' }]}>Plans</Text>
+//             </View>
+//             <TouchableOpacity
+//               style={styles.dietSegBtn}
+//               onPress={() => navigation.navigate('MyDishes')}
+//             >
+//               <Text style={styles.dietSegText}>My Dishes ›</Text>
+//             </TouchableOpacity>
+//           </View>
+//         )}
+//         <View style={styles.emptyWrap}>
+//           <Ionicons name="nutrition-outline" size={38} color={colors.textDim} />
+//           <Text style={styles.emptyTitle}>{fromTrainer ? 'Nothing assigned yet' : 'No diet plans yet'}</Text>
+//           <Text style={styles.emptySub}>
+//             {fromTrainer
+//               ? 'Diet plans your trainer assigns will appear here.'
+//               : 'Build your own day-by-day nutrition plan.'}
+//           </Text>
+//           {!fromTrainer && (
+//             <TouchableOpacity
+//               style={styles.emptyBtn}
+//               onPress={() => navigation.navigate('DietPlanBuilder', { self: true })}
+//             >
+//               <Ionicons name="add" size={17} color={colors.primary} />
+//               <Text style={styles.emptyBtnText}>New Diet Plan</Text>
+//             </TouchableOpacity>
+//           )}
+//         </View>
+//       </View>
+//     );
+//   }
+
+//   return (
+//     <View style={{ flex: 1 }}>
+//       {!fromTrainer && (
+//         <View style={styles.dietSegRow}>
+//           <View style={[styles.dietSegBtn, styles.dietSegBtnOn]}>
+//             <Text style={[styles.dietSegText, { color: '#fff' }]}>Plans</Text>
+//           </View>
+//           <TouchableOpacity
+//             style={styles.dietSegBtn}
+//             onPress={() => navigation.navigate('MyDishes')}
+//           >
+//             <Text style={styles.dietSegText}>My Dishes ›</Text>
+//           </TouchableOpacity>
+//         </View>
+//       )}
+
+//       <FlatList
+//         data={plans}
+//         keyExtractor={(p) => String(p.id)}
+//         contentContainerStyle={{ padding: 20, paddingTop: 6, paddingBottom: 40 }}
+//         ListHeaderComponent={
+//           !fromTrainer ? (
+//             <TouchableOpacity
+//               style={styles.newRoutineBtn}
+//               onPress={() => navigation.navigate('DietPlanBuilder', { self: true })}
+//             >
+//               <Ionicons name="add" size={17} color={colors.primary} />
+//               <Text style={styles.newRoutineText}>New Diet Plan</Text>
+//             </TouchableOpacity>
+//           ) : null
+//         }
+//         renderItem={({ item: plan }) => {
+//           const itemCount = (plan.days || []).reduce(
+//             (n, d) => n + (d.meals || []).reduce((m, mm) => m + (mm.items || []).length, 0), 0
+//           );
+//           const planTags = plan.display_tags || plan.tags || [];
+//           return (
+//             <TouchableOpacity
+//               style={styles.card}
+//               activeOpacity={0.8}
+//               onPress={() => navigation.navigate('ClientDietPlanDetail', { planId: plan.id, self: !fromTrainer, plan: { name: plan.name, trainer_name: plan.trainer_name } })}
+//             >
+//               <View style={styles.templateTag}>
+//                 <Ionicons name="nutrition-outline" size={13} color={fromTrainer ? colors.blue : colors.primary} />
+//               </View>
+//               <View style={{ flex: 1 }}>
+//                 <Text style={styles.name} numberOfLines={1}>
+//                   {plan.name}
+//                 </Text>
+//                 <Text style={[styles.meta, NUMS]}>
+//                   {(fromTrainer ? `From ${plan.trainer_name || 'your trainer'} · ` : '') + itemCount + ' items' + (plan.daily_calorie_target ? ` · ${plan.daily_calorie_target} cal/day` : '')}
+//                 </Text>
+//                 {planTags.length > 0 && (
+//                   <View style={styles.tagRow}>
+//                     {planTags.slice(0, 3).map((tag) => (
+//                       <View key={tag} style={[styles.tagChip, fromTrainer && styles.tagChipTrainer]}>
+//                         <Text style={[styles.tagChipText, fromTrainer && styles.tagChipTextTrainer]}>{tag}</Text>
+//                       </View>
+//                     ))}
+//                   </View>
+//                 )}
+//               </View>
+//               <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+//             </TouchableOpacity>
+//           );
+//         }}
+//       />
+//     </View>
+//   );
+// }
+
+
+
+
+// Client diet plans surface: self-authored plans now come from LOCAL SQLite
+// (create/edit/delete/check-in all work offline; the sync engine backs
+// them up). Trainer-assigned plans stay server-fetched (server-owned).
 function DietPlansList({ styles, colors, navigation, fromTrainer }) {
   const [plans, setPlans] = useState([]);
 
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
-      api('/client/diet-plans')
-        .then((rows) => {
-          if (mounted) setPlans(rows.filter((p) => (fromTrainer ? p.created_by === 'trainer' : p.created_by === 'client')));
-        })
-        .catch(() => { if (mounted) setPlans([]); });
+        if (fromTrainer) {
+        fetchAndCacheTrainerContent('trainer:diet-plans', () => api('/client/diet-plans'))
+      // if (fromTrainer) {
+      //   api('/client/diet-plans')
+          .then((rows) => {
+            if (mounted) setPlans(rows.filter((p) => p.created_by === 'trainer'));
+          })
+          .catch(() => { if (mounted) setPlans([]); });
+      } else {
+        listLocalDietPlans().then((rows) => { if (mounted) setPlans(rows); });
+      }
       return () => { mounted = false; };
     }, [fromTrainer])
   );
-
-  const checkIn = async (plan, followed) => {
-    const today = new Date().toISOString().slice(0, 10);
-    try {
-      await api(`/client/diet-plans/${plan.id}/checkins`, {
-        method: 'POST',
-        body: { date: today, followed },
-      });
-    } catch (e) {
-      Alert.alert('Check-in failed', e.message || 'Please try again.');
-    }
-  };
 
   if (plans.length === 0) {
     return (
@@ -387,17 +572,117 @@ function DietPlansList({ styles, colors, navigation, fromTrainer }) {
   );
 }
 
+
+// function SupplementPlansList({ styles, colors, navigation, fromTrainer }) {
+//   const [plans, setPlans] = useState([]);
+
+//   useFocusEffect(
+//     useCallback(() => {
+//       let mounted = true;
+//       api('/client/supplement-plans')
+//         .then((rows) => {
+//           if (mounted) setPlans(rows.filter((p) => (fromTrainer ? p.created_by === 'trainer' : p.created_by === 'client')));
+//         })
+//         .catch(() => { if (mounted) setPlans([]); });
+//       return () => { mounted = false; };
+//     }, [fromTrainer])
+//   );
+
+//   if (plans.length === 0) {
+//     return (
+//       <View style={styles.emptyWrap}>
+//         <Ionicons name="medkit-outline" size={38} color={colors.textDim} />
+//         <Text style={styles.emptyTitle}>{fromTrainer ? 'Nothing assigned yet' : 'No supplement plans yet'}</Text>
+//         <Text style={styles.emptySub}>
+//           {fromTrainer
+//             ? 'Supplement plans your trainer assigns will appear here.'
+//             : 'Track your supplements and vitamins.'}
+//         </Text>
+//         {!fromTrainer && (
+//           <TouchableOpacity
+//             style={styles.emptyBtn}
+//             onPress={() => navigation.navigate('CoachingPlanBuilder', { kind: 'supplement', self: true })}
+//           >
+//             <Ionicons name="add" size={17} color={colors.primary} />
+//             <Text style={styles.emptyBtnText}>New Supplement Plan</Text>
+//           </TouchableOpacity>
+//         )}
+//       </View>
+//     );
+//   }
+
+//   return (
+//     <View style={{ flex: 1 }}>
+//       <FlatList
+//         data={plans}
+//         keyExtractor={(p) => String(p.id)}
+//         contentContainerStyle={{ padding: 20, paddingTop: 6, paddingBottom: 40 }}
+//         ListHeaderComponent={
+//           !fromTrainer ? (
+//             <TouchableOpacity
+//               style={styles.newRoutineBtn}
+//               onPress={() => navigation.navigate('CoachingPlanBuilder', { kind: 'supplement', self: true })}
+//             >
+//               <Ionicons name="add" size={17} color={colors.primary} />
+//               <Text style={styles.newRoutineText}>New Supplement Plan</Text>
+//             </TouchableOpacity>
+//           ) : null
+//         }
+//         renderItem={({ item: plan }) => {
+//           const itemCount = (plan.items || []).length;
+//           const planTags = plan.tags || plan.display_tags || [];
+//           return (
+//             <TouchableOpacity
+//               style={styles.card}
+//               activeOpacity={0.8}
+//               onPress={() => navigation.navigate('ClientDietPlanDetail', { planId: plan.id, self: !fromTrainer, plan: { name: plan.name, trainer_name: plan.trainer_name, kind: 'supplement' } })}
+//             >
+//               <View style={styles.templateTag}>
+//                 <Ionicons name="medkit-outline" size={13} color={fromTrainer ? colors.blue : colors.primary} />
+//               </View>
+//               <View style={{ flex: 1 }}>
+//                 <Text style={styles.name} numberOfLines={1}>
+//                   {plan.name}
+//                 </Text>
+//                 <Text style={[styles.meta, NUMS]}>
+//                   {(fromTrainer ? `From ${plan.trainer_name || 'your trainer'} · ` : '') + itemCount + ' supplements'}
+//                 </Text>
+//                 {planTags.length > 0 && (
+//                   <View style={styles.tagRow}>
+//                     {planTags.slice(0, 3).map((tag) => (
+//                       <View key={tag} style={[styles.tagChip, fromTrainer && styles.tagChipTrainer]}>
+//                         <Text style={[styles.tagChipText, fromTrainer && styles.tagChipTextTrainer]}>{tag}</Text>
+//                       </View>
+//                     ))}
+//                   </View>
+//                 )}
+//               </View>
+//               <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+//             </TouchableOpacity>
+//           );
+//         }}
+//       />
+//     </View>
+//   );
+// }
+
 function SupplementPlansList({ styles, colors, navigation, fromTrainer }) {
   const [plans, setPlans] = useState([]);
 
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
-      api('/client/supplement-plans')
-        .then((rows) => {
-          if (mounted) setPlans(rows.filter((p) => (fromTrainer ? p.created_by === 'trainer' : p.created_by === 'client')));
-        })
-        .catch(() => { if (mounted) setPlans([]); });
+      // if (fromTrainer) {
+      //   api('/client/supplement-plans')
+        if (fromTrainer) {
+        fetchAndCacheTrainerContent('trainer:supplement-plans', () => api('/client/supplement-plans'))
+          .then((rows) => {
+            if (mounted) setPlans(rows.filter((p) => p.created_by === 'trainer'));
+          })
+          .catch(() => { if (mounted) setPlans([]); });
+      } else {
+        listLocalSupplementPlans().then((rows) => { if (mounted) setPlans(rows); });
+      }
       return () => { mounted = false; };
     }, [fromTrainer])
   );
@@ -479,6 +764,7 @@ function SupplementPlansList({ styles, colors, navigation, fromTrainer }) {
     </View>
   );
 }
+
 
 function MyRoutinesList({ styles, colors, navigation, pinned, onTogglePin }) {
   const [plans, setPlans] = useState([]);
@@ -566,12 +852,13 @@ function AssignedList({ styles, colors, navigation, pinned, onTogglePin }) {
 
   useFocusEffect(
     useCallback(() => {
-      if (user?.role !== 'user') {
+      if (user?.role !== 'user' && user?.role !== 'trainer') {
         setAssigned([]);
         return;
       }
       let mounted = true;
-      api('/client/assigned-plans')
+      // api('/client/assigned-plans')
+        fetchAndCacheTrainerContent('trainer:assigned-workouts', () => api('/client/assigned-plans'))
         .then((rows) => { if (mounted) setAssigned(rows); })
         .catch(() => { if (mounted) setAssigned([]); });
       return () => { mounted = false; };

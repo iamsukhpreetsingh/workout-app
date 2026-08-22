@@ -21,8 +21,24 @@ import {
   markSessionSyncAttempted,
 } from '../db/queries';
 import { getUnsyncedMeasurements, markMeasurementsSynced } from '../db/body';
+import { getDb } from '../db/db';
 
 let running = false;
+
+
+
+// Trainer-facing sync must respect the sync mode: nothing leaves the device
+// in local_only, and automatic pushes happen only in auto mode. A manual
+// "Sync Now" (Phase 5) passes force=true to bypass this gate.
+async function autoSyncAllowed() {
+  try {
+    const db = await getDb();
+    const row = await db.getFirstAsync('SELECT sync_mode FROM sync_settings WHERE id = 1');
+    return (row?.sync_mode || 'auto') === 'auto';
+  } catch {
+    return true;
+  }
+}
 
 async function isOnline() {
   try {
@@ -68,8 +84,12 @@ async function pushSummaries(sessionIds) {
 // Fire-and-forget: attempt one immediate sync of a freshly saved session.
 // Any failure (offline, timeout, 5xx) is swallowed — the row stays
 // synced = 0 and the foreground catch-up will retry.
+// export async function queueSessionForSync(sessionId) {
+//   try {
+//     if (!(await isOnline())) return;
 export async function queueSessionForSync(sessionId) {
   try {
+    if (!(await autoSyncAllowed())) return; // local_only / manual: never auto-push
     if (!(await isOnline())) return;
     await pushSummaries([sessionId]);
   } catch {
@@ -78,8 +98,12 @@ export async function queueSessionForSync(sessionId) {
 }
 
 // Measurement catch-up: batch unsynced body_metrics into one POST.
-export async function syncPendingMeasurements() {
+// export async function syncPendingMeasurements() {
+//   try {
+//     if (!(await isOnline())) return;
+export async function syncPendingMeasurements(force = false) {
   try {
+    if (!force && !(await autoSyncAllowed())) return;
     if (!(await isOnline())) return;
     const entries = await getUnsyncedMeasurements();
     if (!entries.length) return;
@@ -91,10 +115,16 @@ export async function syncPendingMeasurements() {
 }
 
 // Foreground catch-up: batch every unsynced session into one POST.
-export async function syncPendingSessions() {
+// export async function syncPendingSessions() {
+//   if (running) return; // avoid overlapping runs on rapid app-state flips
+//   running = true;
+//   try {
+//     if (!(await isOnline())) return;
+export async function syncPendingSessions(force = false) {
   if (running) return; // avoid overlapping runs on rapid app-state flips
   running = true;
   try {
+    if (!force && !(await autoSyncAllowed())) return;
     if (!(await isOnline())) return;
     const ids = await getUnsyncedSessionIds();
     if (!ids.length) return;

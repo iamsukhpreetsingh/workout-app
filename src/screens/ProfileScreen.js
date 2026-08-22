@@ -23,11 +23,10 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer }) {
   const [assocMsg, setAssocMsg] = useState(null); // confirmation / error
 
   React.useEffect(() => {
-    if (isTrainer) return;
     api('/client/trainer')
       .then(setAssoc)
       .catch(() => {});
-  }, [isTrainer]);
+  }, []);
 
   const [reconnect, setReconnect] = useState(null); // preview when is_reactivation
 
@@ -119,45 +118,43 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer }) {
         </View>
       </View>
 
-      {!isTrainer && (
-        <View style={styles.card}>
-          <View style={styles.row}>
-            <Ionicons name="fitness-outline" size={18} color={colors.textDim} />
-            <Text style={styles.rowLabel}>Trainer</Text>
-            <Text style={styles.rowValue}>
-              {assoc?.status === 'active'
-                ? (assoc.trainer_name || 'Connected')
-                : assoc?.status === 'pending'
-                ? 'Request pending'
-                : 'None'}
-            </Text>
-          </View>
-          {assoc?.status === 'pending' && (
-            <Text style={styles.pendingHint}>
-              Waiting for {assoc.trainer_name || 'your trainer'} to accept your request.
-            </Text>
-          )}
-          {assoc?.status !== 'active' && assoc?.status !== 'pending' && (
-            <>
-              <TextInput
-                style={styles.inviteInput}
-                value={inviteCode}
-                onChangeText={setInviteCode}
-                placeholder="Trainer invite code"
-                placeholderTextColor={colors.textDim}
-                autoCapitalize="characters"
-                autoCorrect={false}
-                maxLength={16}
-              />
-              <TouchableOpacity style={styles.connectBtn} onPress={submitInviteCode}>
-                <Ionicons name="person-add-outline" size={16} color="#fff" />
-                <Text style={styles.connectBtnText}>Connect with Trainer</Text>
-              </TouchableOpacity>
-            </>
-          )}
-          {assocMsg && <Text style={styles.assocMsg}>{assocMsg}</Text>}
+      <View style={styles.card}>
+        <View style={styles.row}>
+          <Ionicons name="fitness-outline" size={18} color={colors.textDim} />
+          <Text style={styles.rowLabel}>Trainer</Text>
+          <Text style={styles.rowValue}>
+            {assoc?.status === 'active'
+              ? (assoc.trainer_name || 'Connected')
+              : assoc?.status === 'pending'
+              ? 'Request pending'
+              : 'None'}
+          </Text>
         </View>
-      )}
+        {assoc?.status === 'pending' && (
+          <Text style={styles.pendingHint}>
+            Waiting for {assoc.trainer_name || 'your trainer'} to accept your request.
+          </Text>
+        )}
+        {assoc?.status !== 'active' && assoc?.status !== 'pending' && (
+          <>
+            <TextInput
+              style={styles.inviteInput}
+              value={inviteCode}
+              onChangeText={setInviteCode}
+              placeholder="Trainer invite code"
+              placeholderTextColor={colors.textDim}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              maxLength={16}
+            />
+            <TouchableOpacity style={styles.connectBtn} onPress={submitInviteCode}>
+              <Ionicons name="person-add-outline" size={16} color="#fff" />
+              <Text style={styles.connectBtnText}>Connect with Trainer</Text>
+            </TouchableOpacity>
+          </>
+        )}
+        {assocMsg && <Text style={styles.assocMsg}>{assocMsg}</Text>}
+      </View>
 
       {reconnect && (
         <Modal visible transparent animationType="fade" onRequestClose={() => setReconnect(null)}>

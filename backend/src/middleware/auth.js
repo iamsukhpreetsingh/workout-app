@@ -13,11 +13,12 @@ function requireAuth(req, res, next) {
   }
 }
 
-// Role guard for trainer-only endpoints
+// Role guard - accepts single role string or array of roles
 function requireRole(role) {
   return (req, res, next) => {
-    if (!req.user || req.user.role !== role) {
-      return res.status(403).json({ error: `This endpoint requires the '${role}' role` });
+    const roles = Array.isArray(role) ? role : [role];
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ error: `This endpoint requires role: ${roles.join(' or ')}` });
     }
     next();
   };

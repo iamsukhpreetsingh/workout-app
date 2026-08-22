@@ -136,11 +136,11 @@ deployment.
 duration, exercise/set counts, and total volume per session. No per-set
 detail, RPE, notes, or photos leave the device in this phase.
 
-| Method | Path | Auth | Notes |
-|---|---|---|---|
-| POST | /client/session-summaries | any user | batch upsert on (client_id, local_session_id); client_id comes from the token |
-| GET | /trainer/clients/:clientId/session-summaries | trainer | 403 without an active association; `?limit=20&offset=0` |
-| GET | /trainer/clients | trainer | now includes `adherence_pct` + `last_active_at` per client |
+| Method | Path                                         | Auth     | Notes                                                                         |
+| ------ | -------------------------------------------- | -------- | ----------------------------------------------------------------------------- |
+| POST   | /client/session-summaries                    | any user | batch upsert on (client_id, local_session_id); client_id comes from the token |
+| GET    | /trainer/clients/:clientId/session-summaries | trainer  | 403 without an active association;`?limit=20&offset=0`                      |
+| GET    | /trainer/clients                             | trainer  | now includes`adherence_pct` + `last_active_at` per client                 |
 
 **Adherence definition** (used everywhere the number is shown): the
 percentage of calendar days in the trailing 30 days (server UTC) with at
@@ -246,3 +246,65 @@ Status flow on `trainer_clients`: `pending → active → archived → revoked`.
 restart the server (or run `npx nodemon server.js`) — a stale process
 serving old code has repeatedly masqueraded as bugs (404s on new routes,
 stale validation rules).
+
+
+
+
+
+
+## Client Intake Profiles
+
+Clients complete a one-time health profile (`client_intake_profiles`, migration `023`):`allergens` and `goals` (TEXT[] chip lists), `injuries` and `medical_conditions` (free text),plus `completed_at`. ONE profile per client, shared across ALL of the client's trainers —the profile belongs to the client, not the trainer-client pair.
+
+**Endpoints**
+
+* `GET /client/intake-profile` — the client's own profile (or `null`)
+* `PUT /client/intake-profile` — create/replace; stamps `completed_at` on every save
+* `GET /trainer/clients/:clientId/intake-profile` — trainer read (active or archived association)
+
+**Design decision: ONLY allergens are auto-matched.** Allergen tags are the only intakefield ever automatically matched against plan content (diet-plan conflict warnings in theapp). Goals, injuries, and medical conditions are deliberately NEVER auto-matched or usedto generate warnings — "relevant" is a clinical judgment only the trainer can make (adiabetic client can still eat fruit; an injured client can still train upper body). Do notadd medical-condition matching later.
+
+Matching is exact tag intersection (case-insensitive) between the client's allergen tagsand a recipe's snapshotted allergen tags — no synonyms, no ingredient-text inference. If`completed_at` is null (or no profile exists), ALL allergen warnings are skipped silently —no error, no block.
+
+**Privacy:** intake data is sensitive — never in notification bodies, never logged beyondnormal error tracebacks.
+
+## For the root `README.md` — append this section:
+
+## Client Intake Profile (health context)
+
+* **`IntakeFormScreen.js` — one form, two uses:** (1) the onboarding gate — non-dismissible,Android back blocked, shown whenever a client has an active trainer but no completedprofile; saving anything (even all-empty) completes onboarding; (2) Settings → "HealthProfile" — prefilled edit, anytime. Both save to `PUT /client/intake-profile`.
+* **`src/lib/allergens.js`** — `getAllergenConflicts(clientAllergens, itemAllergens)`: exact,case-insensitive tag intersection. Allergens are the ONLY auto-matched intake field(rationale in backend README).
+* **Trainer-side warnings:** per-row "⚠ Contains: X — client allergy" badge in the dietbuilder's catalog picker; soft "Add anyway?" confirm on attach (never a hard block);persistent red banner on the builder AND the trainer's read-only plan view listing everyconflicting allergen across the whole plan.
+* **Client Context** (goals/injuries/medical): collapsible display-only section on thebuilder and plan detail — never generates warnings.
+* Gentle one-time prompt (never a gate) when a profiled client connects to a new trainer.
+
+# Manual Test Notes (spec requirement)
+
+Create `docs/manual-test-intake.md` and paste:
+
+# Manual tests — intake profiles & allergen warnings
+
+1. NEW-CLIENT ONBOARDING (gate)Fresh client (no profile) connects via invite code; trainer accepts. Client reopens orforegrounds the app → Health Profile form covers everything; Android back does nothing;no back arrow. Save & Continue (all-empty OK) → closes, never returns. ✅ form appears,non-dismissible, saves.
+2. RETURNING CLIENT + SECOND TRAINER (gentle prompt)Profiled client connects to trainer #2 → one-time alert on foreground: Not now / Review."Not now" dismisses; prompt never repeats for THAT trainer (does repeat for a #3).
+3. ALLERGEN MATCHING (the required exact case)Client allergens = [nuts, dairy]. Recipe A allergens=[nuts], Recipe B allergens=[gluten].Trainer: Client → Overview → Assign Diet → meal slot → Item:
+   * A's row: "⚠ Contains: Nuts — client allergy". Tap → "Add anyway?" dialog.
+   * B's row: no warning chip beyond neutral "Contains: gluten". Tap → instant attach.
+   * With A in plan: banner "…allergens: Nuts". Add a dairy recipe → banner lists "Nuts, Dairy".
+4. NO COMPLETED PROFILE → zero warnings anywhere, zero errors.
+5. CLIENT CONTEXT COMBINATIONS: all empty → section hidden; goals-only / injuries-only /medical-only → only that line shows; all filled → three lines; content never warns.
+6. READ-ONLY VIEW: Clients → client → Diet → plan → same banner + Client Context.
+7. DARK MODE: red warning color legible, banner border visible, chips readable.
+8. Trainer's own Recipes tab keeps neutral "Contains:" chips (no client context there).
+
+---
+
+# How to Test the Real Thing
+
+Your app talks to `13.126.205.202:4000`, but our new backend code lives on your machine. **Before testing on your phone:**
+
+1. Copy to the server: your edited `trainer.js` + `client.js`, new `src/data/intakeProfiles.js`, new `migrations/023_client_intake_profiles.sql`
+2. On the server, in the backend folder: `node scripts/migrate.js` (expect `applied 023_client_intake_profiles.sql`)
+3. Restart the backend process there (however you normally do it — pm2/systemd/`node server.js`)
+4. Reload the app and run through test note #1
+
+**One hedge to watch for:** I've never seen `trainerClients.js`, so the gentle-prompt's trainer-ID lookup guesses the response shape of `GET /client/trainer`. If test #2's prompt doesn't appear for an already-profiled client, send me `backend/src/data/trainerClients.js` and I'll give you a one-line fix. Everything else is independent of that.

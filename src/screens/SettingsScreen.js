@@ -11,7 +11,7 @@ import { getPendingSyncCount } from '../db/queries';
 
 export default function SettingsScreen({ onSwitchView }) {
   const { themeMode, setThemeMode } = useApp();
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
   const navigation = useNavigation();
   const [trainer, setTrainer] = useState(null); // active association state
 
@@ -235,6 +235,20 @@ export default function SettingsScreen({ onSwitchView }) {
         </View>
         <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
       </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={[styles.card, { backgroundColor: colors.card, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
+          onPress={() => navigation.navigate('IntakeForm')}
+        >
+          <View style={{ flex: 1, paddingRight: 8 }}>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Health Profile</Text>
+            <Text style={[styles.hint, { color: colors.textDim }]}>
+              Allergies, goals, injuries — shared with your trainer for safer plans
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
+        </TouchableOpacity>
+
 
       {trainer ? (
         <View style={[styles.card, { backgroundColor: colors.card }]}>

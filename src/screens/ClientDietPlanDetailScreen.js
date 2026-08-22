@@ -14,6 +14,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../lib/api';
+import { getDietPlan, checkInDiet, deleteDietPlan, listDietCheckins, isLocalDietPlanId } from '../db/dietPlans';
+import { getSupplementPlan, checkInSupplement, deleteSupplementPlan, listSupplementCheckins, isLocalSupplementPlanId } from '../db/supplementPlans';
 import { useColors } from '../theme';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
@@ -70,19 +72,39 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
     });
   }, [navigation, plan?.name, planFallback?.name, isSupplement]);
 
-  const load = useCallback(async () => {
+  // const load = useCallback(async () => {
+  //   try {
+  //     setError(null);
+  //     const endpoint = isSupplement 
+  //       ? `/client/supplement-plans/${planId}` 
+  //       : `/client/diet-plans/${planId}`;
+  //     const full = await api(endpoint);
+  //     setPlan(full);
+  //   } catch (e) {
+  //     if (planFallback) setPlan(planFallback);
+  //     else setError(e.message || 'Could not load plan');
+  //   }
+  // }, [planId, planFallback, isSupplement]);
+
+    const load = useCallback(async () => {
     try {
       setError(null);
-      const endpoint = isSupplement 
-        ? `/client/supplement-plans/${planId}` 
-        : `/client/diet-plans/${planId}`;
-      const full = await api(endpoint);
+      let full;
+      if (isSupplement) {
+        full = (self && isLocalSupplementPlanId(planId))
+          ? await getSupplementPlan(planId)
+          : await api(`/client/supplement-plans/${planId}`);
+      } else {
+        full = (self && isLocalDietPlanId(planId))
+          ? await getDietPlan(planId)
+          : await api(`/client/diet-plans/${planId}`);
+      }
       setPlan(full);
     } catch (e) {
       if (planFallback) setPlan(planFallback);
       else setError(e.message || 'Could not load plan');
     }
-  }, [planId, planFallback, isSupplement]);
+  }, [planId, planFallback, isSupplement, self]);
 
   useFocusEffect(
     useCallback(() => {
@@ -96,25 +118,48 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
     setRefreshing(false);
   };
 
-  useEffect(() => {
+  // useEffect(() => {
+  //   if (!planId) return;
+  //   let mounted = true;
+  //   const endpoint = isSupplement 
+  //     ? `/client/supplement-plans/${planId}/checkins` 
+  //     : `/client/diet-plans/${planId}/checkins`;
+  //   api(endpoint)
+  //     .then((rows) => {
+  //       if (!mounted) return;
+  //       const today = new Date().toISOString().slice(0, 10);
+  //       const todays = (rows || []).find((c) => c.date.slice(0, 10) === today);
+  //       if (todays) {
+  //         // supplements use 'taken', diet uses 'followed'
+  //         setCheckedToday(isSupplement ? todays.taken : todays.followed);
+  //       }
+  //     })
+  //     .catch(() => {});
+  //   return () => { mounted = false; };
+  // }, [planId, isSupplement]);
+
+
+    useEffect(() => {
     if (!planId) return;
     let mounted = true;
-    const endpoint = isSupplement 
-      ? `/client/supplement-plans/${planId}/checkins` 
-      : `/client/diet-plans/${planId}/checkins`;
-    api(endpoint)
+    const isLocal = self && (isSupplement ? isLocalSupplementPlanId(planId) : isLocalDietPlanId(planId));
+    const fetchCheckins = isLocal
+      ? (isSupplement ? listSupplementCheckins(planId) : listDietCheckins(planId))
+      : api(isSupplement
+          ? `/client/supplement-plans/${planId}/checkins`
+          : `/client/diet-plans/${planId}/checkins`);
+    fetchCheckins
       .then((rows) => {
         if (!mounted) return;
         const today = new Date().toISOString().slice(0, 10);
-        const todays = (rows || []).find((c) => c.date.slice(0, 10) === today);
+        const todays = (rows || []).find((c) => String(c.date).slice(0, 10) === today);
         if (todays) {
-          // supplements use 'taken', diet uses 'followed'
           setCheckedToday(isSupplement ? todays.taken : todays.followed);
         }
       })
       .catch(() => {});
     return () => { mounted = false; };
-  }, [planId, isSupplement]);
+  }, [planId, isSupplement, self]);
 
   const days = plan?.days || [];
   const day = days[Math.min(activeDay, Math.max(0, days.length - 1))];
@@ -156,18 +201,44 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
   const tFat = Number(plan.daily_fat_target) || 0;
   const pct = target > 0 ? Math.min(100, Math.round((totals.cal / target) * 100)) : 0;
 
-  const checkIn = async (followed) => {
+  // const checkIn = async (followed) => {
+  //   if (checkBusy) return;
+  //   setCheckBusy(true);
+  //   const today = new Date().toISOString().slice(0, 10);
+  //   try {
+  //     const endpoint = isSupplement 
+  //       ? `/client/supplement-plans/${planId}/checkins` 
+  //       : `/client/diet-plans/${planId}/checkins`;
+  //     const body = isSupplement 
+  //       ? { date: today, taken: followed }
+  //       : { date: today, followed };
+  //     await api(endpoint, { method: 'POST', body });
+  //     setCheckedToday(followed);
+  //   } catch (e) {
+  //     Alert.alert('Check-in failed', e.message || 'Please try again.');
+  //   } finally {
+  //     setCheckBusy(false);
+  //   }
+  // };
+
+    const checkIn = async (followed) => {
     if (checkBusy) return;
     setCheckBusy(true);
     const today = new Date().toISOString().slice(0, 10);
     try {
-      const endpoint = isSupplement 
-        ? `/client/supplement-plans/${planId}/checkins` 
-        : `/client/diet-plans/${planId}/checkins`;
-      const body = isSupplement 
-        ? { date: today, taken: followed }
-        : { date: today, followed };
-      await api(endpoint, { method: 'POST', body });
+      if (isSupplement) {
+        if (self && isLocalSupplementPlanId(planId)) {
+          await checkInSupplement(planId, today, followed); // local-first
+        } else {
+          await api(`/client/supplement-plans/${planId}/checkins`, { method: 'POST', body: { date: today, taken: followed } });
+        }
+      } else {
+        if (self && isLocalDietPlanId(planId)) {
+          await checkInDiet(planId, today, followed); // local-first
+        } else {
+          await api(`/client/diet-plans/${planId}/checkins`, { method: 'POST', body: { date: today, followed } });
+        }
+      }
       setCheckedToday(followed);
     } catch (e) {
       Alert.alert('Check-in failed', e.message || 'Please try again.');
@@ -185,12 +256,33 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: async () => {
+          // onPress: async () => {
+          //   try {
+          //     const endpoint = isSupplement 
+          //       ? `/client/supplement-plans/${planId}` 
+          //       : `/client/diet-plans/${planId}`;
+          //     await api(endpoint, { method: 'DELETE' });
+          //     navigation.goBack();
+          //   } catch (e) {
+          //     Alert.alert('Could not delete', e.message || 'Please try again.');
+          //   }
+          // },
+
+            onPress: async () => {
             try {
-              const endpoint = isSupplement 
-                ? `/client/supplement-plans/${planId}` 
-                : `/client/diet-plans/${planId}`;
-              await api(endpoint, { method: 'DELETE' });
+              if (isSupplement) {
+                if (self && isLocalSupplementPlanId(planId)) {
+                  await deleteSupplementPlan(planId); // local-first
+                } else {
+                  await api(`/client/supplement-plans/${planId}`, { method: 'DELETE' });
+                }
+              } else {
+                if (self && isLocalDietPlanId(planId)) {
+                  await deleteDietPlan(planId); // local-first
+                } else {
+                  await api(`/client/diet-plans/${planId}`, { method: 'DELETE' });
+                }
+              }
               navigation.goBack();
             } catch (e) {
               Alert.alert('Could not delete', e.message || 'Please try again.');

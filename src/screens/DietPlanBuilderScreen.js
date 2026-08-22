@@ -17,6 +17,9 @@ import { api } from '../lib/api';
 import { useColors } from '../theme';
 import CatalogSearch from '../components/CatalogSearch';
 import DishForm from '../components/DishForm';
+import { listRecipes, createRecipe, getRecipe } from '../db/recipes';
+import { createDietPlan, updateDietPlan, getDietPlan, isLocalDietPlanId } from '../db/dietPlans';
+import { getAllergenConflicts, splitAllergens } from '../lib/allergens';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 const MEAL_TYPES = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Pre-Workout', 'Post-Workout'];
@@ -34,6 +37,18 @@ const macroLine = (it) => {
   if (it.fat_g != null) parts.push(`${scaled(it.fat_g, m)}F`);
   return parts.join(' · ') || 'macros not set';
 };
+
+
+
+
+
+// Client Context section auto-expands on its first view per app session,
+// then stays collapsed (one tap to reopen) — keeps the builder compact.
+let contextSeenThisSession = false;
+
+
+
+
 
 // Structured diet plan builder: plan targets + collapsible days → meal
 // slots → items (catalog snapshots or custom). `self` mode is the
@@ -59,6 +74,53 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
   const [catalogQuery, setCatalogQuery] = useState('');
   const [customForm, setCustomForm] = useState(null); // { mealKey, form, saveToCatalog }
 
+
+
+
+
+// Client's intake profile (trainer mode only). null → no completed
+// profile → ALL allergen warnings are skipped silently, by design.
+const [clientProfile, setClientProfile] = useState(null);
+// Client Context section (goals / injuries / medical) — display-only
+const [contextOpen, setContextOpen] = useState(() => {
+  if (contextSeenThisSession) return false;
+  contextSeenThisSession = true;
+  return true;
+});
+
+useEffect(() => {
+  if (self || editPlanId || !clientId) return; // warnings are trainer-only
+  api(`/trainer/clients/${clientId}/intake-profile`)
+    .then((p) => setClientProfile(p && p.completed_at ? p : null))
+    .catch(() => setClientProfile(null)); // silent: no profile → no warnings
+}, [clientId, self, editPlanId]);
+
+// Every client allergen present ANYWHERE in the current plan — drives the
+// persistent banner. Recomputes live as items are added/removed.
+const planConflicts = (() => {
+  if (!clientProfile) return [];
+  const seen = new Set();
+  const found = [];
+  for (const d of days) {
+    for (const m of d.meals) {
+      for (const it of m.items) {
+        for (const a of getAllergenConflicts(clientProfile.allergens, it.allergens)) {
+          const key = a.toLowerCase();
+          if (!seen.has(key)) {
+            seen.add(key);
+            found.push(a);
+          }
+        }
+      }
+    }
+  }
+  return found;
+})();
+
+
+
+
+
   React.useLayoutEffect(() => {
     navigation.setOptions({
       title: editPlanId
@@ -71,8 +133,14 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
 
   useEffect(() => {
     if (!editPlanId) return;
-    // edit mode: prefill from the existing own plan
-    api(`/client/diet-plans/${editPlanId}`)
+    // // edit mode: prefill from the existing own plan
+    // api(`/client/diet-plans/${editPlanId}`)
+        // edit mode: prefill from the existing own plan — local plans from
+    // SQLite, legacy server plans via the API
+    const loadPromise = isLocalDietPlanId(editPlanId)
+      ? getDietPlan(editPlanId)
+      : api(`/client/diet-plans/${editPlanId}`);
+    loadPromise
       .then((pl) => {
         setName(pl.name || '');
         setNotes(pl.notes || '');
@@ -100,8 +168,18 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
                 fat_g: it.fat_g,
                 serving_size: it.serving_size,
                 recipe_url: it.recipe_url,
+                // quantity_multiplier: it.quantity_multiplier || 1,
+                // client_note: it.client_note || '',
                 quantity_multiplier: it.quantity_multiplier || 1,
                 client_note: it.client_note || '',
+                photo_path: it.photo_path || null,
+                ingredients: it.ingredients || [],
+                allergens: it.allergens || [],
+                prep_time_minutes: it.prep_time_minutes ?? null,
+                cook_time_minutes: it.cook_time_minutes ?? null,
+                difficulty: it.difficulty || null,
+                alternate_servings: it.alternate_servings || [],
+                tags: it.tags || [],
               })),
             })),
           }))
@@ -111,12 +189,17 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
   }, [editPlanId]);
 
   useEffect(() => {
-    // trainers browse their meal catalog; clients browse their My Dishes —
-    // same picker, owner-appropriate source
-    const url = self ? '/client/my-dishes' : '/trainer/meal-catalog';
-    api(url)
-      .then(setCatalog)
-      .catch(() => setCatalog([]));
+    // // trainers browse their meal catalog; clients browse their My Dishes —
+    // // same picker, owner-appropriate source
+    // const url = self ? '/client/my-dishes' : '/trainer/meal-catalog';
+    // api(url)
+    //   .then(setCatalog)
+    //   .catch(() => setCatalog([]));
+      if (self) {
+      listRecipes().then(setCatalog).catch(() => setCatalog([]));
+    } else {
+      api('/trainer/meal-catalog').then(setCatalog).catch(() => setCatalog([]));
+    }
   }, [self]);
 
   const mutateDays = (fn) => setDays((prev) => fn(prev.map((d) => ({ ...d, meals: [...d.meals] }))));
@@ -234,16 +317,37 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
               fat_g: i.fat_g ?? null,
               serving_size: i.serving_size || null,
               recipe_url: i.recipe_url || null,
+              // quantity_multiplier: i.quantity_multiplier || 1,
+              // client_note: i.client_note || null,
+
               quantity_multiplier: i.quantity_multiplier || 1,
               client_note: i.client_note || null,
+              photo_path: i.photo_path ?? null,
+              ingredients: i.ingredients || [],
+              allergens: i.allergens || [],
+              prep_time_minutes: i.prep_time_minutes ?? null,
+              cook_time_minutes: i.cook_time_minutes ?? null,
+              difficulty: i.difficulty || null,
+              alternate_servings: i.alternate_servings || [],
+              tags: i.tags || [],
             })),
           })),
         })),
       };
-      if (editPlanId) {
-        await api(`/client/diet-plans/${editPlanId}`, { method: 'PATCH', body });
+      // if (editPlanId) {
+      //   await api(`/client/diet-plans/${editPlanId}`, { method: 'PATCH', body });
+      // } else if (self) {
+      //   await api('/client/diet-plans', { method: 'POST', body });
+      // } else {
+
+              if (editPlanId) {
+        if (isLocalDietPlanId(editPlanId)) {
+          await updateDietPlan(editPlanId, body); // local-first edit
+        } else {
+          await api(`/client/diet-plans/${editPlanId}`, { method: 'PATCH', body }); // legacy server plan
+        }
       } else if (self) {
-        await api('/client/diet-plans', { method: 'POST', body });
+        await createDietPlan(body); // local-first create — works offline
       } else {
         await api(`/trainer/clients/${clientId}/diet-plans`, { method: 'POST', body });
       }
@@ -274,26 +378,75 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
   }).slice().sort((a, b) => rankFor(a) - rankFor(b));
 
   // one tap → snapshot attach → close
+  // const attachCatalogItem = (c) => {
+  //   addItemToMeal(picker.mealKey, {
+  //     catalog_item_id: c.id,
+  //     name: c.name,
+  //     calories: c.calories,
+  //     protein_g: c.protein_g,
+  //     carbs_g: c.carbs_g,
+  //     fat_g: c.fat_g,
+  //     serving_size: c.serving_size,
+  //     recipe_url: c.recipe_url,
+  //     photo_path: c.photo_path,
+  //     ingredients: c.ingredients,
+  //     allergens: c.allergens,
+  //     prep_time_minutes: c.prep_time_minutes,
+  //     cook_time_minutes: c.cook_time_minutes,
+  //     difficulty: c.difficulty,
+  //     alternate_servings: c.alternate_servings,
+  //   });
+  //   setPicker(null);
+  //   setPickFav(false);
+  // };
+
+
+
+    // one tap → snapshot attach → close. Allergen conflicts trigger a soft
+  // confirm first — never a hard block (trainer's clinical judgment wins).
   const attachCatalogItem = (c) => {
-    addItemToMeal(picker.mealKey, {
-      catalog_item_id: c.id,
-      name: c.name,
-      calories: c.calories,
-      protein_g: c.protein_g,
-      carbs_g: c.carbs_g,
-      fat_g: c.fat_g,
-      serving_size: c.serving_size,
-      recipe_url: c.recipe_url,
-      photo_path: c.photo_path,
-      ingredients: c.ingredients,
-      allergens: c.allergens,
-      prep_time_minutes: c.prep_time_minutes,
-      cook_time_minutes: c.cook_time_minutes,
-      difficulty: c.difficulty,
-      alternate_servings: c.alternate_servings,
-    });
-    setPicker(null);
-    setPickFav(false);
+    const conflicts = clientProfile
+      ? getAllergenConflicts(clientProfile.allergens, c.allergens)
+      : [];
+
+    const doAttach = () => {
+      addItemToMeal(picker.mealKey, {
+        catalog_item_id: c.id,
+        name: c.name,
+        calories: c.calories,
+        protein_g: c.protein_g,
+        carbs_g: c.carbs_g,
+        fat_g: c.fat_g,
+        serving_size: c.serving_size,
+        recipe_url: c.recipe_url,
+        photo_path: c.photo_path,
+        ingredients: c.ingredients,
+        allergens: c.allergens,
+        prep_time_minutes: c.prep_time_minutes,
+        cook_time_minutes: c.cook_time_minutes,
+        difficulty: c.difficulty,
+        alternate_servings: c.alternate_servings,
+      });
+      setPicker(null);
+      setPickFav(false);
+    };
+
+    if (conflicts.length) {
+      Alert.alert(
+        'Allergen warning',
+        `This recipe contains ${conflicts.join(', ')}, which ${
+          clientName || 'the client'
+        } has listed as an allergen. Add anyway?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Add Anyway', style: 'destructive', onPress: doAttach },
+        ],
+        { cancelable: true }
+      );
+      return; // Cancel keeps the picker open so another dish can be chosen
+    }
+
+    doAttach();
   };
 
   const submitCustom = async () => {
@@ -314,8 +467,13 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
     };
     if (customForm.saveToCatalog) {
       try {
-        const url = self ? '/client/my-dishes' : '/trainer/meal-catalog';
-        await api(url, { method: 'POST', body: item });
+        // const url = self ? '/client/my-dishes' : '/trainer/meal-catalog';
+        // await api(url, { method: 'POST', body: item });
+          if (self) {
+          await createRecipe(item);
+        } else {
+          await api('/trainer/meal-catalog', { method: 'POST', body: item });
+        }
       } catch (e) {
         // non-fatal for the plan item, but surface duplicate-name errors
         Alert.alert('Could not save dish', e.message || 'Please try again.');
@@ -327,6 +485,47 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 20, paddingBottom: 48 }}>
+          {/* persistent allergen warning — stays visible the whole session */}
+      {planConflicts.length > 0 && (
+        <View style={styles.allergenBanner}>
+          <Ionicons name="warning" size={15} color={colors.red} />
+          <Text style={styles.allergenBannerText}>
+            Contains items with {clientName || 'client'}'s allergens: {planConflicts.join(', ')}
+          </Text>
+        </View>
+      )}
+
+      {/* Client Context — display-only reference. Never triggers warnings. */}
+      {!self && !editPlanId && clientProfile && (clientProfile.goals?.length || clientProfile.injuries || clientProfile.medical_conditions) && (
+        <TouchableOpacity style={styles.ctxCard} onPress={() => setContextOpen((v) => !v)} activeOpacity={0.7}>
+          <View style={styles.ctxHeader}>
+            <Ionicons name={contextOpen ? 'chevron-down' : 'chevron-forward'} size={14} color={colors.textDim} />
+            <Text style={styles.ctxTitle}>Client Context</Text>
+          </View>
+          {contextOpen && (
+            <View style={styles.ctxBody}>
+              {!!clientProfile.goals?.length && (
+                <Text style={styles.ctxLine}>
+                  <Text style={styles.ctxLabel}>Goals: </Text>
+                  {clientProfile.goals.join(', ')}
+                </Text>
+              )}
+              {!!clientProfile.injuries && (
+                <Text style={styles.ctxLine}>
+                  <Text style={styles.ctxLabel}>Injuries: </Text>
+                  {clientProfile.injuries}
+                </Text>
+              )}
+              {!!clientProfile.medical_conditions && (
+                <Text style={styles.ctxLine}>
+                  <Text style={styles.ctxLabel}>Medical: </Text>
+                  {clientProfile.medical_conditions}
+                </Text>
+              )}
+            </View>
+          )}
+        </TouchableOpacity>
+      )}
       <TextInput
         style={styles.input}
         placeholder="Plan name (e.g. Push Day Nutrition)"
@@ -397,7 +596,8 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
                         setPickTag(null);
                         setPicker({ mealKey: m.key, mealType: m.meal_type, mode: 'catalog' });
                         // refresh dishes on every open so newly saved items appear
-                        api(self ? '/client/my-dishes' : '/trainer/meal-catalog')
+                        // api(self ? '/client/my-dishes' : '/trainer/meal-catalog')
+                          (self ? listRecipes() : api('/trainer/meal-catalog'))
                           .then(setCatalog)
                           .catch(() => {});
                       }}
@@ -536,12 +736,29 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
                               {c.carbs_g != null ? ` ${Math.round(c.carbs_g)}C` : ''}
                               {c.fat_g != null ? ` ${Math.round(c.fat_g)}F` : ''}
                             </Text>
-                            {(c.allergens || []).length > 0 && (
-                              <View style={styles.pickAllergen}>
-                                <Ionicons name="warning" size={10} color={colors.red} />
-                                <Text style={styles.pickAllergenText}>Contains: {c.allergens.join(', ')}</Text>
-                              </View>
-                            )}
+                              {(() => {
+                              const { conflicts, others } = clientProfile
+                                ? splitAllergens(clientProfile.allergens, c.allergens)
+                                : { conflicts: [], others: c.allergens || [] };
+                              return (
+                                <>
+                                  {conflicts.length > 0 && (
+                                    <View style={styles.pickAllergen}>
+                                      <Ionicons name="warning" size={10} color={colors.red} />
+                                      <Text style={styles.pickAllergenText}>
+                                        Contains: {conflicts.join(', ')} — client allergy
+                                      </Text>
+                                    </View>
+                                  )}
+                                  {others.length > 0 && (
+                                    <View style={styles.pickAllergen}>
+                                      <Ionicons name="warning" size={10} color={colors.red} />
+                                      <Text style={styles.pickAllergenText}>Contains: {others.join(', ')}</Text>
+                                    </View>
+                                  )}
+                                </>
+                              );
+                            })()}
                           </View>
                           <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
                         </TouchableOpacity>
@@ -640,8 +857,11 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
             onSave={async (item) => {
               // Save to My Dishes / trainer catalog, then attach
               try {
-                const url = self ? '/client/my-dishes' : '/trainer/meal-catalog';
-                const created = await api(url, { method: 'POST', body: item });
+                // const url = self ? '/client/my-dishes' : '/trainer/meal-catalog';
+                // const created = await api(url, { method: 'POST', body: item });
+                  const created = self
+                  ? await getRecipe(await createRecipe(item))
+                  : await api('/trainer/meal-catalog', { method: 'POST', body: item });
                 setCatalog((prev) => (prev || []).concat([created]));
                 if (picker) attachCatalogItem(created);
               } catch (e) {
@@ -689,6 +909,22 @@ function AddMealSlot({ onPick, styles, colors }) {
 const makeStyles = (colors) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.bg },
+        allergenBanner: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      borderWidth: 1.5, borderColor: colors.red, borderRadius: 12,
+      paddingHorizontal: 12, paddingVertical: 10, marginBottom: 12,
+    },
+    allergenBannerText: { color: colors.red, fontSize: 13, fontWeight: '700', flex: 1 },
+    ctxCard: {
+      backgroundColor: colors.cardLight, borderRadius: 12,
+      borderWidth: 1, borderColor: colors.border,
+      paddingHorizontal: 12, paddingVertical: 10, marginBottom: 12,
+    },
+    ctxHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    ctxTitle: { color: colors.text, fontWeight: '800', fontSize: 13 },
+    ctxBody: { marginTop: 8, gap: 4 },
+    ctxLine: { color: colors.text, fontSize: 12, lineHeight: 17 },
+    ctxLabel: { color: colors.textDim, fontWeight: '700' },
     input: {
       backgroundColor: colors.cardLight, color: colors.text, borderRadius: 12,
       paddingHorizontal: 14, paddingVertical: 12, marginBottom: 10, fontSize: 15,

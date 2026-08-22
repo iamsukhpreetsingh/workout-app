@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
 import ClientTagSelector from '../components/ClientTagSelector';
+import { createSupplementPlan, updateSupplementPlan, getSupplementPlan, isLocalSupplementPlanId } from '../db/supplementPlans';
 
 // Generic builder for diet and supplement plans — same form pattern as the
 // routine builder, configured per kind.
@@ -71,8 +72,13 @@ export default function CoachingPlanBuilderScreen({ route, navigation }) {
 
   React.useEffect(() => {
     if (!editPlanId) return;
-    const endpoint = kind === 'supplement' ? 'supplement-plans' : 'diet-plans';
-    api(`/client/${endpoint}/${editPlanId}`)
+    // const endpoint = kind === 'supplement' ? 'supplement-plans' : 'diet-plans';
+    // api(`/client/${endpoint}/${editPlanId}`)
+        const loadPromise =
+      kind === 'supplement' && isLocalSupplementPlanId(editPlanId)
+        ? getSupplementPlan(editPlanId)
+        : api(`/client/${kind === 'supplement' ? 'supplement-plans' : 'diet-plans'}/${editPlanId}`);
+    loadPromise
       .then((pl) => {
         setName(pl.name || '');
         setNotes(pl.notes || '');
@@ -109,13 +115,25 @@ export default function CoachingPlanBuilderScreen({ route, navigation }) {
         body.tags = tags;
       }
       
-      if (editPlanId) {
+      // if (editPlanId) {
+      //   // Edit mode - supplements only for now (diet uses DietPlanBuilder)
+      //   if (kind === 'supplement') {
+      //     await api(`/client/${cfg.endpoint}/${editPlanId}`, { method: 'PATCH', body });
+      //   }
+      // } else if (self) {
+      //   await api(`/client/${cfg.endpoint}`, { method: 'POST', body });
+      // } else {
+        if (editPlanId) {
         // Edit mode - supplements only for now (diet uses DietPlanBuilder)
         if (kind === 'supplement') {
-          await api(`/client/${cfg.endpoint}/${editPlanId}`, { method: 'PATCH', body });
+          if (isLocalSupplementPlanId(editPlanId)) {
+            await updateSupplementPlan(editPlanId, body); // local-first edit
+          } else {
+            await api(`/client/${cfg.endpoint}/${editPlanId}`, { method: 'PATCH', body }); // legacy
+          }
         }
       } else if (self) {
-        await api(`/client/${cfg.endpoint}`, { method: 'POST', body });
+        await createSupplementPlan(body); // local-first create — works offline
       } else {
         await api(`/trainer/clients/${clientId}/${cfg.endpoint}`, { method: 'POST', body });
       }

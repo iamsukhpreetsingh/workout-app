@@ -4,6 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
+import { getAllergenConflicts } from '../lib/allergens';
+
 
 // Trainer view of a diet/supplement plan: item list + adherence strip
 // (last 28 days, neutral for no check-in) + archive action.
@@ -15,15 +17,19 @@ export default function CoachingPlanDetailScreen({ route, navigation }) {
   const [plan, setPlan] = useState(null);
   const [checkins, setCheckins] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [clientProfile, setClientProfile] = useState(null); // client's intake profile
+  const [contextOpen, setContextOpen] = useState(false); // Client Context section
 
   const load = useCallback(async () => {
     try {
       const [p, cis] = await Promise.all([
         api(`/trainer/clients/${clientId}/${seg}/${planId}`),
         api(`/trainer/clients/${clientId}/${seg}/${planId}/checkins`).catch(() => []),
+        api(`/trainer/clients/${clientId}/intake-profile`).catch(() => null),
       ]);
       setPlan(p);
       setCheckins(cis);
+      setClientProfile(profile && profile.completed_at ? profile : null);
       navigation.setOptions({ title: p.name || 'Plan' });
     } catch (e) {
       Alert.alert('Could not load plan', e.message || 'Please try again.', [
@@ -33,6 +39,29 @@ export default function CoachingPlanDetailScreen({ route, navigation }) {
   }, [clientId, seg, planId, navigation]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+
+  // every client allergen present ANYWHERE in the plan — drives the
+  // persistent banner on this trainer read-only view
+  const planConflicts = React.useMemo(() => {
+    if (kind !== 'diet' || !clientProfile || !plan) return [];
+    const seen = new Set();
+    const found = [];
+    for (const d of plan.days || []) {
+      for (const m of d.meals || []) {
+        for (const it of m.items || []) {
+          for (const a of getAllergenConflicts(clientProfile.allergens, it.allergens)) {
+            const key = a.toLowerCase();
+            if (!seen.has(key)) {
+              seen.add(key);
+              found.push(a);
+            }
+          }
+        }
+      }
+    }
+    return found;
+  }, [kind, clientProfile, plan]);
 
   const confirmArchive = () =>
     Alert.alert(
@@ -87,6 +116,47 @@ export default function CoachingPlanDetailScreen({ route, navigation }) {
         {new Date(plan.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
       </Text>
       {plan.notes ? <Text style={styles.notes}>{plan.notes}</Text> : null}
+
+
+      {planConflicts.length > 0 && (
+        <View style={styles.allergenBanner}>
+          <Ionicons name="warning" size={15} color={colors.red} />
+          <Text style={styles.allergenBannerText}>
+            Contains items with {clientName || 'client'}'s allergens: {planConflicts.join(', ')}
+          </Text>
+        </View>
+      )}
+
+      {kind === 'diet' && clientProfile && (clientProfile.goals?.length || clientProfile.injuries || clientProfile.medical_conditions) && (
+        <TouchableOpacity style={styles.ctxCard} onPress={() => setContextOpen((v) => !v)} activeOpacity={0.7}>
+          <View style={styles.ctxHeader}>
+            <Ionicons name={contextOpen ? 'chevron-down' : 'chevron-forward'} size={14} color={colors.textDim} />
+            <Text style={styles.ctxTitle}>Client Context</Text>
+          </View>
+          {contextOpen && (
+            <View style={styles.ctxBody}>
+              {!!clientProfile.goals?.length && (
+                <Text style={styles.ctxLine}>
+                  <Text style={styles.ctxLabel}>Goals: </Text>
+                  {clientProfile.goals.join(', ')}
+                </Text>
+              )}
+              {!!clientProfile.injuries && (
+                <Text style={styles.ctxLine}>
+                  <Text style={styles.ctxLabel}>Injuries: </Text>
+                  {clientProfile.injuries}
+                </Text>
+              )}
+              {!!clientProfile.medical_conditions && (
+                <Text style={styles.ctxLine}>
+                  <Text style={styles.ctxLabel}>Medical: </Text>
+                  {clientProfile.medical_conditions}
+                </Text>
+              )}
+            </View>
+          )}
+        </TouchableOpacity>
+      )}
 
       {/* Diet renders the nested day → meal → item chart; supplements flat */}
       {kind === 'diet'
@@ -173,6 +243,23 @@ const makeStyles = (colors) =>
     name: { color: colors.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.4 },
     sub: { color: colors.textDim, marginTop: 4, fontSize: 13 },
     notes: { color: colors.textDim, marginTop: 8, marginBottom: 8, fontSize: 13, fontStyle: 'italic' },
+
+    allergenBanner: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      borderWidth: 1.5, borderColor: colors.red, borderRadius: 12,
+      paddingHorizontal: 12, paddingVertical: 10, marginTop: 12, marginBottom: 4,
+    },
+    allergenBannerText: { color: colors.red, fontSize: 13, fontWeight: '700', flex: 1 },
+    ctxCard: {
+      backgroundColor: colors.cardLight, borderRadius: 12,
+      borderWidth: 1, borderColor: colors.border,
+      paddingHorizontal: 12, paddingVertical: 10, marginTop: 12,
+    },
+    ctxHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    ctxTitle: { color: colors.text, fontWeight: '800', fontSize: 13 },
+    ctxBody: { marginTop: 8, gap: 4 },
+    ctxLine: { color: colors.text, fontSize: 12, lineHeight: 17 },
+    ctxLabel: { color: colors.textDim, fontWeight: '700' },
 
     groupLabel: {
       color: colors.textDim, fontSize: 12, fontWeight: '800',

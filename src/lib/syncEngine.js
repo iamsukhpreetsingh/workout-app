@@ -1,0 +1,710 @@
+// src/lib/syncEngine.js
+//
+// THE unified sync engine (System 2). One module owns ALL upload logic for
+// every syncable entity. UI code never calls a backend save endpoint
+// directly — it writes local SQLite and enqueues here.
+//
+// Core rules (from the sync spec — do not weaken these):
+//  - Payloads are built FRESH from the database at process time (never
+//    trust a stored payload — this is what guarantees an edit can't be
+//    overwritten by a stale queued copy).
+//  - Dependency ordering: a child never syncs before its parent (checked
+//    against local table state — authoritative).
+//  - Retry backoff: 30s → 2m → 10m → 1h → stop after 5 attempts. A manual
+//    sync trigger processes FAILED rows regardless of backoff/cap.
+//  - Rows stuck in 'SYNCING' at launch (app died mid-sync) reset to PENDING.
+//  - Deletes: never-backed-up entities are simply removed locally (no queue
+//    row, no server call). Backed-up entities queue a server delete —
+//    server delete endpoints are idempotent, so a delete can never 404-loop.
+//  - Sync modes: 'local' never runs (not even manually); 'manual' runs only
+//    on explicit trigger; 'auto' runs on foreground/reconnect/10-min timer.
+import NetInfo from '@react-native-community/netinfo';
+import * as FileSystem from 'expo-file-system';
+import { getDb } from '../db/db';
+import { getCurrentUserId } from '../db/userId';
+import { api } from './api';
+
+const BACKOFF_MS = [30 * 1000, 2 * 60 * 1000, 10 * 60 * 1000, 60 * 60 * 1000];
+const MAX_ATTEMPTS = 5;
+const BATCH_LIMIT = 200;
+
+let connectivity = { isConnected: false, isInternetReachable: false };
+let processing = false;
+let timer = null;
+let launched = false;
+
+// ── settings ────────────────────────────────────────────────────────────
+async function getSyncSettings() {
+  const db = await getDb();
+  const row = await db.getFirstAsync('SELECT * FROM sync_settings WHERE id = 1');
+  return row || { sync_mode: 'auto' };
+}
+
+async function touchLastSynced() {
+  const db = await getDb();
+  await db.runAsync('UPDATE sync_settings SET last_synced_at = ? WHERE id = 1', [Date.now()]);
+}
+
+// // ── queue writes ─────────────────────────────────────────────────────────
+// // Dedup-in-place: an existing pending row for the same entity is updated,
+// // never duplicated. Editing the same plan 5 times = 1 queue row.
+// export async function enqueueUpsert(entityType, localId, dependsOn = null) {
+//   const db = await getDb();
+//   if (!getCurrentUserId()) return;
+//   const now = Date.now();
+//   const existing = await db.getFirstAsync(
+//     `SELECT id FROM sync_queue WHERE entity_type = ? AND entity_id = ? AND status IN ('PENDING','SYNCING','FAILED')`,
+//     [entityType, String(localId)]
+//   );
+//   if (existing) {
+//     await db.runAsync(
+//       `UPDATE sync_queue SET operation = 'UPDATE', status = 'PENDING', retry_count = 0,
+//          last_error = NULL, updated_at = ?, last_attempt_at = NULL,
+//          depends_on_entity_type = ?, depends_on_local_id = ?
+//        WHERE id = ?`,
+//       [now, dependsOn ? dependsOn.entityType : null, dependsOn ? String(dependsOn.localId) : null, existing.id]
+//     );
+//     return;
+//   }
+//   await db.runAsync(
+//     `INSERT INTO sync_queue (operation_id, entity_type, entity_id, operation, payload,
+//        created_at, updated_at, status, depends_on_entity_type, depends_on_local_id)
+//      VALUES (?, ?, ?, 'CREATE', NULL, ?, ?, 'PENDING', ?, ?)`,
+//     [
+//       `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+//       entityType, String(localId), now, now,
+//       dependsOn ? dependsOn.entityType : null,
+//       dependsOn ? String(dependsOn.localId) : null,
+//     ]
+//   );
+// }
+
+// // hadServerBackup: the caller checks (BEFORE deleting the local row) whether
+// // this entity was ever backed up (server_id set). Never-backed-up deletes
+// // are clean local removals — no queue row, no server call.
+// export async function enqueueDelete(entityType, localId, hadServerBackup) {
+//   const db = await getDb();
+//   await db.runAsync(
+//     `DELETE FROM sync_queue WHERE entity_type = ? AND entity_id = ? AND operation != 'DELETE'`,
+//     [entityType, String(localId)]
+//   );
+//   if (!hadServerBackup) return; // never synced — nothing to tell the server
+//   const now = Date.now();
+//   await db.runAsync(
+//     `INSERT INTO sync_queue (operation_id, entity_type, entity_id, operation, payload,
+//        created_at, updated_at, status)
+//      VALUES (?, ?, ?, 'DELETE', NULL, ?, ?, 'PENDING')`,
+//     [`${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, entityType, String(localId), now, now]
+//   );
+// }
+
+
+
+
+// ── queue writes ─────────────────────────────────────────────────────────
+// Dedup-in-place: an existing pending row for the same entity is updated,
+// never duplicated. Editing the same plan 5 times = 1 queue row.
+// These functions NEVER throw — a queue problem must never block or fail a
+// local save (local-first is the core contract). Failures are logged; the
+// Phase-D backfill sweep is the safety net for anything missed.
+export async function enqueueUpsert(entityType, localId, dependsOn = null) {
+  if (!getCurrentUserId()) return;
+  const db = await getDb();
+  const now = Date.now();
+  try {
+    const existing = await db.getFirstAsync(
+      `SELECT id FROM sync_queue WHERE entity_type = ? AND entity_id = ? AND status IN ('PENDING','SYNCING','FAILED')`,
+      [entityType, String(localId)]
+    );
+    if (existing) {
+      await db.runAsync(
+        `UPDATE sync_queue SET operation = 'UPDATE', status = 'PENDING', retry_count = 0,
+           last_error = NULL, updated_at = ?, last_attempt_at = NULL,
+           depends_on_entity_type = ?, depends_on_local_id = ?
+         WHERE id = ?`,
+        [now, dependsOn ? dependsOn.entityType : null, dependsOn ? String(dependsOn.localId) : null, existing.id]
+      );
+      return;
+    }
+    await db.runAsync(
+      `INSERT INTO sync_queue (operation_id, entity_type, entity_id, operation, payload,
+         created_at, updated_at, status, depends_on_entity_type, depends_on_local_id)
+       VALUES (?, ?, ?, 'CREATE', NULL, ?, ?, 'PENDING', ?, ?)`,
+      [
+        `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        entityType, String(localId), now, now,
+        dependsOn ? dependsOn.entityType : null,
+        dependsOn ? String(dependsOn.localId) : null,
+      ]
+    );
+  } catch (e) {
+    console.error('[SYNC] enqueueUpsert failed (local save unaffected):', e.message);
+  }
+}
+
+// hadServerBackup: the caller checks (BEFORE deleting the local row) whether
+// this entity was ever backed up (server_id set). Never-backed-up deletes
+// are clean local removals — no queue row, no server call.
+export async function enqueueDelete(entityType, localId, hadServerBackup) {
+  const db = await getDb();
+  try {
+    await db.runAsync(
+      `DELETE FROM sync_queue WHERE entity_type = ? AND entity_id = ? AND operation != 'DELETE'`,
+      [entityType, String(localId)]
+    );
+    if (!hadServerBackup) return; // never synced — nothing to tell the server
+    const now = Date.now();
+    await db.runAsync(
+      `INSERT INTO sync_queue (operation_id, entity_type, entity_id, operation, payload,
+         created_at, updated_at, status)
+       VALUES (?, ?, ?, 'DELETE', NULL, ?, ?, 'PENDING')`,
+      [`${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, entityType, String(localId), now, now]
+    );
+  } catch (e) {
+    console.error('[SYNC] enqueueDelete failed (local delete unaffected):', e.message);
+  }
+}
+
+
+
+
+
+// ── payload builders (fresh from DB — the anti-zeroing guarantee) ───────
+async function buildSessionPayload(sid) {
+  const db = await getDb();
+  const s = await db.getFirstAsync('SELECT * FROM workout_sessions WHERE id = ?', [sid]);
+  if (!s) return null;
+  const exs = await db.getAllAsync(
+    `SELECT se.*, e.name AS exercise_name, e.muscle_group AS ex_muscle
+     FROM session_exercises se JOIN exercises e ON e.id = se.exercise_id
+     WHERE se.session_id = ? ORDER BY se.position`,
+    [sid]
+  );
+  const exercises = [];
+  for (let i = 0; i < exs.length; i++) {
+    const ex = exs[i];
+    const sets = await db.getAllAsync(
+      'SELECT * FROM sets WHERE session_exercise_id = ? ORDER BY position',
+      [ex.id]
+    );
+    exercises.push({
+      local_entity_id: `${s.id}:e${i}`,
+      exercise_name: ex.exercise_name,
+      muscle_group: ex.muscle_group || ex.ex_muscle || null,
+      order_index: ex.position,
+      rest_seconds: ex.rest_seconds,
+      group_id: ex.group_id,
+      notes: ex.notes,
+      sets: sets.map((st, j) => ({
+        local_entity_id: `${s.id}:e${i}:s${j}`,
+        weight: st.weight,
+        reps: st.reps,
+        set_type: st.set_type,
+        rpe: st.rpe,
+        completed: st.completed !== 0,
+        order_index: st.position,
+      })),
+    });
+  }
+  return {
+    local_entity_id: String(s.id),
+    name: s.name,
+    started_at: new Date(s.start_time).toISOString(),
+    finished_at: s.end_time ? new Date(s.end_time).toISOString() : null,
+    duration_seconds: s.duration_sec,
+    notes: s.notes,
+    plan_local_id: s.plan_id != null ? String(s.plan_id) : null,
+    source_assigned_plan_id: s.source_assigned_plan_id || null,
+    exercises,
+  };
+}
+
+async function buildPlanPayload(pid) {
+  const db = await getDb();
+  const p = await db.getFirstAsync('SELECT * FROM workout_plans WHERE id = ?', [pid]);
+  if (!p) return null;
+  const exs = await db.getAllAsync(
+    `SELECT pe.*, e.name AS exercise_name
+     FROM plan_exercises pe JOIN exercises e ON e.id = pe.exercise_id
+     WHERE pe.plan_id = ? ORDER BY pe.position`,
+    [pid]
+  );
+  return {
+    local_plan_id: String(p.id),
+    name: p.name,
+    notes: p.notes,
+    tags: p.tags ? JSON.parse(p.tags) : [],
+    exercises: exs.map((ex, i) => ({
+      exercise_id: ex.exercise_id, // kept for compat with existing rows
+      exercise_name: ex.exercise_name, // authoritative: restore resolves by name
+      target_sets: ex.target_sets,
+      rest_seconds: ex.rest_seconds,
+      order_index: ex.position ?? i,
+      group_id: ex.group_id,
+    })),
+    created_at: p.created_at ? new Date(p.created_at).toISOString() : new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function parseJsonArr(v) {
+  if (Array.isArray(v)) return v;
+  try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; }
+}
+
+async function buildRecipePayload(localId) {
+  const db = await getDb();
+  const r = await db.getFirstAsync('SELECT * FROM local_recipes WHERE local_id = ?', [localId]);
+  if (!r) return null;
+  return {
+    local_entity_id: r.local_id,
+    name: r.name, description: r.description, prep_notes: r.prep_notes,
+    calories: r.calories, protein_g: r.protein_g, carbs_g: r.carbs_g, fat_g: r.fat_g,
+    serving_size: r.serving_size, recipe_url: r.recipe_url, photo_path: r.photo_path,
+    ingredients: parseJsonArr(r.ingredients), allergens: parseJsonArr(r.allergens),
+    prep_time_minutes: r.prep_time_minutes, cook_time_minutes: r.cook_time_minutes,
+    difficulty: r.difficulty, suggested_meal_types: parseJsonArr(r.suggested_meal_types),
+    is_favorite: r.is_favorite === 1,
+    alternate_servings: parseJsonArr(r.alternate_servings), tags: parseJsonArr(r.tags),
+  };
+}
+
+async function buildDietPlanPayload(localId) {
+  const db = await getDb();
+  const p = await db.getFirstAsync('SELECT * FROM local_diet_plans WHERE local_id = ?', [localId]);
+  if (!p) return null;
+  const days = await db.getAllAsync(
+    'SELECT * FROM local_diet_plan_days WHERE diet_plan_local_id = ? ORDER BY order_index', [localId]);
+  for (const d of days) {
+    d.meals = await db.getAllAsync(
+      'SELECT * FROM local_diet_plan_meals WHERE diet_day_local_id = ? ORDER BY order_index', [d.local_id]);
+    for (const m of d.meals) {
+      m.items = await db.getAllAsync(
+        'SELECT * FROM local_diet_plan_meal_items WHERE diet_meal_local_id = ? ORDER BY order_index', [m.local_id]);
+    }
+  }
+  return {
+    local_entity_id: p.local_id, name: p.name, notes: p.notes, tags: parseJsonArr(p.tags),
+    daily_calorie_target: p.daily_calorie_target, daily_protein_target: p.daily_protein_target,
+    daily_carbs_target: p.daily_carbs_target, daily_fat_target: p.daily_fat_target,
+    days: days.map((d) => ({
+      local_entity_id: d.local_id, day_label: d.day_label, order_index: d.order_index,
+      meals: d.meals.map((m) => ({
+        local_entity_id: m.local_id, meal_type: m.meal_type, order_index: m.order_index, slot_note: m.slot_note,
+        items: m.items.map((it) => ({
+          local_entity_id: it.local_id, local_recipe_id: it.local_recipe_id || null,
+          name: it.name, calories: it.calories, protein_g: it.protein_g, carbs_g: it.carbs_g, fat_g: it.fat_g,
+          serving_size: it.serving_size, recipe_url: it.recipe_url,
+          quantity_multiplier: it.quantity_multiplier || 1, client_note: it.client_note,
+          order_index: it.order_index, photo_path: it.photo_path,
+          ingredients: parseJsonArr(it.ingredients), allergens: parseJsonArr(it.allergens),
+          prep_time_minutes: it.prep_time_minutes, cook_time_minutes: it.cook_time_minutes,
+          difficulty: it.difficulty, alternate_servings: parseJsonArr(it.alternate_servings),
+          tags: parseJsonArr(it.tags),
+        })),
+      })),
+    })),
+  };
+}
+
+async function buildSupplementPlanPayload(localId) {
+  const db = await getDb();
+  const p = await db.getFirstAsync('SELECT * FROM local_supplement_plans WHERE local_id = ?', [localId]);
+  if (!p) return null;
+  const items = await db.getAllAsync(
+    'SELECT * FROM local_supplement_plan_items WHERE supplement_plan_local_id = ? ORDER BY order_index', [localId]);
+  return {
+    local_entity_id: p.local_id, name: p.name, notes: p.notes, tags: parseJsonArr(p.tags),
+    items: items.map((it) => ({
+      local_entity_id: it.local_id, supplement_name: it.supplement_name,
+      dosage: it.dosage, timing: it.timing, notes: it.notes, order_index: it.order_index,
+    })),
+  };
+}
+
+// ── handlers: upsert(localId) → builds payload fresh, pushes, marks synced
+//             remove(localId) → idempotent server delete
+//             deps(localId)  → local ids of unsynced parents blocking this row
+const HANDLERS = {
+  session: {
+    path: '/user/backup/sessions',
+    async upsert(id) {
+      const payload = await buildSessionPayload(id);
+      if (!payload) return; // deleted meanwhile — clean no-op
+      const rows = await api(this.path, { method: 'POST', body: payload });
+      const serverId = Array.isArray(rows) ? rows[0]?.id : rows?.id;
+      const db = await getDb();
+      await db.runAsync('UPDATE workout_sessions SET synced = 1, server_id = ? WHERE id = ?', [serverId || null, id]);
+    },
+    async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
+    deps: null,
+  },
+  workout_plan: {
+    path: '/user/backup/workout-plans',
+    async upsert(id) {
+      const payload = await buildPlanPayload(id);
+      if (!payload) return;
+      const rows = await api(this.path, { method: 'POST', body: [payload] });
+      const serverId = Array.isArray(rows) ? rows[0]?.id : rows?.id;
+      const db = await getDb();
+      await db.runAsync('UPDATE workout_plans SET synced = 1, server_id = ? WHERE id = ?', [serverId || null, id]);
+    },
+    async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
+    deps: null,
+  },
+  custom_exercise: {
+    path: '/user/backup/custom-exercises',
+    async upsert(id) {
+      const db = await getDb();
+      const e = await db.getFirstAsync('SELECT * FROM exercises WHERE id = ? AND is_custom = 1', [id]);
+      if (!e) return;
+      const rows = await api(this.path, {
+        method: 'POST',
+        body: [{ local_entity_id: String(e.id), name: e.name, muscle_group: e.muscle_group, instructions: e.instructions, thumbnail_path: e.thumbnail_path }],
+      });
+      await db.runAsync('UPDATE exercises SET synced = 1, server_id = ? WHERE id = ?', [rows?.[0]?.id || null, id]);
+    },
+    async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
+    deps: null,
+  },
+  measurement: {
+    // entity_id is "date|metric_type" (composite natural key)
+    path: '/user/backup/measurements',
+    async upsert(entityId) {
+      const [date, metricType] = String(entityId).split('|');
+      const db = await getDb();
+      const m = await db.getFirstAsync(
+        // 'SELECT * FROM body_metrics WHERE date = ? AND metric_type = ?', [date, metricType]);
+        'SELECT * FROM body_metrics WHERE date = ? AND metric_type = ? AND user_id = ?',
+        [date, metricType, getCurrentUserId()]);
+      if (!m) return;
+      await api(this.path, { method: 'POST', body: [{ date: m.date, metric_type: m.metric_type, value: m.value, unit: m.unit }] });
+      await db.runAsync('UPDATE body_metrics SET synced = 1 WHERE date = ? AND metric_type = ?', [date, metricType]);
+    },
+    async remove(entityId) {
+      const [date, metricType] = String(entityId).split('|');
+      await api(`${this.path}/${date}/${metricType}`, { method: 'DELETE' });
+    },
+    deps: null,
+  },
+  recipe: {
+    path: '/user/backup/recipes',
+    async upsert(localId) {
+      const payload = await buildRecipePayload(localId);
+      if (!payload) return;
+      const rows = await api(this.path, { method: 'POST', body: [payload] });
+      const db = await getDb();
+      await db.runAsync('UPDATE local_recipes SET synced = 1, server_id = ? WHERE local_id = ?', [rows?.[0]?.id || null, localId]);
+    },
+    async remove(localId) { await api(`${this.path}/${localId}`, { method: 'DELETE' }); },
+    deps: null,
+  },
+  diet_plan: {
+    path: '/user/backup/diet-plans',
+    async upsert(localId) {
+      const payload = await buildDietPlanPayload(localId);
+      if (!payload) return;
+      const row = await api(this.path, { method: 'POST', body: payload });
+      const db = await getDb();
+      await db.runAsync('UPDATE local_diet_plans SET synced = 1, server_id = ? WHERE local_id = ?', [row?.id || null, localId]);
+    },
+    async remove(localId) { await api(`${this.path}/${localId}`, { method: 'DELETE' }); },
+    // blocked while any referenced recipe is still unsynced
+    async deps(localId) {
+      const db = await getDb();
+      const rows = await db.getAllAsync(
+        `SELECT DISTINCT it.local_recipe_id FROM local_diet_plan_meal_items it
+         JOIN local_diet_plan_meals m ON m.local_id = it.diet_meal_local_id
+         JOIN local_diet_plan_days d ON d.local_id = m.diet_day_local_id
+         JOIN local_recipes r ON r.local_id = it.local_recipe_id
+         WHERE d.diet_plan_local_id = ? AND r.synced = 0`, [localId]);
+      return rows.map((x) => x.local_recipe_id);
+    },
+  },
+  diet_checkin: {
+    path: '/user/backup/diet-checkins',
+    async upsert(entityId) {
+      const [planLocalId, date] = String(entityId).split('|');
+      const db = await getDb();
+      const c = await db.getFirstAsync(
+        'SELECT * FROM local_diet_checkins WHERE diet_plan_local_id = ? AND date = ?', [planLocalId, date]);
+      if (!c) return;
+      await api(this.path, {
+        method: 'POST',
+        body: [{ diet_plan_local_id: c.diet_plan_local_id, date: c.date, followed: c.followed === 1, note: c.note }],
+      });
+      await db.runAsync('UPDATE local_diet_checkins SET synced = 1 WHERE id = ?', [c.id]);
+    },
+    async remove(entityId) {
+      const [planLocalId, date] = String(entityId).split('|');
+      // server check-ins are upserted; a deleted local check-in is re-marked
+      // by the next upsert — nothing to hard-delete server-side
+      await api(`${this.path}?plan_local_id=${encodeURIComponent(planLocalId)}`);
+    },
+    async deps(entityId) {
+      const [planLocalId] = String(entityId).split('|');
+      const db = await getDb();
+      const p = await db.getFirstAsync('SELECT synced FROM local_diet_plans WHERE local_id = ?', [planLocalId]);
+      return p && p.synced === 0 ? [planLocalId] : [];
+    },
+  },
+  supplement_plan: {
+    path: '/user/backup/supplement-plans',
+    async upsert(localId) {
+      const payload = await buildSupplementPlanPayload(localId);
+      if (!payload) return;
+      const row = await api(this.path, { method: 'POST', body: payload });
+      const db = await getDb();
+      await db.runAsync('UPDATE local_supplement_plans SET synced = 1, server_id = ? WHERE local_id = ?', [row?.id || null, localId]);
+    },
+    async remove(localId) { await api(`${this.path}/${localId}`, { method: 'DELETE' }); },
+    deps: null,
+  },
+  supplement_checkin: {
+    path: '/user/backup/supplement-checkins',
+    async upsert(entityId) {
+      const [planLocalId, date] = String(entityId).split('|');
+      const db = await getDb();
+      const c = await db.getFirstAsync(
+        'SELECT * FROM local_supplement_checkins WHERE supplement_plan_local_id = ? AND date = ?', [planLocalId, date]);
+      if (!c) return;
+      await api(this.path, {
+        method: 'POST',
+        body: [{ supplement_plan_local_id: c.supplement_plan_local_id, date: c.date, taken: c.taken === 1, note: c.note }],
+      });
+      await db.runAsync('UPDATE local_supplement_checkins SET synced = 1 WHERE id = ?', [c.id]);
+    },
+    async remove(entityId) {
+      const [planLocalId] = String(entityId).split('|');
+      await api(`${this.path}?plan_local_id=${encodeURIComponent(planLocalId)}`);
+    },
+    async deps(entityId) {
+      const [planLocalId] = String(entityId).split('|');
+      const db = await getDb();
+      const p = await db.getFirstAsync('SELECT synced FROM local_supplement_plans WHERE local_id = ?', [planLocalId]);
+      return p && p.synced === 0 ? [planLocalId] : [];
+    },
+  },
+//   personal_record: {
+//     path: '/user/backup/personal-records',
+//     async upsert(id) {
+//       const db = await getDb();
+//       const r = await db.getFirstAsync('SELECT * FROM personal_records WHERE id = ?', [id]);
+//       if (!r) return;
+//       const rows = await api(this.path, {
+//         method: 'POST',
+//         body: [{
+//           local_entity_id: String(r.id), exercise_name: r.exercise_name,
+//           record_type: r.record_type, value: r.value,
+//           secondary_value: r.secondary_value,
+//           achieved_at: r.achieved_at,
+//         }],
+//       });
+//       await db.runAsync('UPDATE personal_records SET synced = 1, server_id = ? WHERE id = ?', [rows?.[0]?.id || null, id]);
+//     },
+//     async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
+//     deps: null,
+//   },
+
+
+
+  personal_record: {
+    path: '/user/backup/personal-records',
+    async upsert(id) {
+      const db = await getDb();
+      let r = await db.getFirstAsync('SELECT * FROM personal_records WHERE id = ?', [id]);
+      if (!r) return;
+      // resolve the exercise name fresh — PR rows created before the v23
+      // upgrade may carry a NULL exercise_name
+      if (!r.exercise_name) {
+        const ex = await db.getFirstAsync('SELECT name FROM exercises WHERE id = ?', [r.exercise_id]);
+        if (!ex) return; // source exercise no longer exists — nothing to back up
+        r = { ...r, exercise_name: ex.name };
+      }
+      const rows = await api(this.path, {
+        method: 'POST',
+        body: [{
+          local_entity_id: String(r.id), exercise_name: r.exercise_name,
+          record_type: r.record_type, value: r.value,
+          secondary_value: r.secondary_value,
+          achieved_at: r.achieved_at,
+        }],
+      });
+      await db.runAsync('UPDATE personal_records SET synced = 1, server_id = ? WHERE id = ?', [rows?.[0]?.id || null, id]);
+    },
+    async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
+    deps: null,
+  },
+
+
+
+
+  progress_photo: {
+    path: '/user/backup/progress-photos',
+    async upsert(id) {
+      const db = await getDb();
+      const p = await db.getFirstAsync('SELECT * FROM progress_photos WHERE id = ?', [id]);
+      if (!p) return;
+    //   const base64 = await FileSystem.readAsStringAsync(p.file_path, {
+    //     encoding: FileSystem.EncodingType.Base64,
+    //   });
+
+          // file_path is stored as a bare filename (photos.js keeps files under
+      // documentDirectory/progress_photos/) — resolve to a full URI, while
+      // tolerating absolute paths if that ever changes
+      const filePath = String(p.file_path || '').startsWith('file:')
+        ? p.file_path
+        : `${FileSystem.documentDirectory}progress_photos/${p.file_path}`;
+      const base64 = await FileSystem.readAsStringAsync(filePath, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const row = await api(this.path, {
+        method: 'POST',
+        body: { local_entity_id: String(p.id), date: p.date, angle: p.angle, image_base64: base64 },
+      });
+      await db.runAsync('UPDATE progress_photos SET synced = 1, server_id = ? WHERE id = ?', [row?.id || null, id]);
+    },
+    async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
+    deps: null,
+  },
+};
+
+// ── the processor ────────────────────────────────────────────────────────
+export async function processQueue({ manual = false } = {}) {
+  const settings = await getSyncSettings();
+  if (settings.sync_mode === 'local') return { skipped: true, reason: 'local_only' };
+  if (settings.sync_mode === 'manual' && !manual) return { skipped: true, reason: 'manual_mode' };
+//   if (!connectivity.isConnected) return { skipped: true, reason: 'offline' };
+  if (!getCurrentUserId()) return { skipped: true, reason: 'not_authenticated' };
+  // refresh connectivity live — the engine's own listener doesn't start
+  // until Part D, so never trust a stale cached state
+  try {
+    const state = await NetInfo.fetch();
+    connectivity = {
+      isConnected: !!(state.isConnected && state.isInternetReachable !== false),
+      isInternetReachable: state.isInternetReachable !== false,
+    };
+  } catch {}
+  if (!connectivity.isConnected) return { skipped: true, reason: 'offline' };
+  if (processing) return { skipped: true, reason: 'in_progress' };
+
+  processing = true;
+  let uploaded = 0;
+  let failed = 0;
+  let deferred = 0;
+  const errors = [];
+
+  try {
+    const db = await getDb();
+    const rows = await db.getAllAsync(
+      `SELECT * FROM sync_queue WHERE status IN ('PENDING','FAILED') ORDER BY created_at ASC LIMIT ?`,
+      [BATCH_LIMIT]
+    );
+    const now = Date.now();
+
+    for (const op of rows) {
+      if (!connectivity.isConnected) break;
+
+      // permanent failures stop auto-retrying (manual trigger overrides)
+      if (op.status === 'FAILED' && !manual) {
+        if ((op.retry_count || 0) >= MAX_ATTEMPTS) { failed++; continue; }
+        const wait = BACKOFF_MS[Math.min((op.retry_count || 1) - 1, BACKOFF_MS.length - 1)] || BACKOFF_MS[0];
+        if (op.last_attempt_at && now - op.last_attempt_at < wait) { deferred++; continue; }
+      }
+
+      const handler = HANDLERS[op.entity_type];
+      if (!handler) {
+        await db.runAsync(
+          `UPDATE sync_queue SET status = 'FAILED', retry_count = 5, last_error = 'unknown entity type', last_attempt_at = ? WHERE id = ?`,
+          [now, op.id]
+        );
+        failed++;
+        continue;
+      }
+
+      // dependency check against LOCAL state (authoritative)
+      if (handler.deps) {
+        const blockers = await handler.deps(op.entity_id);
+        if (blockers && blockers.length) { deferred++; continue; }
+      }
+
+      await db.runAsync(
+        `UPDATE sync_queue SET status = 'SYNCING', last_attempt_at = ? WHERE id = ?`, [now, op.id]);
+
+      try {
+        if (op.operation === 'DELETE') {
+          await handler.remove(op.entity_id);
+        } else {
+          await handler.upsert(op.entity_id);
+        }
+        await db.runAsync('DELETE FROM sync_queue WHERE id = ?', [op.id]); // done — clean up
+        uploaded++;
+      } catch (e) {
+        const attempts = (op.retry_count || 0) + 1;
+        await db.runAsync(
+          `UPDATE sync_queue SET status = 'FAILED', retry_count = ?, last_error = ?, updated_at = ? WHERE id = ?`,
+          [attempts, String(e.message || e).slice(0, 300), now, op.id]
+        );
+        failed++;
+        errors.push({ entity: `${op.entity_type}:${op.entity_id}`, error: e.message });
+      }
+    }
+
+    if (uploaded > 0) await touchLastSynced();
+    return { uploaded, failed, deferred, errors };
+  } finally {
+    processing = false;
+  }
+}
+
+// ── engine status (drives the Settings UI in Phase 5) ───────────────────
+export async function getEngineStatus() {
+  const db = await getDb();
+  const pending = await db.getFirstAsync(`SELECT COUNT(*) AS c FROM sync_queue WHERE status IN ('PENDING','SYNCING')`);
+  const failed = await db.getFirstAsync(`SELECT COUNT(*) AS c FROM sync_queue WHERE status = 'FAILED'`);
+  const settings = await getSyncSettings();
+  return {
+    sync_mode: settings.sync_mode,
+    last_synced_at: settings.last_synced_at || null,
+    pending_count: pending?.c || 0,
+    failed_count: failed?.c || 0,
+    isConnected: connectivity.isConnected,
+  };
+}
+
+// ── initialization (App.js calls this once after auth — Part D) ─────────
+export function initSyncEngine() {
+  if (launched) return;
+  launched = true;
+
+  (async () => {
+    // crash recovery: a row left in SYNCING means the app died mid-flight
+    const db = await getDb();
+    await db.runAsync(`UPDATE sync_queue SET status = 'PENDING' WHERE status = 'SYNCING'`);
+
+    const check = async () => {
+      try {
+        const state = await NetInfo.fetch();
+        const wasOffline = !connectivity.isConnected;
+        connectivity = {
+          isConnected: !!(state.isConnected && state.isInternetReachable !== false),
+          isInternetReachable: state.isInternetReachable !== false,
+        };
+        if (wasOffline && connectivity.isConnected) {
+          await processQueue(); // auto mode only — processQueue checks the mode
+        }
+      } catch {}
+    };
+    await check();
+    NetInfo.addEventListener(check);
+
+    // 10-minute safety net while the app is open (auto mode only)
+    timer = setInterval(() => { processQueue(); }, 10 * 60 * 1000);
+  })();
+}
+
+export function _resetForTests() {
+  launched = false;
+  if (timer) clearInterval(timer);
+  timer = null;
+}

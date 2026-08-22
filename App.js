@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { StatusBar, View, Text, ActivityIndicator, AppState } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { StatusBar, View, Text, ActivityIndicator, AppState, Alert, TouchableOpacity } from 'react-native';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -12,7 +12,9 @@ import { setHapticsEnabled } from './src/lib/haptics';
 import { syncPendingSessions, syncPendingMeasurements } from './src/lib/syncService';
 import { getViewChoice, setViewChoice, clearViewChoice } from './src/lib/viewMode';
 import { useColors } from './src/theme';
-
+import { api } from './src/lib/api';
+import * as SecureStore from 'expo-secure-store';
+import IntakeFormScreen from './src/screens/IntakeFormScreen';
 import LoginScreen from './src/screens/LoginScreen';
 import SignupScreen from './src/screens/SignupScreen';
 import ViewChoiceScreen from './src/screens/ViewChoiceScreen';
@@ -48,6 +50,10 @@ import NotificationCenterScreen from './src/screens/NotificationCenterScreen';
 import TagManagerScreen from './src/screens/TagManagerScreen';
 import SyncSettingsScreen from './src/screens/SyncSettingsScreen';
 import { initConnectivityListener } from './src/lib/sync';
+import { initSyncEngine } from './src/lib/syncEngine';
+import { runBackfillIfNeeded } from './src/lib/backfill';
+import { isRestoreNeeded } from './src/lib/restore';
+import RestoreScreen from './src/screens/RestoreScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -123,6 +129,7 @@ function MainStack({ onSwitchView }) {
         {(props) => <SettingsScreen {...props} onSwitchView={isTrainer ? onSwitchView : undefined} />}
       </Stack.Screen>
       <Stack.Screen name="SyncSettings" component={SyncSettingsScreen} options={{ title: 'Data & Sync' }} />
+      <Stack.Screen name="IntakeForm" component={IntakeFormScreen} options={{ title: 'Health Profile' }} />
       <Stack.Screen name="Profile" component={ProfileScreen} options={{ title: 'Profile' }} />
       <Stack.Screen name="Body" component={BodyScreen} options={{ title: 'Body' }} />
       <Stack.Screen name="ClientDetail" component={ClientDetailScreen} options={{ title: 'Client' }} />
@@ -226,6 +233,46 @@ function Splash() {
   );
 }
 
+
+
+
+
+
+
+
+// ── Intake-profile onboarding helpers ──────────────────────────────────
+// A client with an ACTIVE trainer but no completed health profile gets the
+// non-dismissible intake form (hard gate, rendered above the navigator).
+// A client who already HAS a profile and connects to a NEW trainer gets a
+// gentle one-time prompt instead — never a gate. Acknowledged trainer ids
+// are kept in SecureStore so the prompt never repeats for the same trainer.
+const INTAKE_ACK_KEY = 'intake_ack_trainers';
+
+async function getAckedTrainers() {
+  try {
+    return JSON.parse((await SecureStore.getItemAsync(INTAKE_ACK_KEY)) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+async function ackTrainer(id) {
+  if (!id) return;
+  try {
+    const acked = await getAckedTrainers();
+    if (!acked.includes(id)) {
+      acked.push(id);
+      await SecureStore.setItemAsync(INTAKE_ACK_KEY, JSON.stringify(acked));
+    }
+  } catch {}
+}
+
+
+
+
+
+
+
 function AppContent() {
   const { colors, isDark, hapticsEnabled, loaded } = useApp();
   const { authStatus, user } = useAuth();
@@ -233,6 +280,7 @@ function AppContent() {
   // trainerView: null while reading the persisted choice; 'user'|'trainer'
   // once resolved; 'unset' → show the choice screen.
   const [trainerView, setTrainerView] = useState(null);
+  const [restorePending, setRestorePending] = useState(false); // restore overlay (System 5)
   const isTrainer = user?.role === 'trainer';
 
   useEffect(() => {
@@ -252,6 +300,64 @@ function AppContent() {
     return () => { mounted = false; };
   }, [authStatus, isTrainer]);
 
+
+
+
+
+    // ── Intake-profile gate ──
+  // null = no gate; 'gate' = non-dismissible form (active trainer, no
+  // completed profile); 'edit' = review form opened from the gentle prompt.
+  const [intakeGate, setIntakeGate] = useState(null);
+  const gateTrainerRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      if (authStatus !== 'authenticated' || isTrainer) return;
+      try {
+        const [assoc, profile] = await Promise.all([
+          api('/client/trainer').catch(() => null),
+          api('/client/intake-profile').catch(() => null),
+        ]);
+        if (cancelled) return;
+        if (!assoc || assoc.status !== 'active') return setIntakeGate(null);
+        const trainerId = assoc.trainer_id || (assoc.trainer && assoc.trainer.id) || null;
+        gateTrainerRef.current = trainerId;
+        if (!profile || !profile.completed_at) return setIntakeGate('gate');
+        // profile already completed → gentle prompt only, once per new trainer
+        setIntakeGate(null);
+        if (trainerId) {
+          const acked = await getAckedTrainers();
+          if (cancelled || acked.includes(trainerId)) return;
+          ackTrainer(trainerId);
+          Alert.alert(
+            'New trainer connected',
+            'Your health profile helps your trainer keep your plans safe. Want to review it?',
+            [
+              { text: 'Not now', style: 'cancel' },
+              { text: 'Review', onPress: () => setIntakeGate('edit') },
+            ]
+          );
+        }
+      } catch {
+        if (!cancelled) setIntakeGate(null);
+      }
+    };
+    check();
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') check();
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
+  }, [authStatus, isTrainer]);
+
+
+
+
+
+
   // Choosing/switching persists and remounts immediately.
   const chooseView = useCallback(
     (mode) => {
@@ -261,13 +367,48 @@ function AppContent() {
     []
   );
 
-  // Invisible sync catch-up on foreground while authenticated.
+  // // Invisible sync catch-up on foreground while authenticated.
+  // useEffect(() => {
+  //   if (authStatus !== 'authenticated') return;
+  //   // Initialize connectivity listener for offline-first sync
+  //   initConnectivityListener();
+  //   syncPendingSessions();
+  //   syncPendingMeasurements();
+  //   const sub = AppState.addEventListener('change', (state) => {
+  //     if (state === 'active') {
+  //       syncPendingSessions();
+  //       syncPendingMeasurements();
+  //     }
+  //   });
+  //   return () => sub.remove();
+  // }, [authStatus]);
+
+
+    // Engine startup + trainer-facing pushes + restore gate + backfill.
   useEffect(() => {
     if (authStatus !== 'authenticated') return;
-    // Initialize connectivity listener for offline-first sync
+    // unified engine: connectivity listener, crash reset, 10-min safety net
+    initSyncEngine();
+    // legacy shim + trainer-facing (redacted) pushes — mode-gated
     initConnectivityListener();
     syncPendingSessions();
     syncPendingMeasurements();
+
+    // Restore gate (System 5): fresh install/cleared data → full restore
+    // BEFORE the user enters the app. Runs before the backfill so restored
+    // rows (synced=1) are never re-enqueued.
+    (async () => {
+      try {
+        if (await isRestoreNeeded()) {
+          setRestorePending(true); // overlay finish triggers the backfill
+        } else {
+          runBackfillIfNeeded().catch(() => {});
+        }
+      } catch {
+        setRestorePending(true); // couldn't even check — overlay handles retry
+      }
+    })();
+
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
         syncPendingSessions();
@@ -313,6 +454,39 @@ function AppContent() {
           <ActiveWorkoutMiniBar />
         </>
       )}
+      {/* intake-profile gate / gentle-prompt review — rendered above nav */}
+      {(intakeGate === 'gate' || intakeGate === 'edit') && (
+        <View style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: colors.bg, paddingTop: intakeGate === 'gate' ? 44 : 0 }}>
+          {intakeGate === 'edit' && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 12, paddingHorizontal: 16 }}>
+              <TouchableOpacity onPress={() => setIntakeGate(null)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+              <Text style={{ color: colors.text, fontSize: 17, fontWeight: '800', marginLeft: 10 }}>Health Profile</Text>
+            </View>
+          )}
+          <IntakeFormScreen
+            route={{ params: { gate: intakeGate === 'gate' } }}
+            navigation={{
+              goBack: () => {
+                if (intakeGate === 'gate') ackTrainer(gateTrainerRef.current);
+                setIntakeGate(null);
+              },
+              setOptions: () => {},
+            }}
+          />
+        </View>
+      )}
+      {/* restore-on-login gate — non-dismissible overlay above everything */}
+      {restorePending && (
+        <RestoreScreen
+          onFinished={() => {
+            setRestorePending(false);
+            runBackfillIfNeeded().catch(() => {});
+          }}
+        />
+      )}
+
     </NavigationContainer>
   );
 }

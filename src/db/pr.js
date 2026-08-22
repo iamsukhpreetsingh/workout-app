@@ -1,5 +1,6 @@
 import { getDb } from './db';
 import { getCurrentUserId } from './userId';
+import { enqueueDelete } from '../lib/syncEngine';
 
 export async function checkAndRecordPR(exerciseId, weight, reps, setId, sessionTime) {
   const db = await getDb();
@@ -22,10 +23,15 @@ export async function checkAndRecordPR(exerciseId, weight, reps, setId, sessionT
     );
 
     if (!existing || pr.value > existing.value) {
+      // if (existing) {
+      //   await db.runAsync('DELETE FROM personal_records WHERE id = ?', [existing.id]);
+      // }
       if (existing) {
+        // a superseded PR disappears locally; if it was already backed up,
+        // queue the server-side delete so restore can't resurrect it
+        await enqueueDelete('personal_record', String(existing.id), !!existing.server_id);
         await db.runAsync('DELETE FROM personal_records WHERE id = ?', [existing.id]);
       }
-
       await db.runAsync(
         `INSERT INTO personal_records (exercise_id, record_type, value, secondary_value, set_id, achieved_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
@@ -120,8 +126,18 @@ export async function recomputePRsForExercise(exerciseId) {
   const db = await getDb();
   const userId = getCurrentUserId();
 
+  // await db.runAsync('DELETE FROM personal_records WHERE exercise_id = ?', [exerciseId]);
+  // wipe + recompute: queue server deletes for previously-backed-up rows so
+  // the backup can't resurrect stale records on restore
+  const oldPRs = await db.getAllAsync(
+    'SELECT id, server_id FROM personal_records WHERE exercise_id = ?', [exerciseId]);
+  for (const old of oldPRs) {
+    if (old.server_id) await enqueueDelete('personal_record', String(old.id), true);
+  }
   await db.runAsync('DELETE FROM personal_records WHERE exercise_id = ?', [exerciseId]);
 
+
+  
   const sets = await db.getAllAsync(
     `SELECT s.id AS set_id, s.weight, s.reps, se.exercise_id, sess.start_time
      FROM sets s

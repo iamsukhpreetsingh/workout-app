@@ -9,6 +9,7 @@ const coaching = require('../data/coachingPlans');
 const mealCatalog = require('../data/mealCatalog');
 const workoutTemplates = require('../data/workoutTemplates');
 const notifications = require('../data/notifications');
+const intakeProfiles = require('../data/intakeProfiles');
 const { query } = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
@@ -410,6 +411,38 @@ for (const kind of ['diet', 'supplement']) {
     }
   });
 }
+
+
+
+
+
+
+
+
+
+
+
+// ---- Client intake profile (trainer → client, read-only) ----
+// Returns the client's completed intake profile (goals, injuries,
+// medical_conditions, allergens) or null when none exists. The app
+// skips ALL allergen warnings when this is null — no error, no blocking.
+router.get('/clients/:clientId/intake-profile', requireAuth, requireRole('trainer'), async (req, res) => {
+  try {
+    if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
+    res.json(await intakeProfiles.getProfileForClient(req.params.clientId));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+
+
+
+
+
+
+
+
 
 // GET /trainer/clients/:clientId/volume-by-muscle-group?from=&to=
 router.get(

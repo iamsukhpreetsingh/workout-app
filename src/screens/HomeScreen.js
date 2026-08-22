@@ -143,7 +143,7 @@ export default function HomeScreen({ navigation }) {
   // Trainer-assigned workouts — own effect keyed on the resolved role so the
   // auth-restore timing can't leave it behind a stale closure. Runs on every
   // Home focus. Non-fatal so Home never breaks on it.
-  const isClient = user?.role === 'user';
+  const isClient = user?.role === 'user' || user?.role === 'trainer';
   useFocusEffect(
     useCallback(() => {
       if (!isClient) {
