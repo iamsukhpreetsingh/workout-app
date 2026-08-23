@@ -53,6 +53,7 @@ import { initConnectivityListener } from './src/lib/sync';
 // import { initSyncEngine } from './src/lib/syncEngine';
 // import { initSyncEngine, resyncQueueForCurrentUser } from './src/lib/syncEngine';
 import { initSyncEngine, resyncQueueForCurrentUser, processQueue } from './src/lib/syncEngine';
+import { fetchAndCacheProgressionSetting } from './src/lib/progression';
 import { runBackfillIfNeeded } from './src/lib/backfill';
 import { isRestoreNeeded } from './src/lib/restore';
 import RestoreScreen from './src/screens/RestoreScreen';
@@ -397,6 +398,8 @@ function AppContent() {
     // another account's pending items are never uploaded or failed under
     // the wrong user
     resyncQueueForCurrentUser();
+        // progression: cache the resolved formula setting for offline suggestions
+    fetchAndCacheProgressionSetting().catch(() => {});
     // legacy shim + trainer-facing (redacted) pushes — mode-gated
     initConnectivityListener();
     syncPendingSessions();
@@ -448,6 +451,7 @@ function AppContent() {
         syncPendingSessions();
         syncPendingMeasurements();
         processQueue(); // unified engine — auto mode runs on foreground (spec)
+        fetchAndCacheProgressionSetting().catch(() => {}); // refresh resolved formula
       }
     });
     return () => sub.remove();

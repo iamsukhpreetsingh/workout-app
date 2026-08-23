@@ -308,3 +308,39 @@ Your app talks to `13.126.205.202:4000`, but our new backend code lives on your 
 4. Reload the app and run through test note #1
 
 **One hedge to watch for:** I've never seen `trainerClients.js`, so the gentle-prompt's trainer-ID lookup guesses the response shape of `GET /client/trainer`. If test #2's prompt doesn't appear for an already-profiled client, send me `backend/src/data/trainerClients.js` and I'll give you a one-line fix. Everything else is independent of that.
+
+## Admin dashboard API (`/admin/*`)
+
+A separate admin layer (migration 023) with its own `admin_users` table,
+bcrypt passwords, and JWT access + rotating refresh tokens — completely
+independent of app auth. Roles (`super_admin`, `support`,
+`content_moderator`, `analyst`, `read_only`) are enforced server-side by
+`requireAdminRole()` on every route. First server start creates a bootstrap
+super admin (`ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD`, defaults
+`admin@workout.local` / `ChangeMe123!`).
+
+Frontend lives in `../admin-dashboard/` (Vite + React + TS + Ant Design).
+
+### Onboarding for backend developers — the extensibility contract
+
+1. **Adding a table?** It appears in the admin Database browser
+   AUTOMATICALLY (live `information_schema` introspection). Touch
+   `src/admin/tableConfig.js` ONLY if the table needs: exclusion,
+   sensitive columns (the global mask already covers `password_hash`,
+   token columns), a non-default role, or navigation to a custom module.
+   Sensitive columns are masked in every generic response — never returned.
+2. **Adding an endpoint?** Use `registerRoute()` from
+   `src/admin/registry.js` — NEVER raw `router.get/post/...` for admin
+   routes. Pass `enforce: ['role', …]` to mount the role guard
+   server-side; `allowedRoles` is display text for the API Explorer.
+   Every endpoint registered this way appears in the dashboard's API
+   Explorer automatically. (App-side routes may migrate to the same
+   wrapper incrementally.)
+3. **Every admin write must call `writeAudit()`** — the audit log is the
+   platform's accountability guarantee for user/health data.
+
+Notables: generic table names are validated against the live schema before
+any query (no injection); suspended users are blocked at app login;
+impersonation tokens carry `impersonation: 'read_only'` and ALL mutating
+verbs made with them are rejected by the app's auth middleware;
+`GET /config/feature-flags` is public for the mobile app.

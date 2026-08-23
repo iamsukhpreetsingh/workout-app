@@ -88,6 +88,17 @@ export async function getExerciseByName(name) {
 }
 
 
+// Set/clear an exercise's training max (percentage-based progression input).
+// Local-only by design (library exercises are device-global; customs sync
+// through their own backup entity) — documented limitation.
+export async function setExerciseTrainingMax(exerciseId, value) {
+  const db = await getDb();
+  const v = value == null || value === '' || isNaN(Number(value)) ? null : Number(value);
+  await db.runAsync('UPDATE exercises SET training_max = ? WHERE id = ?', [v, exerciseId]);
+  return v;
+}
+
+
 export async function createExercise(name, muscleGroup, extra = {}) {
   const db = await getDb();
   const userId = getCurrentUserId();
@@ -181,7 +192,7 @@ export async function getPlan(id) {
         `SELECT pe.id, pe.target_sets, pe.position, pe.rest_seconds, pe.group_id,
             e.id AS exercise_id, e.name, e.muscle_group, e.equipment, e.body_part,
             e.target, e.secondary_muscles, e.instructions, e.instruction_steps,
-            e.media_id, e.gif_url, e.attribution, e.is_custom
+            e.media_id, e.gif_url, e.attribution, e.is_custom, e.training_max
      FROM plan_exercises pe
      JOIN exercises e ON pe.exercise_id = e.id
      WHERE pe.plan_id = ?
@@ -444,7 +455,7 @@ export async function getSession(id) {
         `SELECT se.id AS session_exercise_id, se.position, se.rest_seconds, se.group_id, se.notes,
             e.id AS exercise_id, e.name, e.muscle_group, e.equipment, e.body_part,
             e.target, e.secondary_muscles, e.instructions, e.instruction_steps,
-            e.media_id, e.gif_url, e.attribution, e.is_custom
+            e.media_id, e.gif_url, e.attribution, e.is_custom, e.training_max
      FROM session_exercises se
      JOIN exercises e ON se.exercise_id = e.id
      WHERE se.session_id = ?
@@ -580,8 +591,21 @@ export async function saveSession(session) {
     for (let j = 0; j < ex.sets.length; j++) {
       const set = ex.sets[j];
       const inserted = await db.runAsync(
-        `INSERT INTO sets (session_exercise_id, weight, reps, is_warmup, position, rpe, set_type, completed)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        // `INSERT INTO sets (session_exercise_id, weight, reps, is_warmup, position, rpe, set_type, completed)
+        //  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        // [
+        //   seId,
+        //   set.weight || 0,
+        //   set.reps || 0,
+        //   set.setType === 'warmup' ? 1 : 0,
+        //   j,
+        //   set.rpe ?? null,
+        //   set.setType || 'working',
+        //   set.completed === 0 ? 0 : 1,
+        // ]
+
+        `INSERT INTO sets (session_exercise_id, weight, reps, is_warmup, position, rpe, set_type, completed, suggested_weight, suggested_reps)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           seId,
           set.weight || 0,
@@ -591,6 +615,8 @@ export async function saveSession(session) {
           set.rpe ?? null,
           set.setType || 'working',
           set.completed === 0 ? 0 : 1,
+          set.suggestedWeight ?? null,
+          set.suggestedReps ?? null,
         ]
       );
       // PRs only for completed, non-warmup sets with real values

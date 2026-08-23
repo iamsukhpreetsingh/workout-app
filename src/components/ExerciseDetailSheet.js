@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import { Modal, View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '../theme';
+import { setExerciseTrainingMax } from '../db/queries';
 
 const LANG_LABELS = {
   en: 'EN', it: 'IT', tr: 'TR', es: 'ES', ru: 'RU',
@@ -28,8 +29,16 @@ export default function ExerciseDetailSheet({ visible, exercise, onClose }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [lang, setLang] = useState('en');
+  const [tm, setTm] = useState('');
+  const [tmBusy, setTmBusy] = useState(false);
 
-  useEffect(() => { if (visible) setLang('en'); }, [visible, exercise?.id]);
+//   useEffect(() => { if (visible) setLang('en'); }, [visible, exercise?.id]);
+  useEffect(() => {
+    if (visible) {
+      setLang('en');
+      setTm(exercise?.training_max != null ? String(exercise.training_max) : '');
+    }
+  }, [visible, exercise?.id]);
 
   const instructions = parseObj(exercise?.instructions);
   const steps = parseObj(exercise?.instruction_steps);
@@ -40,6 +49,19 @@ export default function ExerciseDetailSheet({ visible, exercise, onClose }) {
     if (!keys.size) keys.add('en');
     return [...keys];
   }, [visible, exercise?.id]);
+
+    const saveTm = async () => {
+    if (tmBusy || !exercise?.id) return;
+    setTmBusy(true);
+    try {
+      await setExerciseTrainingMax(exercise.id, tm);
+    } catch (e) {
+      Alert.alert('Could not save', e.message || 'Please try again.');
+    } finally {
+      setTmBusy(false);
+    }
+  };
+
 
   if (!visible || !exercise) return null;
 
@@ -117,6 +139,30 @@ export default function ExerciseDetailSheet({ visible, exercise, onClose }) {
             </>
           )}
 
+            {/* Training max — input for the Percentage-Based progression formula */}
+          {exercise.id ? (
+            <View style={styles.tmCard}>
+              <Text style={styles.tmLabel}>TRAINING MAX (KG)</Text>
+              <Text style={styles.tmHint}>
+                Used by the Percentage-Based progression strategy to calculate your working weights.
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                <TextInput
+                  style={styles.tmInput}
+                  keyboardType="numeric"
+                  value={tm}
+                  onChangeText={setTm}
+                  placeholder="—"
+                  placeholderTextColor={colors.textDim}
+                />
+                <TouchableOpacity style={styles.tmSave} onPress={saveTm} disabled={tmBusy}>
+                  <Text style={styles.tmSaveText}>{tmBusy ? 'Saving…' : 'Save'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+
+
           {exercise.attribution ? (
             <Text style={styles.attribution}>{exercise.attribution}</Text>
           ) : null}
@@ -152,4 +198,18 @@ const makeStyles = (colors) =>
     stepNumText: { color: colors.primary, fontSize: 11, fontWeight: '800' },
     stepText: { color: colors.text, fontSize: 13, lineHeight: 19, flex: 1 },
     attribution: { color: colors.textDim, fontSize: 10, fontStyle: 'italic', marginTop: 20 },
+        tmCard: {
+      backgroundColor: colors.card, borderRadius: 12, padding: 12, marginTop: 20,
+    },
+    tmLabel: { color: colors.textDim, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+    tmHint: { color: colors.textDim, fontSize: 11, marginTop: 4, lineHeight: 15 },
+    tmInput: {
+      flex: 1, backgroundColor: colors.cardLight, color: colors.text,
+      borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14,
+    },
+    tmSave: {
+      backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: 18,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    tmSaveText: { color: '#fff', fontWeight: '700', fontSize: 13 },
   });

@@ -21,6 +21,7 @@ import PlateSheet from '../components/PlateSheet';
 import PRToast from '../components/PRToast';
 import { evaluatePR } from '../db/pr';
 import { queueSessionForSync } from '../lib/syncService';
+import { getSuggestionForExercise } from '../lib/progression';
 import { useColors } from '../theme';
 import { lightImpact, success as hapticSuccess } from '../lib/haptics';
 
@@ -47,6 +48,9 @@ export default function WorkoutScreen({ navigation }) {
   const [notesKey, setNotesKey] = useState(null); // exercise with open notes editor
   const sessionBest = useRef({});
   const restoredRef = useRef(false);
+  const [suggestions, setSuggestions] = useState({}); // exerciseKey → {suggestion, missingTrainingMax}
+  const suggestionsRef = useRef({});
+  const [dismissedTmPrompts, setDismissedTmPrompts] = useState(new Set());
 
   const styles = makeStyles(colors);
 
@@ -70,6 +74,25 @@ export default function WorkoutScreen({ navigation }) {
       }
     })();
   }, []);
+
+  // Progression suggestions: computed once per exercise when it enters the
+  // session. History is read from SQLite — the live workout isn't saved
+  // yet, so the suggestion stays stable for the whole session. Uses only
+  // the cached resolved formula + local history → works fully offline.
+  useEffect(() => {
+    (async () => {
+      const missing =
+        (workout?.exercises || []).filter(
+          (e) => e.exerciseId && suggestionsRef.current[e.key] === undefined
+        ) || [];
+      for (const e of missing) suggestionsRef.current[e.key] = { pending: true };
+      for (const e of missing) {
+        const res = await getSuggestionForExercise(e.exerciseId);
+        suggestionsRef.current[e.key] = res;
+        setSuggestions({ ...suggestionsRef.current });
+      }
+    })();
+  }, [workout?.exercises]);
 
   // Live timer refresh; elapsed is always recomputed from startTime (+pause
   // accounting) so it survives app kills and pauses correctly.
@@ -135,6 +158,10 @@ export default function WorkoutScreen({ navigation }) {
               rpe: s.rpe ?? null,
               setType: s.type || 'working',
               completed: s.completed ? 1 : 0,
+              // System 6: snapshot what was suggested when this set was
+              // logged — recorded once, never recalculated retroactively
+              suggestedWeight: suggestionsRef.current[e.key]?.suggestion?.suggestedWeight ?? null,
+              suggestedReps: suggestionsRef.current[e.key]?.suggestion?.suggestedReps ?? null,
             })),
         })),
       });
@@ -235,6 +262,21 @@ export default function WorkoutScreen({ navigation }) {
 
   const labels = groupLabels(workout.exercises);
   const rpeEnabled = settings ? settings.rpe_enabled === 1 : true;
+
+  // One-tap "Use": fills every EMPTY working set with the suggestion —
+  // never overwrites typed values, skips warm-ups and completed sets.
+  const applySuggestion = (ex) => {
+    const s = suggestionsRef.current[ex.key]?.suggestion;
+    if (!s) return;
+    lightImpact();
+    for (const set of ex.sets) {
+      const empty = !(parseFloat(set.weight) > 0 || parseInt(set.reps, 10) > 0);
+      if (set.type !== 'warmup' && !set.completed && empty) {
+        dispatch({ type: 'UPDATE_SET', exerciseKey: ex.key, setKey: set.key, field: 'weight', value: String(s.suggestedWeight) });
+        dispatch({ type: 'UPDATE_SET', exerciseKey: ex.key, setKey: set.key, field: 'reps', value: String(s.suggestedReps) });
+      }
+    }
+  };
 
   const toggleSelect = (key) => {
     setSelected((prev) =>
@@ -422,6 +464,51 @@ export default function WorkoutScreen({ navigation }) {
                   multiline
                 />
               )}
+
+              {/* 💡 Suggested Today — from the resolved progression formula
+                  (cached, offline-safe). Nothing shown for a first-time
+                  exercise (calculate() returned null). */}
+              {(() => {
+                const sugg = suggestions[item.key];
+                if (!sugg || sugg.pending) return null;
+                if (sugg.suggestion) {
+                  return (
+                    <View style={styles.suggestCard}>
+                      <Ionicons name="bulb" size={14} color={colors.primary} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.suggestMain}>
+                          Suggested: {sugg.suggestion.suggestedWeight}kg × {sugg.suggestion.suggestedReps}
+                        </Text>
+                        {sugg.suggestion.rationale ? (
+                          <Text style={styles.suggestRationale}>{sugg.suggestion.rationale}</Text>
+                        ) : null}
+                      </View>
+                      <TouchableOpacity style={styles.useBtn} onPress={() => applySuggestion(item)}>
+                        <Text style={styles.useBtnText}>Use</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                }
+                if (sugg.missingTrainingMax && !dismissedTmPrompts.has(item.key)) {
+                  return (
+                    <View style={styles.tmPromptCard}>
+                      <Ionicons name="information-circle-outline" size={14} color={colors.yellow} />
+                      <Text style={styles.tmPromptText}>
+                        Set a training max for this exercise to get percentage-based suggestions
+                      </Text>
+                      <TouchableOpacity
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        onPress={() =>
+                          setDismissedTmPrompts((prev) => new Set(prev).add(item.key))
+                        }
+                      >
+                        <Ionicons name="close" size={14} color={colors.textDim} />
+                      </TouchableOpacity>
+                    </View>
+                  );
+                }
+                return null;
+              })()}
 
               <View style={styles.setHeader}>
                 <Text style={styles.setHeaderLabel}>TYPE</Text>
@@ -728,6 +815,24 @@ const makeStyles = (colors) =>
     selectCheck: { flexDirection: 'row', alignItems: 'center', flex: 1 },
     setHeader: { flexDirection: 'row', marginBottom: 4 },
     setHeaderLabel: { color: colors.textDim, fontSize: 11, flex: 1, textAlign: 'center' },
+    suggestCard: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      backgroundColor: colors.cardLight, borderWidth: 1.5, borderColor: colors.primary,
+      borderRadius: 10, padding: 10, marginBottom: 8,
+    },
+    suggestMain: { color: colors.text, fontSize: 13, fontWeight: '800' },
+    suggestRationale: { color: colors.textDim, fontSize: 11, marginTop: 2 },
+    useBtn: {
+      backgroundColor: colors.primary, borderRadius: 8,
+      paddingHorizontal: 16, paddingVertical: 8,
+    },
+    useBtnText: { color: '#fff', fontWeight: '800', fontSize: 12 },
+    tmPromptCard: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      backgroundColor: colors.cardLight, borderWidth: 1, borderColor: colors.yellow,
+      borderRadius: 10, padding: 10, marginBottom: 8,
+    },
+    tmPromptText: { color: colors.textDim, fontSize: 11, flex: 1 },
     setRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4, borderRadius: 6, position: 'relative' },
     setRowDone: { backgroundColor: 'rgba(52,199,89,0.10)' },
     warmupRow: { opacity: 0.55 },

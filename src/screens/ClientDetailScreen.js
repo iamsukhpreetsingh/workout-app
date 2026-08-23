@@ -15,6 +15,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api, ApiError } from '../lib/api';
+import ProgressionStrategyEditor from '../components/ProgressionStrategyEditor';
+import { getFormula } from '../progressionFormulas';
 import LineChart from '../components/LineChart';
 import BarChart from '../components/BarChart';
 import CapsuleDropdown from '../components/CapsuleDropdown';
@@ -107,6 +109,13 @@ export default function ClientDetailScreen({ route, navigation }) {
   const detailCache = useRef({}); // summaryId → per-set detail (per visit)
   const [notificationPref, setNotificationPref] = useState(true);
   const [loadingPref, setLoadingPref] = useState(false);
+  // Progression Strategy (System 5): the client's RESOLVED active formula +
+  // this trainer's own override state
+  const [progResolved, setProgResolved] = useState(null); // {formula_key, params, source}
+  const [progOverride, setProgOverride] = useState(null); // {formula_key, params} | null
+  // const [progEditing, setProgEditing] = useState(false);
+  // const [progDraft, setProgDraft] = useState(null);
+  const [progBusy, setProgBusy] = useState(false);
 
   React.useLayoutEffect(() => {
     navigation.setOptions({ title: clientName || 'Client' });
@@ -148,6 +157,33 @@ export default function ClientDetailScreen({ route, navigation }) {
     setRefreshing(false);
   };
 
+
+    // Load the client's resolved progression setting + our override for them.
+  // The backend's /client/progression-resolved is client-scoped, so for the
+  // trainer view we load OUR override and the CLIENT's own setting, and
+  // compose the truth: our non-null override wins; otherwise the client's
+  // own setting; otherwise the app default.
+
+  // Progression Strategy (System 5): the client's resolved setting (one
+  // backend call — the same resolution logic the client's own app uses) +
+  // this trainer's own override row, so the card can show both what's
+  // ACTIVE and what WE set.
+  const loadProgression = useCallback(async () => {
+    try {
+      const [resolved, ov] = await Promise.all([
+        api(`/trainer/clients/${clientId}/progression-resolved`).catch(() => null),
+        api(`/trainer/clients/${clientId}/progression-override`).catch(() => null),
+      ]);
+      setProgResolved(resolved);
+      setProgOverride(ov && ov.formula_key ? { formula_key: ov.formula_key, params: ov.params || {} } : null);
+    } catch {
+      setProgResolved(null);
+    }
+  }, [clientId]);
+
+  
+
+
   const loadNotificationPref = useCallback(async () => {
     try {
       const roster = await api('/trainer/clients');
@@ -161,11 +197,112 @@ export default function ClientDetailScreen({ route, navigation }) {
     }
   }, [clientId]);
 
-  useFocusEffect(
+  // useFocusEffect(
+  //   useCallback(() => {
+  //     loadNotificationPref();
+  //   }, [loadNotificationPref])
+  // );
+
+    useFocusEffect(
     useCallback(() => {
       loadNotificationPref();
-    }, [loadNotificationPref])
+      loadProgression();
+    }, [loadNotificationPref, loadProgression])
   );
+
+  // const saveProgOverride = async (formulaKey, params) => {
+  //   if (progBusy) return;
+  //   setProgBusy(true);
+  //   try {
+  //     await api(`/trainer/clients/${clientId}/progression-override`, {
+  //       method: 'PUT',
+  //       body: { formula_key: formulaKey, params: params || {} },
+  //     });
+  //     setProgEditing(false);
+  //     await loadProgression();
+  //   } catch (e) {
+  //     Alert.alert('Could not save override', e.message || 'Please try again.');
+  //   } finally {
+  //     setProgBusy(false);
+  //   }
+  // };
+
+
+    // Data-only: saves the override and refreshes. Editor UI state (closing
+  // the editor) is OverviewPanel's concern — handled via the return value.
+  const saveProgOverride = async (formulaKey, params) => {
+    if (progBusy) return false;
+    setProgBusy(true);
+    try {
+      await api(`/trainer/clients/${clientId}/progression-override`, {
+        method: 'PUT',
+        body: { formula_key: formulaKey, params: params || {} },
+      });
+      await loadProgression();
+      return true;
+    } catch (e) {
+      Alert.alert('Could not save override', e.message || 'Please try again.');
+      return false;
+    } finally {
+      setProgBusy(false);
+    }
+  };
+
+
+  // const clearProgOverride = async () => {
+  //   if (progBusy) return;
+  //   Alert.alert(
+  //     'Reset progression strategy',
+  //     'Clear your override? This client will fall back to their own setting (or the app default).',
+  //     [
+  //       { text: 'Cancel', style: 'cancel' },
+  //       {
+  //         text: 'Reset',
+  //         style: 'destructive',
+  //         onPress: async () => {
+  //           setProgBusy(true);
+  //           try {
+  //             await api(`/trainer/clients/${clientId}/progression-override`, { method: 'DELETE' });
+  //             setProgEditing(false);
+  //             await loadProgression();
+  //           } catch (e) {
+  //             Alert.alert('Could not clear', e.message || 'Please try again.');
+  //           } finally {
+  //             setProgBusy(false);
+  //           }
+  //         },
+  //       },
+  //     ]
+  //   );
+  // };
+
+
+    const clearProgOverride = async () => {
+    if (progBusy) return;
+    Alert.alert(
+      'Reset progression strategy',
+      'Clear your override? This client will fall back to their own setting (or the app default).',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: async () => {
+            setProgBusy(true);
+            try {
+              await api(`/trainer/clients/${clientId}/progression-override`, { method: 'DELETE' });
+              await loadProgression();
+            } catch (e) {
+              Alert.alert('Could not clear', e.message || 'Please try again.');
+            } finally {
+              setProgBusy(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
 
   const handleNotificationToggle = async (value) => {
     const previousValue = notificationPref;
@@ -473,7 +610,14 @@ export default function ClientDetailScreen({ route, navigation }) {
           onLoadActivity={loadActivity}
           notificationPref={notificationPref}
           onNotificationToggle={handleNotificationToggle}
-          loadingNotificationPref={loadingPref}
+        //   loadingNotificationPref={loadingPref}
+        // />
+                  loadingNotificationPref={loadingPref}
+          progResolved={progResolved}
+          progOverride={progOverride}
+          onProgSave={saveProgOverride}
+          onProgClear={clearProgOverride}
+          progBusy={progBusy}
         />
       )}
 
@@ -748,14 +892,28 @@ export default function ClientDetailScreen({ route, navigation }) {
 
 const TYPE_TAG = { working: 'W', warmup: 'WU', dropset: 'DS', failure: 'F' };
 
-// ── Overview panel ──────────────────────────────────────────────────────
-// Week/month stat cards + the one place all three assign actions live
-// together + a merged recent-activity feed.
+// // ── Overview panel ──────────────────────────────────────────────────────
+// // Week/month stat cards + the one place all three assign actions live
+// // together + a merged recent-activity feed.
+// function OverviewPanel({
+//   styles, colors, navigation, clientId, clientName, readOnly,
+//   summaries, activity, onLoadActivity,
+//   notificationPref, onNotificationToggle, loadingNotificationPref,
+// }) {
+
 function OverviewPanel({
   styles, colors, navigation, clientId, clientName, readOnly,
   summaries, activity, onLoadActivity,
   notificationPref, onNotificationToggle, loadingNotificationPref,
+//   progResolved, progOverride, onProgSave, onProgClear, progBusy,
+// }) {
+
+  progResolved, progOverride, onProgSave, onProgClear, progBusy,
 }) {
+  // Editing state lives HERE — it's pure UI state for this card, and this
+  // is the only component that uses it.
+  const [progEditing, setProgEditing] = React.useState(false);
+  const [progDraft, setProgDraft] = React.useState(null);
   const confirmRemoveClient = () =>
     Alert.alert(
       'Remove client',
@@ -825,6 +983,99 @@ function OverviewPanel({
           </View>
         </View>
       )}
+
+            <Text style={styles.groupLabel}>Progression Strategy</Text>
+      <View style={styles.card}>
+        {progEditing ? (
+          <View>
+            {/* <Text style={{ color: styles.seeAll.color, fontSize: 12, marginBottom: 4 }}> */}
+              <Text style={{ color: colors.textDim, fontSize: 12, marginBottom: 4 }}>
+              Override for {clientName || 'this client'}:
+            </Text>
+            <ProgressionStrategyEditor
+              value={progDraft || { formula_key: 'linear_progression', params: {} }}
+              onValueChange={setProgDraft}
+              busy={progBusy}
+            />
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+              <TouchableOpacity
+                style={[styles.editBtn, { flex: 1 }]}
+                onPress={() => { setProgEditing(false); setProgDraft(null); }}
+                disabled={progBusy}
+              >
+                <Text style={styles.editBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.qaBtn, { flex: 1, justifyContent: 'center' }]}
+                // onPress={() => progDraft && onProgSave(progDraft.formula_key, progDraft.params)}
+                  onPress={async () => {
+                  if (!progDraft) return;
+                  const ok = await onProgSave(progDraft.formula_key, progDraft.params);
+                  if (ok) setProgEditing(false); // close editor only on success
+                }}
+                disabled={progBusy || !progDraft}
+              >
+                <Text style={styles.qaText}>Save Override</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <View>
+            {(() => {
+              const f = progResolved ? getFormula(progResolved.formula_key) : null;
+              const sourceLabel =
+                progResolved?.source === 'trainer_override'
+                  ? 'your override'
+                  : progResolved?.source === 'user_setting'
+                  ? "client's own setting"
+                  : 'app default';
+              return (
+                <View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Ionicons name="trending-up" size={15} color={colors.primary} />
+                    <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700', flex: 1 }}>
+                      Active: {f ? f.displayName : progResolved?.formula_key || '—'}
+                    </Text>
+                  </View>
+                  <Text style={{ color: colors.textDim, fontSize: 12, marginTop: 3 }}>
+                    ({sourceLabel})
+                  </Text>
+                  {!readOnly && (
+                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                      <TouchableOpacity
+                        style={[styles.editBtn, { flex: 1 }]}
+                        onPress={() => {
+                          setProgDraft(
+                            progOverride
+                              ? { ...progOverride }
+                              : { formula_key: progResolved?.formula_key || 'linear_progression', params: { ...(progResolved?.params || {}) } }
+                          );
+                          setProgEditing(true);
+                        }}
+                      >
+                        <Ionicons name="create-outline" size={15} color={colors.primary} />
+                        <Text style={styles.editBtnText}>
+                          {progOverride ? 'Edit Override' : 'Override'}
+                        </Text>
+                      </TouchableOpacity>
+                      {progOverride && (
+                        <TouchableOpacity
+                          style={[styles.removeClientBtn, { marginBottom: 0 }]}
+                          onPress={onProgClear}
+                          disabled={progBusy}
+                        >
+                          <Text style={styles.removeClientText}>Reset</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  )}
+                </View>
+              );
+            })()}
+          </View>
+        )}
+      </View>
+
 
       <Text style={styles.groupLabel}>Quick Actions</Text>
       {!readOnly ? (

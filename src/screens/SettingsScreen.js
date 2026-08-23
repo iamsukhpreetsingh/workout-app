@@ -9,6 +9,9 @@ import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
 import { getPendingSyncCount } from '../db/queries';
 import { getSyncSettings } from '../lib/sync';
+import { getCachedProgressionSetting, fetchAndCacheProgressionSetting } from '../lib/progression';
+import { getFormula } from '../progressionFormulas';
+import ProgressionStrategyEditor from '../components/ProgressionStrategyEditor';
 
 export default function SettingsScreen({ onSwitchView }) {
   const { themeMode, setThemeMode } = useApp();
@@ -17,10 +20,29 @@ export default function SettingsScreen({ onSwitchView }) {
   const [trainer, setTrainer] = useState(null); // active association state
 
   const [isLocalOnly, setIsLocalOnly] = useState(false);
+  const [progression, setProgression] = useState(null); // resolved setting
+  const [progDraft, setProgDraft] = useState(null); // editable {formula_key, params}
+  const [progBusy, setProgBusy] = useState(false);
 
   useEffect(() => {
-    getSyncSettings().then((s) => setIsLocalOnly(s.sync_mode === 'local')).catch(() => {});
+  //   getSyncSettings().then((s) => setIsLocalOnly(s.sync_mode === 'local')).catch(() => {});
+  // }, []);
+      getSyncSettings().then((s) => setIsLocalOnly(s.sync_mode === 'local')).catch(() => {});
+    (async () => {
+      const cached = await getCachedProgressionSetting();
+      setProgression(cached);
+      setProgDraft({ formula_key: cached.formula_key, params: { ...cached.params } });
+      // refresh in the background — the trainer may have changed things
+      const fresh = await fetchAndCacheProgressionSetting();
+      if (fresh) {
+        setProgression(fresh);
+        setProgDraft({ formula_key: fresh.formula_key, params: { ...(fresh.params || {}) } });
+      }
+    })();
   }, []);
+
+
+
 
   useEffect(() => {
     api('/client/trainer')
@@ -30,6 +52,41 @@ export default function SettingsScreen({ onSwitchView }) {
       })
       .catch(() => setTrainer(null));
   }, []);
+
+
+    const progDraftChanged = () => {
+    if (!progression || !progDraft) return false;
+    if (progDraft.formula_key !== progression.formula_key) return true;
+    const a = progression.params || {};
+    const b = progDraft.params || {};
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    for (const k of keys) {
+      if ((a[k] ?? null) !== (b[k] ?? null)) return true;
+    }
+    return false;
+  };
+
+  const saveProgression = async () => {
+    if (progBusy) return;
+    setProgBusy(true);
+    try {
+      await api('/user/progression-settings', {
+        method: 'PUT',
+        body: { formula_key: progDraft.formula_key, params: progDraft.params || {} },
+      });
+      const fresh = await fetchAndCacheProgressionSetting(); // re-cache
+      if (fresh) {
+        setProgression(fresh);
+        setProgDraft({ formula_key: fresh.formula_key, params: { ...(fresh.params || {}) } });
+      }
+      Alert.alert('Saved', 'Your progression strategy has been updated.');
+    } catch (e) {
+      Alert.alert('Could not save', e.message || 'Please try again.');
+    } finally {
+      setProgBusy(false);
+    }
+  };
+
 
   const disconnect = () =>
     Alert.alert(
@@ -248,6 +305,54 @@ export default function SettingsScreen({ onSwitchView }) {
         </View>
         <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
       </TouchableOpacity>
+
+
+      {user?.role !== 'trainer' && progression && (
+        <View style={[styles.card, { backgroundColor: colors.card }]}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Progression Strategy</Text>
+          {progression.source === 'trainer_override' ? (
+            <View>
+              <View style={{
+                flexDirection: 'row', alignItems: 'center', gap: 8,
+                backgroundColor: colors.cardLight, borderLeftWidth: 3, borderLeftColor: colors.blue,
+                borderRadius: 8, borderTopLeftRadius: 4, borderBottomLeftRadius: 4,
+                paddingHorizontal: 10, paddingVertical: 8, marginTop: 8,
+              }}>
+                <Ionicons name="lock-closed" size={14} color={colors.blue} />
+                <Text style={{ color: colors.blue, fontSize: 12, fontWeight: '700', flex: 1 }}>
+                  Your trainer has set your progression strategy. Contact them to change it.
+                </Text>
+              </View>
+              <View style={{ marginTop: 12 }}>
+                <ProgressionStrategyEditor
+                  value={progDraft}
+                  onValueChange={() => {}} // read-only — trainer owns it
+                  busy={false}
+                />
+              </View>
+            </View>
+          ) : (
+            <View style={{ marginTop: 4 }}>
+              <ProgressionStrategyEditor
+                value={progDraft}
+                onValueChange={setProgDraft}
+                busy={progBusy}
+              />
+              {progDraftChanged() && (
+                <TouchableOpacity
+                  style={[styles.saveBtn, { backgroundColor: colors.primary, marginTop: 12 }]}
+                  onPress={saveProgression}
+                  disabled={progBusy}
+                >
+                  <Text style={styles.saveBtnText}>
+                    {progBusy ? 'Saving…' : 'Save Progression Strategy'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+        </View>
+      )}
 
         <TouchableOpacity 
           style={[styles.card, { backgroundColor: colors.card, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}

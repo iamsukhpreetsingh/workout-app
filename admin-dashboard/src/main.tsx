@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { ConfigProvider, App as AntApp } from 'antd';
+import { ConfigProvider, App as AntApp, theme as antdTheme } from 'antd';
 import App from './App';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -8,7 +8,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <ConfigProvider
       theme={{
         token: { colorPrimary: '#E8481F', borderRadius: 8 },
-        algorithm: (await import('antd')).theme.darkAlgorithm,
+        algorithm: antdTheme.darkAlgorithm,
       }}
     >
       <AntApp>

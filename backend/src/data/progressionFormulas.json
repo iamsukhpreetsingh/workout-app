@@ -1,0 +1,44 @@
+[
+  {
+    "key": "linear_progression",
+    "displayName": "Linear Progression",
+    "description": "Adds a fixed weight increment each time all target sets/reps are hit.",
+    "paramSchema": [
+      { "key": "incrementKg", "label": "Weight increase (kg)", "type": "number", "default": 2.5, "min": 0.5, "max": 20 },
+      { "key": "requireAllSetsHit", "label": "Require all sets at target reps", "type": "boolean", "default": true }
+    ]
+  },
+  {
+    "key": "double_progression",
+    "displayName": "Double Progression",
+    "description": "Same weight, add reps within a range (e.g. 8–12); when all sets hit the top, add weight and reset reps.",
+    "paramSchema": [
+      { "key": "repMin", "label": "Bottom of rep range", "type": "number", "default": 8, "min": 1, "max": 20 },
+      { "key": "repMax", "label": "Top of rep range", "type": "number", "default": 12, "min": 1, "max": 30 },
+      { "key": "incrementKg", "label": "Weight increase (kg)", "type": "number", "default": 2.5, "min": 0.5, "max": 20 }
+    ]
+  },
+  {
+    "key": "rpe_autoregulated",
+    "displayName": "RPE-Autoregulated",
+    "description": "Adjusts weight by how hard the last session felt (average RPE). Falls back to Linear Progression when RPE was not logged.",
+    "paramSchema": [
+      { "key": "easyThreshold", "label": "Below this RPE: add weight", "type": "number", "default": 7.5, "min": 5, "max": 10 },
+      { "key": "hardThreshold", "label": "At/above this RPE: reduce weight", "type": "number", "default": 9, "min": 5, "max": 10 },
+      { "key": "incrementKg", "label": "Weight increase (kg)", "type": "number", "default": 2.5, "min": 0.5, "max": 20 },
+      { "key": "decrementKg", "label": "Weight decrease (kg)", "type": "number", "default": 2.5, "min": 0.5, "max": 20 }
+    ]
+  },
+  {
+    "key": "percentage_based",
+    "displayName": "Percentage-Based (Training Max)",
+    "description": "Cycles a percentage of your per-exercise training max week by week (e.g. 70% → 80% → 90%). Requires setting a training max on the exercise.",
+    "requiresTrainingMax": true,
+    "paramSchema": [
+      { "key": "startPercent", "label": "Week 1 percent of max", "type": "number", "default": 70, "min": 30, "max": 95 },
+      { "key": "percentStep", "label": "Percent added each week", "type": "number", "default": 10, "min": 0, "max": 20 },
+      { "key": "cycleLengthWeeks", "label": "Cycle length (weeks)", "type": "number", "default": 3, "min": 1, "max": 12 },
+      { "key": "defaultReps", "label": "Target reps", "type": "number", "default": 5, "min": 1, "max": 20 }
+    ]
+  }
+]

@@ -14,6 +14,7 @@ const adminModules = require('./src/admin/modules');
 const notificationRoutes = require('./src/routes/notifications');
 const tagRoutes = require('./src/routes/tags');
 const backupRoutes = require('./src/routes/backup');
+const progressionRoutes = require('./src/routes/progression');
 const { requireAuth } = require('./src/middleware/auth');
 const { getUserById } = require('./src/data/users');
 
@@ -22,6 +23,18 @@ app.use(cors());
 app.use(express.json({ limit: '12mb' })); // dish photos arrive as base64
 
 app.get('/health', (req, res) => res.json({ ok: true }));
+
+// Public feature flags — the mobile app polls this on launch/foreground and
+// caches locally, enabling remote kill-switches without an app-store release.
+app.get('/config/feature-flags', async (req, res) => {
+  try {
+    const { query } = require('./src/db/pool');
+    const { rows } = await query('SELECT key, enabled, rollout_percentage FROM feature_flags');
+    res.json(rows);
+  } catch {
+    res.json([]); // never break app launch over flag fetch failure
+  }
+});
 
 // ── dish photos ─────────────────────────────────────────────────────────
 // Unlike progress photos (local-only), catalog dish photos must be visible
@@ -61,6 +74,7 @@ app.use('/admin', adminModules.router);
 app.use('/notifications', notificationRoutes);
 app.use('/trainer', tagRoutes);
 app.use('/user', backupRoutes);
+app.use('/', progressionRoutes);
 
 // GET /me — current user profile (never includes password_hash)
 app.get('/me', requireAuth, async (req, res) => {

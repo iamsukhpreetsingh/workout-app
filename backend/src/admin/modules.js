@@ -42,7 +42,7 @@ registerRoute(router, {
     );
     res.json(rows);
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('support', 'super_admin', 'read_only', 'analyst'));
 
 registerRoute(router, {
   method: 'GET', path: '/users/:id', category: 'Users',
@@ -65,7 +65,7 @@ registerRoute(router, {
     }
     res.json(user);
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('support', 'super_admin', 'read_only', 'analyst'));
 
 registerRoute(router, {
   method: 'PATCH', path: '/users/:id/suspend', category: 'Users',
@@ -81,7 +81,7 @@ registerRoute(router, {
     await writeAudit(req.admin, suspended ? 'user_suspend' : 'user_reactivate', 'users', req.params.id, null, rows[0]);
     res.json(rows[0]);
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('support', 'super_admin'));
 
 registerRoute(router, {
   method: 'POST', path: '/users/:id/force-logout', category: 'Users',
@@ -94,7 +94,7 @@ registerRoute(router, {
     await writeAudit(req.admin, 'user_force_logout', 'users', req.params.id, null, { revoked: rowCount });
     res.json({ ok: true, revoked: rowCount });
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('support', 'super_admin'));
 
 registerRoute(router, {
   method: 'PATCH', path: '/users/:id/role', category: 'Users',
@@ -114,7 +114,7 @@ registerRoute(router, {
     await writeAudit(req.admin, 'user_role_change', 'users', req.params.id, null, rows[0]);
     res.json(rows[0]);
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('super_admin'));
 
 // ══════════════════════════════ Content moderation (Phase 5) ════════
 registerRoute(router, {
@@ -130,7 +130,7 @@ registerRoute(router, {
        WHERE ($1 = 'all' OR r.status = $1) ORDER BY r.created_at DESC LIMIT 200`, [status]);
     res.json(rows);
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('content_moderator', 'super_admin', 'support', 'read_only'));
 
 registerRoute(router, {
   method: 'PATCH', path: '/content/reports/:id', category: 'Content',
@@ -146,7 +146,7 @@ registerRoute(router, {
     await writeAudit(req.admin, `report_${status}`, 'content_reports', req.params.id, null, rows[0]);
     res.json(rows[0]);
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('content_moderator', 'super_admin'));
 
 registerRoute(router, {
   method: 'DELETE', path: '/content/:type/:id', category: 'Content',
@@ -163,7 +163,7 @@ registerRoute(router, {
     await writeAudit(req.admin, 'content_delete', table, req.params.id, before.rows[0], null);
     res.json({ ok: true });
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('content_moderator', 'super_admin'));
 
 registerRoute(router, {
   method: 'GET', path: '/content/tags', category: 'Content',
@@ -182,7 +182,7 @@ registerRoute(router, {
       ) t GROUP BY tag ORDER BY uses DESC, tag ASC`);
     res.json(rows);
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('content_moderator', 'super_admin', 'support', 'read_only', 'analyst'));
 
 registerRoute(router, {
   method: 'POST', path: '/content/tags/merge', category: 'Content',
@@ -212,7 +212,7 @@ registerRoute(router, {
     await writeAudit(req.admin, 'tag_merge', 'tags', null, { from }, { to, updated });
     res.json({ ok: true, updated });
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('content_moderator', 'super_admin'));
 
 // ══════════════════════════════ Analytics (Phase 6) ══════════════════
 registerRoute(router, {
@@ -235,7 +235,7 @@ registerRoute(router, {
       FROM users GROUP BY 1 ORDER BY 1 DESC LIMIT 12`)).rows.reverse();
     res.json({ ...totals, signups });
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('analyst', 'super_admin', 'support', 'read_only'));
 
 registerRoute(router, {
   method: 'GET', path: '/analytics/retention', category: 'Analytics',
@@ -267,7 +267,7 @@ registerRoute(router, {
     }
     res.json([...byCohort.values()]);
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('analyst', 'super_admin', 'read_only'));
 
 registerRoute(router, {
   method: 'GET', path: '/analytics/trainers', category: 'Analytics',
@@ -290,7 +290,7 @@ registerRoute(router, {
       FROM workout_templates ORDER BY assigned DESC LIMIT 10`)).rows;
     res.json({ clientsPerTrainer, topTemplates });
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('analyst', 'super_admin', 'read_only'));
 
 // ══════════════════════════════ Health (Phase 7) ═════════════════════
 registerRoute(router, {
@@ -309,7 +309,7 @@ registerRoute(router, {
       SELECT success, count(*)::int AS c FROM push_log WHERE created_at >= now() - interval '7 days' GROUP BY success`)).rows;
     res.json({ pushCounts: counts, failing });
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('support', 'super_admin', 'read_only', 'analyst'));
 
 registerRoute(router, {
   method: 'GET', path: '/health/purge', category: 'Health',
@@ -325,7 +325,7 @@ registerRoute(router, {
     const runs = (await query('SELECT * FROM purge_job_runs ORDER BY ran_at DESC LIMIT 20')).rows;
     res.json({ archived, runs });
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('support', 'super_admin', 'read_only', 'analyst'));
 
 registerRoute(router, {
   method: 'POST', path: '/health/run-purge', category: 'Health',
@@ -339,7 +339,7 @@ registerRoute(router, {
     await writeAudit(req.admin, 'manual_purge_run', 'trainer_clients', null, null, result);
     res.json(result);
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('super_admin'));
 
 // ══════════════════════════════ Broadcast (Phase 8) ══════════════════
 registerRoute(router, {
@@ -364,7 +364,7 @@ registerRoute(router, {
     }
     res.json({ count: ids.length, sample: ids.slice(0, 5) });
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('support', 'super_admin'));
 
 registerRoute(router, {
   method: 'POST', path: '/broadcast/send', category: 'Broadcast',
@@ -397,7 +397,7 @@ registerRoute(router, {
     await writeAudit(req.admin, 'broadcast_send', 'notifications', null, null, { audience, count: sent, title });
     res.json({ ok: true, sent });
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('support', 'super_admin'));
 
 // ══════════════════════════════ Feature flags (Phase 9) ══════════════
 registerRoute(router, {
@@ -406,7 +406,7 @@ registerRoute(router, {
   allowedRoles: ['support', 'super_admin', 'read_only'],
 }, async (req, res) => {
   res.json((await query('SELECT * FROM feature_flags ORDER BY key')).rows);
-});
+}, requireAdminRole('support', 'super_admin', 'read_only'));
 
 registerRoute(router, {
   method: 'PUT', path: '/flags/:key', category: 'Feature Flags',
@@ -423,7 +423,7 @@ registerRoute(router, {
     await writeAudit(req.admin, 'flag_update', 'feature_flags', req.params.key, null, rows[0]);
     res.json(rows[0]);
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('super_admin'));
 
 // ══════════════════════════════ Impersonation (Phase 10) ═════════════
 registerRoute(router, {
@@ -441,7 +441,7 @@ registerRoute(router, {
     await writeAudit(req.admin, 'impersonate_start', 'users', req.params.id, null, { scope: 'read_only' });
     res.json({ token, user: rows[0], expiresInSeconds: 900, readOnly: true });
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('support', 'super_admin'));
 
 function JWT_SECRET_FOR_APP() {
   return process.env.JWT_SECRET || 'dev-secret-change-me';
@@ -465,7 +465,7 @@ registerRoute(router, {
        ORDER BY a.created_at DESC LIMIT 200`, params);
     res.json(rows);
   } catch (e) { err(res, e); }
-});
+}, requireAdminRole('super_admin'));
 
 // ══════════════════════════════ API registry (Phase 3) ═══════════════
 registerRoute(router, {

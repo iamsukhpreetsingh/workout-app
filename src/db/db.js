@@ -191,6 +191,14 @@ async function ensureSchema(db) {
   await addColumnSafe(db, 'user_settings', 'theme_mode', "TEXT NOT NULL DEFAULT 'system'");
   await addColumnSafe(db, 'user_settings', 'length_unit', "TEXT NOT NULL DEFAULT 'cm'");
   await addColumnSafe(db, 'exercises', 'user_id', 'TEXT');
+  await addColumnSafe(db, 'user_settings', 'progression_formula_key', 'TEXT');
+  await addColumnSafe(db, 'user_settings', 'progression_params', 'TEXT');
+  await addColumnSafe(db, 'user_settings', 'progression_source', 'TEXT');
+  await addColumnSafe(db, 'user_settings', 'progression_trainer_name', 'TEXT');
+  await addColumnSafe(db, 'user_settings', 'progression_prompt_shown', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnSafe(db, 'exercises', 'training_max', 'REAL');
+  await addColumnSafe(db, 'sets', 'suggested_weight', 'REAL');
+  await addColumnSafe(db, 'sets', 'suggested_reps', 'INTEGER');
   await addColumnSafe(db, 'exercises', 'body_part', 'TEXT');
   await addColumnSafe(db, 'exercises', 'equipment', 'TEXT');
   await addColumnSafe(db, 'exercises', 'target', 'TEXT');
@@ -748,6 +756,21 @@ const MIGRATIONS = [
       }
     }
     console.log('[DB] enriched exercise library imported:', FULL_EXERCISES.length, 'entries');
+  },
+    // v28: auto-progression engine foundation — cached resolved formula
+  // setting (from /client/progression-resolved; makes suggestions work
+  // offline), per-exercise training max (input for the percentage-based
+  // formula), and per-set suggestion snapshots (System 6: what was
+  // suggested at logging time — recorded once, never recalculated).
+  async (db) => {
+    await addColumnSafe(db, 'user_settings', 'progression_formula_key', 'TEXT');
+    await addColumnSafe(db, 'user_settings', 'progression_params', 'TEXT');
+    await addColumnSafe(db, 'user_settings', 'progression_source', 'TEXT');
+    await addColumnSafe(db, 'user_settings', 'progression_trainer_name', 'TEXT');
+    await addColumnSafe(db, 'user_settings', 'progression_prompt_shown', 'INTEGER NOT NULL DEFAULT 0');
+    await addColumnSafe(db, 'exercises', 'training_max', 'REAL');
+    await addColumnSafe(db, 'sets', 'suggested_weight', 'REAL');
+    await addColumnSafe(db, 'sets', 'suggested_reps', 'INTEGER');
   },
 ];
 

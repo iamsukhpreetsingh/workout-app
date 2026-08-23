@@ -10,13 +10,18 @@
 
 const REGISTRY = [];
 
-function registerRoute(router, { method, path, description, requiresAuth = true, allowedRoles = [], category = 'Uncategorized' }, handler) {
+function registerRoute(router, { method, path, description, requiresAuth = true, allowedRoles = [], enforce = null, category = 'Uncategorized' }, handler, roleMiddleware = null) {
   const m = String(method).toLowerCase();
   if (!['get', 'post', 'patch', 'put', 'delete'].includes(m)) {
     throw new Error(`registerRoute: unsupported method ${method}`);
   }
-  // register with Express normally...
-  router[m](path, handler);
+  // register with Express normally — `enforce` (array of concrete role
+  // names) mounts the role guard BEFORE the handler so the constraint is
+  // server-side, not just metadata for the explorer. `allowedRoles` is
+  // display text for the API Explorer (may be descriptive for routes with
+  // dynamic per-table checks).
+  if (roleMiddleware) router[m](path, roleMiddleware, handler);
+  else router[m](path, handler);
   // ...and record metadata for the admin API Explorer
   REGISTRY.push({
     method: m.toUpperCase(),
