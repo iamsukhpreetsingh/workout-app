@@ -51,7 +51,8 @@ import TagManagerScreen from './src/screens/TagManagerScreen';
 import SyncSettingsScreen from './src/screens/SyncSettingsScreen';
 import { initConnectivityListener } from './src/lib/sync';
 // import { initSyncEngine } from './src/lib/syncEngine';
-import { initSyncEngine, resyncQueueForCurrentUser } from './src/lib/syncEngine';
+// import { initSyncEngine, resyncQueueForCurrentUser } from './src/lib/syncEngine';
+import { initSyncEngine, resyncQueueForCurrentUser, processQueue } from './src/lib/syncEngine';
 import { runBackfillIfNeeded } from './src/lib/backfill';
 import { isRestoreNeeded } from './src/lib/restore';
 import RestoreScreen from './src/screens/RestoreScreen';
@@ -439,9 +440,14 @@ function AppContent() {
 
 
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') {
+      // if (state === 'active') {
+      //   syncPendingSessions();
+      //   syncPendingMeasurements();
+      // }
+            if (state === 'active') {
         syncPendingSessions();
         syncPendingMeasurements();
+        processQueue(); // unified engine — auto mode runs on foreground (spec)
       }
     });
     return () => sub.remove();

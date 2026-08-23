@@ -6,6 +6,7 @@ export const MUSCLE_GROUPS = [
   'Arms',
   'Core',
   'Cardio',
+  'Other',
 ];
 
 export const SEED_EXERCISES = [

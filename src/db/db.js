@@ -1,5 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import { SEED_EXERCISES } from '../seed/exercises';
+import FULL_EXERCISES from '../seed/exercises_full.json';
 
 let dbInstance = null;
 let dbInitPromise = null;
@@ -190,6 +191,14 @@ async function ensureSchema(db) {
   await addColumnSafe(db, 'user_settings', 'theme_mode', "TEXT NOT NULL DEFAULT 'system'");
   await addColumnSafe(db, 'user_settings', 'length_unit', "TEXT NOT NULL DEFAULT 'cm'");
   await addColumnSafe(db, 'exercises', 'user_id', 'TEXT');
+  await addColumnSafe(db, 'exercises', 'body_part', 'TEXT');
+  await addColumnSafe(db, 'exercises', 'equipment', 'TEXT');
+  await addColumnSafe(db, 'exercises', 'target', 'TEXT');
+  await addColumnSafe(db, 'exercises', 'secondary_muscles', 'TEXT');
+  await addColumnSafe(db, 'exercises', 'instruction_steps', 'TEXT');
+  await addColumnSafe(db, 'exercises', 'media_id', 'TEXT');
+  await addColumnSafe(db, 'exercises', 'gif_url', 'TEXT');
+  await addColumnSafe(db, 'exercises', 'attribution', 'TEXT');
 
   const tables = ['personal_records', 'body_metrics', 'progress_photos'];
   for (const table of tables) {
@@ -676,6 +685,69 @@ const MIGRATIONS = [
   // after this upgrade (adoptLegacyCustomExercises in backfill.js).
   async (db) => {
     await addColumnSafe(db, 'exercises', 'user_id', 'TEXT');
+  },
+    // v27: enriched exercise library — one-time import of the full dataset
+  // from src/seed/exercises_full.json (multilingual instructions + steps,
+  // equipment, body-part taxonomy, media refs). Rows matching an existing
+  // seed exercise (case-insensitive name) are ENRICHED in place; new names
+  // are inserted. Custom exercises are never touched. Enrichment fields are
+  // device-local by design (identical JSON on every device) — only custom
+  // exercises carry equipment/instructions through backup/sync.
+  async (db) => {
+    await addColumnSafe(db, 'exercises', 'body_part', 'TEXT');
+    await addColumnSafe(db, 'exercises', 'equipment', 'TEXT');
+    await addColumnSafe(db, 'exercises', 'target', 'TEXT');
+    await addColumnSafe(db, 'exercises', 'secondary_muscles', 'TEXT');
+    await addColumnSafe(db, 'exercises', 'instruction_steps', 'TEXT');
+    await addColumnSafe(db, 'exercises', 'media_id', 'TEXT');
+    await addColumnSafe(db, 'exercises', 'gif_url', 'TEXT');
+    await addColumnSafe(db, 'exercises', 'attribution', 'TEXT');
+
+    const CAT_TO_GROUP = {
+      chest: 'Chest', back: 'Back', shoulders: 'Shoulders',
+      'upper arms': 'Arms', 'lower arms': 'Arms', arms: 'Arms',
+      'upper legs': 'Legs', 'lower legs': 'Legs', legs: 'Legs',
+      waist: 'Core', cardio: 'Cardio', neck: 'Shoulders',
+    };
+    const existing = await db.getAllAsync('SELECT id, name, is_custom FROM exercises');
+    const byLower = new Map(existing.map((r) => [String(r.name).toLowerCase(), r]));
+
+    for (const ex of FULL_EXERCISES) {
+      if (!ex?.name) continue;
+      const group = CAT_TO_GROUP[String(ex.category || '').toLowerCase()] || 'Other';
+      const vals = [
+        group,
+        ex.body_part || ex.category || null,
+        ex.equipment || null,
+        ex.target || null,
+        JSON.stringify(ex.secondary_muscles || []),
+        JSON.stringify(ex.instructions || {}),
+        JSON.stringify(ex.instruction_steps || {}),
+        ex.media_id || null,
+        ex.gif_url || null,
+        ex.attribution || null,
+      ];
+      const match = byLower.get(String(ex.name).toLowerCase());
+      if (match) {
+        if (match.is_custom) continue; // never overwrite user-created exercises
+        await db.runAsync(
+          `UPDATE exercises SET muscle_group = ?, body_part = ?, equipment = ?, target = ?,
+             secondary_muscles = ?, instructions = ?, instruction_steps = ?,
+             media_id = ?, gif_url = ?, attribution = ?
+           WHERE id = ?`,
+          [...vals, match.id]
+        );
+      } else {
+        await db.runAsync(
+          `INSERT OR IGNORE INTO exercises
+             (name, muscle_group, is_custom, body_part, equipment, target, secondary_muscles,
+              instructions, instruction_steps, media_id, gif_url, attribution, synced)
+           VALUES (?,?,0,?,?,?,?,?,?,?,?,?,1)`,
+          [ex.name, ...vals, 1]
+        );
+      }
+    }
+    console.log('[DB] enriched exercise library imported:', FULL_EXERCISES.length, 'entries');
   },
 ];
 

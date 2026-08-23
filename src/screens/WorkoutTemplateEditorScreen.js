@@ -12,6 +12,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../lib/api';
 import ExercisePicker from '../components/ExercisePicker';
+import { getExerciseByName } from '../db/queries';
+import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import RestEditorModal from '../components/RestEditorModal';
 import { groupLabels } from '../store/WorkoutContext';
 import { useColors } from '../theme';
@@ -40,6 +42,18 @@ export default function WorkoutTemplateEditorScreen({ route, navigation }) {
   const [selected, setSelected] = useState([]);
   const [busy, setBusy] = useState(false);
   const [workoutTags, setWorkoutTags] = useState([]);
+    const [detailEx, setDetailEx] = useState(null);
+
+  // Template rows carry only exercise NAMES from the server — resolve the
+  // full enriched record (instructions, equipment, languages) from the
+  // local library on demand. Falls back to the row itself.
+  const showDetail = async (ex) => {
+    try {
+      const full = await getExerciseByName(ex.name);
+      if (full) return setDetailEx(full);
+    } catch {}
+    setDetailEx(ex);
+  };
 
   // Load workout tags from API
   useEffect(() => {
@@ -259,11 +273,27 @@ export default function WorkoutTemplateEditorScreen({ route, navigation }) {
                   <Text style={[styles.idxText, NUMS]}>{idx + 1}</Text>
                 </View>
               )}
-              {!selectMode && (
+              {/* {!selectMode && (
                 <View style={{ flex: 1 }}>
                   <Text style={styles.exName}>{ex.name}</Text>
                 </View>
+              )} */}
+
+                            {!selectMode && (
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={styles.exName}>{ex.name}</Text>
+                    <TouchableOpacity
+                      onPress={() => showDetail(ex)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <Ionicons name="information-circle-outline" size={18} color={colors.primary} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
               )}
+
+
             </View>
             {!selectMode && (
               <View style={styles.controls}>
@@ -335,6 +365,9 @@ export default function WorkoutTemplateEditorScreen({ route, navigation }) {
           )
         }
       />
+
+      <ExerciseDetailSheet visible={!!detailEx} exercise={detailEx} onClose={() => setDetailEx(null)} />
+
 
       <RestEditorModal
         visible={restEditIdx !== null}

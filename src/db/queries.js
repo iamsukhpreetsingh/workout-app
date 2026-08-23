@@ -63,22 +63,51 @@ export async function listExercises() {
 
 
 
-export async function createExercise(name, muscleGroup) {
+// export async function createExercise(name, muscleGroup) {
+//   const db = await getDb();
+//   const userId = getCurrentUserId();
+//   if (!userId) throw new Error('User not authenticated');
+//   const trimmed = name.trim();
+//   const clash = await db.getFirstAsync('SELECT id FROM exercises WHERE name = ?', [trimmed]);
+//   if (clash) throw new Error(`An exercise named "${trimmed}" already exists`);
+//   const result = await db.runAsync(
+//     'INSERT INTO exercises (name, muscle_group, is_custom, user_id) VALUES (?, ?, 1, ?)',
+//     [trimmed, muscleGroup, userId]
+//   );
+//   await enqueueUpsert('custom_exercise', String(result.lastInsertRowId));
+//   return result.lastInsertRowId;
+// }
+
+
+
+// Resolve a full enriched exercise record by name — used where rows carry
+// only a name (trainer templates/assignments store names, not ids).
+export async function getExerciseByName(name) {
+  const db = await getDb();
+  return db.getFirstAsync('SELECT * FROM exercises WHERE name = ?', [name]);
+}
+
+
+export async function createExercise(name, muscleGroup, extra = {}) {
   const db = await getDb();
   const userId = getCurrentUserId();
   if (!userId) throw new Error('User not authenticated');
   const trimmed = name.trim();
   const clash = await db.getFirstAsync('SELECT id FROM exercises WHERE name = ?', [trimmed]);
   if (clash) throw new Error(`An exercise named "${trimmed}" already exists`);
+  // optional enrichment fields — instructions stored as {en: text} to match
+  // the library's multilingual format
+  const instructions = extra.instructions?.trim()
+    ? JSON.stringify({ en: extra.instructions.trim() })
+    : null;
   const result = await db.runAsync(
-    'INSERT INTO exercises (name, muscle_group, is_custom, user_id) VALUES (?, ?, 1, ?)',
-    [trimmed, muscleGroup, userId]
+    `INSERT INTO exercises (name, muscle_group, is_custom, user_id, equipment, body_part, instructions)
+     VALUES (?, ?, 1, ?, ?, ?, ?)`,
+    [trimmed, muscleGroup, userId, extra.equipment?.trim() || null, null, instructions]
   );
   await enqueueUpsert('custom_exercise', String(result.lastInsertRowId));
   return result.lastInsertRowId;
 }
-
-
 
 
 
@@ -146,8 +175,13 @@ export async function getPlan(id) {
   const plan = await db.getFirstAsync('SELECT * FROM workout_plans WHERE id = ? AND user_id = ?', [id, userId]);
   if (!plan) return null;
   plan.exercises = await db.getAllAsync(
-    `SELECT pe.id, pe.target_sets, pe.position, pe.rest_seconds, pe.group_id,
-            e.id AS exercise_id, e.name, e.muscle_group
+    // `SELECT pe.id, pe.target_sets, pe.position, pe.rest_seconds, pe.group_id,
+    //         e.id AS exercise_id, e.name, e.muscle_group
+    //  FROM plan_exercises pe
+        `SELECT pe.id, pe.target_sets, pe.position, pe.rest_seconds, pe.group_id,
+            e.id AS exercise_id, e.name, e.muscle_group, e.equipment, e.body_part,
+            e.target, e.secondary_muscles, e.instructions, e.instruction_steps,
+            e.media_id, e.gif_url, e.attribution, e.is_custom
      FROM plan_exercises pe
      JOIN exercises e ON pe.exercise_id = e.id
      WHERE pe.plan_id = ?
@@ -404,8 +438,13 @@ export async function getSession(id) {
   const session = await db.getFirstAsync('SELECT * FROM workout_sessions WHERE id = ? AND user_id = ?', [id, userId]);
   if (!session) return null;
   const exercises = await db.getAllAsync(
-    `SELECT se.id AS session_exercise_id, se.position, se.rest_seconds, se.group_id, se.notes,
-            e.id AS exercise_id, e.name, e.muscle_group
+    // `SELECT se.id AS session_exercise_id, se.position, se.rest_seconds, se.group_id, se.notes,
+    //         e.id AS exercise_id, e.name, e.muscle_group
+    //  FROM session_exercises se
+        `SELECT se.id AS session_exercise_id, se.position, se.rest_seconds, se.group_id, se.notes,
+            e.id AS exercise_id, e.name, e.muscle_group, e.equipment, e.body_part,
+            e.target, e.secondary_muscles, e.instructions, e.instruction_steps,
+            e.media_id, e.gif_url, e.attribution, e.is_custom
      FROM session_exercises se
      JOIN exercises e ON se.exercise_id = e.id
      WHERE se.session_id = ?

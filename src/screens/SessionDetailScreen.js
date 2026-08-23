@@ -5,6 +5,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { getSession, deleteSession, updateSetType, updateSessionName } from '../db/queries';
 import { getPRSetIdsForSession } from '../db/pr';
 import { shareSessionAsRoutine } from '../lib/share';
+import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import { useColors, fmtDate } from '../theme';
 import { formatDuration, groupLabels } from '../store/WorkoutContext';
 
@@ -21,6 +22,7 @@ export default function SessionDetailScreen({ route, navigation }) {
   const [prSetIds, setPrSetIds] = useState(new Set());
   const [editingName, setEditingName] = useState(false);
   const [editedName, setEditedName] = useState('');
+  const [detailEx, setDetailEx] = useState(null);
   const inputRef = useRef(null);
 
   // Share the performed workout structure (no notes/RPE/timestamps)
@@ -188,7 +190,18 @@ export default function SessionDetailScreen({ route, navigation }) {
           {ex.group_id && session.exercises[i - 1]?.group_id !== ex.group_id && (
             <Text style={styles.groupLabel}>Superset {labels[ex.group_id]}</Text>
           )}
-          <Text style={styles.exName}>{ex.name}</Text>
+          {/* <Text style={styles.exName}>{ex.name}</Text>
+          {ex.notes ? <Text style={styles.exNote}>{ex.notes}</Text> : null} */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={styles.exName}>{ex.name}</Text>
+            <TouchableOpacity
+              // onPress={() => setDetailEx(ex)}
+              onPress={() => setDetailEx({ ...ex, id: ex.exercise_id })}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="information-circle-outline" size={18} color={colors.primary} />
+            </TouchableOpacity>
+          </View>
           {ex.notes ? <Text style={styles.exNote}>{ex.notes}</Text> : null}
           <View style={styles.setHeader}>
             <Text style={styles.setHeaderLabel}>TYPE</Text>
@@ -247,6 +260,10 @@ export default function SessionDetailScreen({ route, navigation }) {
         <Ionicons name="trash-outline" size={16} color={colors.red} />
         <Text style={styles.deleteText}>Delete Workout</Text>
       </TouchableOpacity>
+    {/* </ScrollView>
+  );
+} */}
+      <ExerciseDetailSheet visible={!!detailEx} exercise={detailEx} onClose={() => setDetailEx(null)} />
     </ScrollView>
   );
 }

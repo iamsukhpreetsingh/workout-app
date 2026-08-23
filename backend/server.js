@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -8,6 +8,9 @@ const crypto = require('crypto');
 const authRoutes = require('./src/routes/auth');
 const trainerRoutes = require('./src/routes/trainer');
 const clientRoutes = require('./src/routes/client');
+const adminAuth = require('./src/admin/auth');
+const adminGeneric = require('./src/admin/generic');
+const adminModules = require('./src/admin/modules');
 const notificationRoutes = require('./src/routes/notifications');
 const tagRoutes = require('./src/routes/tags');
 const backupRoutes = require('./src/routes/backup');
@@ -50,6 +53,11 @@ app.post('/uploads/dish-photo', requireAuth, async (req, res) => {
 app.use('/auth', authRoutes);
 app.use('/trainer', trainerRoutes);
 app.use('/client', clientRoutes);
+
+// ── Admin dashboard API (separate auth; every route role-guarded) ──────
+app.use('/admin', adminAuth.router);
+app.use('/admin', adminGeneric.router);
+app.use('/admin', adminModules.router);
 app.use('/notifications', notificationRoutes);
 app.use('/trainer', tagRoutes);
 app.use('/user', backupRoutes);
@@ -70,4 +78,6 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`workout-tracker backend listening on :${PORT}`);
+  // first run: create the initial super admin (credentials logged once)
+  adminAuth.ensureBootstrapAdmin().catch((e) => console.error('[ADMIN] bootstrap failed:', e.message));
 });

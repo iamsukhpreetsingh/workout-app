@@ -86,25 +86,51 @@ export async function performRestore(onProgress = () => {}) {
   // });
 
 
+  //   await step('Custom exercises', async () => {
+  //   const rows = await api('/user/backup/custom-exercises');
+  //   for (const e of rows) {
+  //     const existing = await db.getFirstAsync('SELECT id FROM exercises WHERE name = ?', [e.name]);
+  //     if (existing) {
+  //       // claim unowned rows; never steal another account's row
+  //       await db.runAsync(
+  //         `UPDATE exercises SET synced = 1, server_id = ?, is_custom = 1,
+  //            user_id = COALESCE(user_id, ?)
+  //          WHERE id = ?`,
+  //         [e.id, userId, existing.id]);
+  //     } else {
+  //       await db.runAsync(
+  //         `INSERT INTO exercises (name, muscle_group, is_custom, instructions, thumbnail_path, synced, server_id, user_id)
+  //          VALUES (?,?,1,?,?,1,?,?)`,
+  //         [e.name, e.muscle_group || 'other', e.instructions ?? null, e.thumbnail_path ?? null, e.id, userId]);
+  //     }
+  //   }
+  // });
+
+
+
     await step('Custom exercises', async () => {
     const rows = await api('/user/backup/custom-exercises');
     for (const e of rows) {
       const existing = await db.getFirstAsync('SELECT id FROM exercises WHERE name = ?', [e.name]);
       if (existing) {
-        // claim unowned rows; never steal another account's row
         await db.runAsync(
           `UPDATE exercises SET synced = 1, server_id = ?, is_custom = 1,
-             user_id = COALESCE(user_id, ?)
+             user_id = COALESCE(user_id, ?),
+             equipment = COALESCE(?, equipment), body_part = COALESCE(?, body_part)
            WHERE id = ?`,
-          [e.id, userId, existing.id]);
+          [e.id, userId, e.equipment ?? null, e.body_part ?? null, existing.id]);
       } else {
         await db.runAsync(
-          `INSERT INTO exercises (name, muscle_group, is_custom, instructions, thumbnail_path, synced, server_id, user_id)
-           VALUES (?,?,1,?,?,1,?,?)`,
-          [e.name, e.muscle_group || 'other', e.instructions ?? null, e.thumbnail_path ?? null, e.id, userId]);
+          `INSERT INTO exercises
+             (name, muscle_group, is_custom, instructions, thumbnail_path, synced, server_id, user_id, equipment, body_part)
+           VALUES (?,?,1,?,?,1,?,?,?,?)`,
+          [e.name, e.muscle_group || 'other', e.instructions ?? null, e.thumbnail_path ?? null,
+           e.id, userId, e.equipment ?? null, e.body_part ?? null]);
       }
     }
   });
+
+  
 
   await step('Workout routines', async () => {
     const rows = await api('/user/backup/workout-plans');

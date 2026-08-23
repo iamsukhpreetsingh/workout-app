@@ -6,7 +6,7 @@
 // and checkins). The client's own data (session_summaries,
 // session_exercise_details, measurement_entries, self-authored plans) is
 // NEVER touched. Idempotent: already-revoked rows are skipped.
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 const { pool } = require('../src/db/pool');
 
 async function purge() {
@@ -70,10 +70,35 @@ async function purge() {
   }
 
   if (!rows.length) console.log('nothing to purge');
-  await pool.end();
+  return { relationships: rows.length };
 }
 
-purge().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// Log the run for the admin dashboard's health screen (best-effort).
+async function purgeWithLog() {
+  let result;
+  try {
+    result = await purge();
+  } catch (e) {
+    await pool.query(
+      'INSERT INTO purge_job_runs (rows_purged, relationships_purged, errors) VALUES (0, 0, $1)',
+      [e.message]
+    ).catch(() => {});
+    throw e;
+  }
+  await pool.query(
+    'INSERT INTO purge_job_runs (rows_purged, relationships_purged) VALUES ($1, $2)',
+    [result.rows || 0, result.relationships || 0]
+  ).catch(() => {});
+  return result;
+}
+
+// The admin dashboard's "Run purge job now" reuses THIS exact code path —
+// never a divergent copy.
+module.exports = { purge, runPurge: purgeWithLog };
+
+if (require.main === module) {
+  purgeWithLog()
+    .then((r) => { console.log('purge complete:', JSON.stringify(r)); })
+    .catch((e) => { console.error(e); process.exit(1); })
+    .finally(() => pool.end());
+}

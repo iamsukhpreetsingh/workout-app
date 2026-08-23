@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { createPlan, getPlan, updatePlan } from '../db/queries';
 import { getSettings } from '../db/settings';
 import ExercisePicker from '../components/ExercisePicker';
+import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import RestEditorModal from '../components/RestEditorModal';
 import ClientTagSelector from '../components/ClientTagSelector';
 import { groupLabels } from '../store/WorkoutContext';
@@ -38,6 +39,7 @@ export default function PlanEditorScreen({ navigation, route }) {
   const [defaultRest, setDefaultRest] = useState(90);
   const [loading, setLoading] = useState(isEditing);
   const [tags, setTags] = useState([]);
+  const [detailEx, setDetailEx] = useState(null);
 
   useEffect(() => {
     getSettings().then((s) => setDefaultRest(s.default_rest_seconds));
@@ -227,11 +229,26 @@ export default function PlanEditorScreen({ navigation, route }) {
                 </View>
               )}
               {!selectMode && (
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.exName}>{ex.name}</Text>
+                // <View style={{ flex: 1 }}>
+                //   <Text style={styles.exName}>{ex.name}</Text>
+                //   <Text style={styles.exGroup}>{ex.muscle_group}</Text>
+                // </View>
+
+                  <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={styles.exName}>{ex.name}</Text>
+                    <TouchableOpacity
+                      onPress={() => setDetailEx(ex)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <Ionicons name="information-circle-outline" size={18} color={colors.primary} />
+                    </TouchableOpacity>
+                  </View>
                   <Text style={styles.exGroup}>{ex.muscle_group}</Text>
                 </View>
               )}
+
+
             </View>
             {!selectMode && (
               <View style={styles.controls}>
@@ -302,6 +319,9 @@ export default function PlanEditorScreen({ navigation, route }) {
           )
         }
       />
+
+      
+      <ExerciseDetailSheet visible={!!detailEx} exercise={detailEx} onClose={() => setDetailEx(null)} />
 
       <RestEditorModal
         visible={restEditIdx !== null}

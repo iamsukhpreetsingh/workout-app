@@ -7,6 +7,11 @@ function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Missing access token' });
   try {
     req.user = jwt.verify(token, process.env.JWT_SECRET);
+    // admin impersonation tokens are READ-ONLY by design: any mutating
+    // verb made while impersonating a user is rejected server-side
+    if (req.user.impersonation === 'read_only' && req.method !== 'GET' && req.method !== 'HEAD') {
+      return res.status(403).json({ error: 'Read-only impersonation session — write actions are blocked' });
+    }
     next();
   } catch {
     return res.status(401).json({ error: 'Invalid or expired access token' });

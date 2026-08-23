@@ -137,10 +137,18 @@ export async function enqueueUpsert(entityType, localId, dependsOn = null) {
         dependsOn ? String(dependsOn.localId) : null,
       ]
     );
+//   } catch (e) {
+//     console.error('[SYNC] enqueueUpsert failed (local save unaffected):', e.message);
+//   }
+// }
   } catch (e) {
     console.error('[SYNC] enqueueUpsert failed (local save unaffected):', e.message);
   }
+  kickQueue(); // debounced auto-sync attempt (no-op outside auto mode)
 }
+
+
+
 
 // hadServerBackup: the caller checks (BEFORE deleting the local row) whether
 // this entity was ever backed up (server_id set). Never-backed-up deletes
@@ -160,13 +168,35 @@ export async function enqueueDelete(entityType, localId, hadServerBackup) {
        VALUES (?, ?, ?, 'DELETE', NULL, ?, ?, 'PENDING')`,
       [`${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, entityType, String(localId), now, now]
     );
+//   } catch (e) {
+//     console.error('[SYNC] enqueueDelete failed (local delete unaffected):', e.message);
+//   }
+// }
+
+
+
   } catch (e) {
     console.error('[SYNC] enqueueDelete failed (local delete unaffected):', e.message);
   }
+  kickQueue();
 }
 
 
-
+// Debounced auto-sync kick: any enqueue schedules one processQueue attempt
+// a few seconds later. processQueue itself enforces mode/connectivity/
+// single-flight, so the kick is always safe — in manual/local_only it
+// simply no-ops. This closes the window where a freshly created item
+// (e.g. a trainer's custom exercise) sat unsynced until a reconnect, the
+// 10-minute timer, or an app restart — and was lost if the user cleared
+// app data inside that window.
+let kickTimer = null;
+function kickQueue() {
+  if (kickTimer) return;
+  kickTimer = setTimeout(() => {
+    kickTimer = null;
+    processQueue().catch(() => {});
+  }, 4000);
+}
 
 
 // ── payload builders (fresh from DB — the anti-zeroing guarantee) ───────
@@ -408,7 +438,10 @@ const HANDLERS = {
                       // skip cleanly: never back up another account's data, never fail
       const rows = await api(this.path, {
         method: 'POST',
-        body: [{ local_entity_id: String(e.id), name: e.name, muscle_group: e.muscle_group, instructions: e.instructions, thumbnail_path: e.thumbnail_path }],
+        // body: [{ local_entity_id: String(e.id), name: e.name, muscle_group: e.muscle_group, instructions: e.instructions, thumbnail_path: e.thumbnail_path }],
+                body: [{ local_entity_id: String(e.id), name: e.name, muscle_group: e.muscle_group,
+                 instructions: e.instructions, thumbnail_path: e.thumbnail_path,
+                 equipment: e.equipment ?? null, body_part: e.body_part ?? null }],
       });
       await db.runAsync('UPDATE exercises SET synced = 1, server_id = ? WHERE id = ?', [rows?.[0]?.id || null, id]);
     },

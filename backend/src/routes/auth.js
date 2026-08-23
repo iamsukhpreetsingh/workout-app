@@ -74,6 +74,10 @@ router.post('/login', async (req, res, next) => {
     if (!user) return res.status(401).json({ error: 'Invalid email or password' });
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
+    // admin-dashboard suspension (admin_users Phase 4) blocks app login
+    if (user.is_suspended) {
+      return res.status(403).json({ error: 'This account has been suspended. Contact support.' });
+    }
 
     const accessToken = signAccessToken(user);
     const refreshToken = signRefreshToken(user);

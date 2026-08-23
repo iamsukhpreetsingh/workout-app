@@ -1,7 +1,7 @@
 // Versioned SQL migration runner. Tracks applied files in schema_migrations;
 // safe to re-run (second run applies nothing). Each file runs in a
 // transaction so a failed migration leaves no partial state.
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 const fs = require('fs');
 const path = require('path');
 const { pool } = require('../src/db/pool');

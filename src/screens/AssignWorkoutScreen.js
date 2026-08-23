@@ -11,6 +11,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../lib/api';
 import ExercisePicker from '../components/ExercisePicker';
+import { getExerciseByName } from '../db/queries';
+import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import RestEditorModal from '../components/RestEditorModal';
 import { groupLabels } from '../store/WorkoutContext';
 import { useColors } from '../theme';
@@ -36,6 +38,19 @@ export default function AssignWorkoutScreen({ route, navigation }) {
   const [busy, setBusy] = useState(false);
   const [alsoSaveTemplate, setAlsoSaveTemplate] = useState(false);
   const [loading, setLoading] = useState(isEditing);
+
+    const [detailEx, setDetailEx] = useState(null);
+
+  // Assigned-plan rows carry only exercise NAMES from the server — resolve
+  // the full enriched record (instructions, equipment, languages) from the
+  // local library on demand. Falls back to the row itself.
+  const showDetail = async (ex) => {
+    try {
+      const full = await getExerciseByName(ex.name);
+      if (full) return setDetailEx(full);
+    } catch {}
+    setDetailEx(ex);
+  };
 
   useEffect(() => {
     if (isEditing) {
@@ -258,9 +273,24 @@ export default function AssignWorkoutScreen({ route, navigation }) {
                   <Text style={[styles.idxText, NUMS]}>{idx + 1}</Text>
                 </View>
               )}
-              {!selectMode && (
+              {/* {!selectMode && (
                 <View style={{ flex: 1 }}>
                   <Text style={styles.exName}>{ex.name}</Text>
+                  <Text style={styles.exGroup}>{ex.muscle_group}</Text>
+                </View>
+              )} */}
+
+                {!selectMode && (
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={styles.exName}>{ex.name}</Text>
+                    <TouchableOpacity
+                      onPress={() => showDetail(ex)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <Ionicons name="information-circle-outline" size={18} color={colors.primary} />
+                    </TouchableOpacity>
+                  </View>
                   <Text style={styles.exGroup}>{ex.muscle_group}</Text>
                 </View>
               )}
@@ -340,6 +370,10 @@ export default function AssignWorkoutScreen({ route, navigation }) {
           )
         }
       />
+
+
+      <ExerciseDetailSheet visible={!!detailEx} exercise={detailEx} onClose={() => setDetailEx(null)} />
+
 
       <RestEditorModal
         visible={restEditIdx !== null}

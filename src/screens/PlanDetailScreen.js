@@ -5,6 +5,7 @@ import { getPlan, deletePlan } from '../db/queries';
 import { useWorkout, groupLabels } from '../store/WorkoutContext';
 import { Ionicons } from '@expo/vector-icons';
 import { shareRoutine } from '../lib/share';
+import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import { useColors, fmtDate } from '../theme';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
@@ -13,6 +14,7 @@ export default function PlanDetailScreen({ route, navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [plan, setPlan] = useState(null);
+  const [detailEx, setDetailEx] = useState(null);
   const { workout, dispatch } = useWorkout();
 
   useFocusEffect(
@@ -99,7 +101,7 @@ export default function PlanDetailScreen({ route, navigation }) {
               <View style={[styles.idxBadge, ex.group_id && styles.groupedRowIdx]}>
                 <Text style={[styles.idxText, NUMS]}>{i + 1}</Text>
               </View>
-              <View style={{ flex: 1 }}>
+              {/* <View style={{ flex: 1 }}>
                 <Text style={styles.exName}>{ex.name}</Text>
                 <View style={styles.exMetaRow}>
                   <Text style={[styles.exSets, NUMS]}>{ex.target_sets}</Text>
@@ -107,7 +109,26 @@ export default function PlanDetailScreen({ route, navigation }) {
                   <Text style={styles.exGroup}>{ex.muscle_group}</Text>
                 </View>
               </View>
+              <View style={styles.restChip}> */}
+                            <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.exName}>{ex.name}</Text>
+                  <TouchableOpacity
+                    onPress={() => setDetailEx(ex)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="information-circle-outline" size={18} color={colors.primary} />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.exMetaRow}>
+                  <Text style={[styles.exSets, NUMS]}>{ex.target_sets}</Text>
+                  <Text style={styles.exSetsUnit}>sets</Text>
+                  <Text style={styles.exGroup}>{ex.muscle_group}</Text>
+                </View>
+              </View>
               <View style={styles.restChip}>
+
+
                 <Ionicons name="time-outline" size={12} color={colors.textDim} />
                 <Text style={[styles.restText, NUMS]}>{ex.rest_seconds || 90}s</Text>
               </View>
@@ -127,6 +148,10 @@ export default function PlanDetailScreen({ route, navigation }) {
         <Ionicons name="trash-outline" size={16} color={colors.red} />
         <Text style={styles.deleteText}>Delete Routine</Text>
       </TouchableOpacity>
+    {/* </ScrollView>
+  );
+} */}
+      <ExerciseDetailSheet visible={!!detailEx} exercise={detailEx} onClose={() => setDetailEx(null)} />
     </ScrollView>
   );
 }
