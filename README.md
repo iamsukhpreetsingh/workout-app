@@ -198,9 +198,19 @@ Existing users' databases upgrade cleanly with no data loss — every new column
 ## Tier 4 behavior notes
 
 - **Previous performance as placeholders**: last session's weight×reps shows in the LAST column
-  and as native placeholder text in empty inputs. Placeholder-only sets never count as filled:
-  they don't contribute to volume, completion, or PR detection. Tap the LAST cell to quick-fill
-  both fields with the previous values.
+  and as native placeholder text in empty inputs. Placeholders are matched PER-SET POSITION:
+  set N's hint is the most recent prior session's set N (its actual weight AND rep count) —
+  never a blended/last-set/best value. Positions with no prior data (e.g. a newly added 5th set)
+  show NO hint at all. Placeholder-only sets never count as filled: they don't contribute to
+  volume, completion, or PR detection. Tap the LAST cell to quick-fill both fields with the
+  previous values.
+- **Progression formulas & multi-weight sessions**: sets within one exercise entry may span
+  multiple distinct working weights (ramp/pyramid structure) — always group by weight and
+  evaluate the top group; never assume all sets in an exercise share one target weight. All
+  built-in formulas (Linear, Double Progression, RPE-Autoregulated, Percentage-Based) follow
+  this rule via `src/progressionFormulas/weightGroups.js`: warmup sets are excluded, the TOP
+  weight group is the sole basis of the suggestion, and the fallback is always to repeat the
+  TOP group's weight — never a lighter ramp-set's weight.
 - **Per-exercise notes**: chatbox icon on each exercise header in the expanded view (outline =
   empty, filled = has note). Stored on `session_exercises.notes`, shown in session detail under
   the exercise name, separate from the whole-workout note.

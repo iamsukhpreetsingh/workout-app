@@ -266,7 +266,7 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { listExercises, createExercise, getExerciseHistory, getExerciseBest } from '../db/queries';
+import { listExercises, createExercise, getExerciseHistory, getExerciseBest, getLastSessionSetsByPosition } from '../db/queries';
 import { MUSCLE_GROUPS } from '../seed/exercises';
 import { useColors } from '../theme';
 import MuscleIcon from './MuscleIcon';
@@ -351,7 +351,9 @@ export default function ExercisePicker({ visible, onClose, onPick }) {
   });
 
   const pick = async (exercise) => {
-    const history = await getExerciseHistory(exercise.id, 3);
+    // Per-set positional history: the most recent prior session's sets, in
+    // set order — each new set row pre-fills ITS OWN position's last value.
+    const history = await getLastSessionSetsByPosition(exercise.id);
     const best = await getExerciseBest(exercise.id);
     onPick(exercise, history, best);
     onClose();

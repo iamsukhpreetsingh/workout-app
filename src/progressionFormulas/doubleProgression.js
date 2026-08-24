@@ -1,6 +1,10 @@
 // Double Progression — same weight while climbing reps within a range; when
 // every completed set hits the top of the range, add weight and reset reps
 // to the bottom.
+// Weight-group aware: only the TOP weight group of the latest session is
+// evaluated (ramp/pyramid sets at lighter weights never influence this).
+import { topWeightGroup } from './weightGroups.js';
+
 const r2 = (v) => Math.round(v * 100) / 100;
 
 export default {
@@ -18,11 +22,11 @@ export default {
     const repMax = Number(params?.repMax ?? 12);
     const increment = Number(params?.incrementKg ?? 2.5);
 
-    const last = recentHistory.filter((s) => (s.sessionIndex ?? 0) === 0 && s.completed);
-    if (!last.length) return null;
+    const group = topWeightGroup(recentHistory).filter((s) => s.completed);
+    if (!group.length) return null;
 
-    const lastWeight = Number(last[0].weight) || 0;
-    const allAtTop = last.every((s) => (s.reps ?? 0) >= repMax);
+    const lastWeight = Number(group[0].weight) || 0;
+    const allAtTop = group.every((s) => (s.reps ?? 0) >= repMax);
 
     if (allAtTop) {
       return {
@@ -31,7 +35,7 @@ export default {
         rationale: `All sets hit ${repMax} reps at ${r2(lastWeight)}kg — add ${increment}kg and drop back to ${repMin} reps.`,
       };
     }
-    const weakest = Math.min(...last.map((s) => s.reps ?? 0));
+    const weakest = Math.min(...group.map((s) => s.reps ?? 0));
     const nextReps = Math.min(weakest + 1, repMax);
     return {
       suggestedWeight: r2(lastWeight),

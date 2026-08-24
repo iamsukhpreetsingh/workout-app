@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useReducer } from 'react';
 import { getDb } from '../db/db';
+import { positionalPrevs } from './prefillSets';
 
 // Active workout. Shape:
 // {
@@ -61,13 +62,19 @@ function reducer(state, action) {
         groups: {},
         restTimer: null,
         exercises: (planExercises || []).map((ex) => {
+          // POSITIONAL prefill first (set N ← prior session's set N); the
+          // best weight/reps pair is only a fallback when the exercise has
+          // NO logged history at all.
+          const prevs = positionalPrevs(ex.prevSets);
           const bestWeight = ex.bestWeight || 0;
           const bestReps = ex.bestReps || 0;
-          const hasPrev = bestWeight > 0 || bestReps > 0;
+          const hasPrev = prevs.length > 0 || bestWeight > 0 || bestReps > 0;
+          const count = prevs.length || (ex.target_sets || 3);
           const sets = [];
-          for (let i = 0; i < (ex.target_sets || 3); i++) {
+          for (let i = 0; i < count; i++) {
             const s = emptySet();
-            if (hasPrev) s.prev = { weight: bestWeight, reps: bestReps, rpe: null };
+            if (prevs[i]) s.prev = prevs[i];
+            else if (!prevs.length && hasPrev) s.prev = { weight: bestWeight, reps: bestReps, rpe: null };
             sets.push(s);
           }
           return {
@@ -87,11 +94,14 @@ function reducer(state, action) {
       return action.workout;
     case 'ADD_EXERCISE': {
       const { exercise, previousSets, defaultRest, bestWeight, bestReps } = action;
-      const ordered = (previousSets || []).slice(0, 3).reverse();
+      // POSITIONAL prefill: set N's placeholder = prior session's set N
+      // (its actual weight AND its actual reps). Positions with no prior
+      // data get no hint at all — never the last known set repeated.
+      const prevs = positionalPrevs(previousSets);
       const mk = (prev) => ({ ...emptySet(), prev });
       let sets;
-      if (ordered.length) {
-        sets = ordered.map((s) => mk({ weight: s.weight, reps: s.reps, rpe: s.rpe ?? null }));
+      if (prevs.length) {
+        sets = prevs.map((p) => mk(p));
       } else if (bestWeight > 0 || bestReps > 0) {
         sets = [1, 2, 3].map(() => mk({ weight: bestWeight, reps: bestReps, rpe: null }));
       } else {

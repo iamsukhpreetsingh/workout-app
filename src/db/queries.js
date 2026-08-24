@@ -141,6 +141,38 @@ export async function getExerciseHistory(exerciseId, limit = 50) {
   );
 }
 
+// Most recent PRIOR session containing this exercise, its sets ordered by
+// position ASC — used for PER-SET POSITIONAL prefill ("last time" hints).
+// Sets are matched by set POSITION (order_index), never by "the last set
+// overall": each current-session set position shows ITS OWN prior value.
+// Blank rows (nothing logged, not completed) are excluded; set_type is NOT
+// filtered here — the placeholder is a memory aid, not a validation.
+export async function getLastSessionSetsByPosition(exerciseId) {
+  const db = await getDb();
+  const userId = getCurrentUserId();
+  if (!userId) return [];
+  const row = await db.getFirstAsync(
+    `SELECT sess.id AS session_id
+     FROM workout_sessions sess
+     JOIN session_exercises se ON se.session_id = sess.id
+     WHERE se.exercise_id = ? AND sess.user_id = ?
+     ORDER BY sess.start_time DESC
+     LIMIT 1`,
+    [exerciseId, userId]
+  );
+  if (!row) return [];
+  return db.getAllAsync(
+    `SELECT s.weight, s.reps, s.rpe, s.set_type, s.completed, s.position
+     FROM sets s
+     WHERE s.session_exercise_id IN (
+             SELECT id FROM session_exercises WHERE session_id = ? AND exercise_id = ?
+           )
+       AND (s.completed = 1 OR s.weight > 0 OR s.reps > 0)
+     ORDER BY s.position ASC`,
+    [row.session_id, exerciseId]
+  );
+}
+
 export async function getExerciseBest(exerciseId) {
   const db = await getDb();
   const userId = getCurrentUserId();
@@ -201,6 +233,9 @@ export async function getPlan(id) {
   );
   
   for (const ex of plan.exercises) {
+    // Positional prior-session sets for per-set prefill (falls back to
+    // bestWeight/bestReps only when no history exists)
+    ex.prevSets = await getLastSessionSetsByPosition(ex.exercise_id);
     const best = await db.getFirstAsync(
       `SELECT MAX(s.weight) AS max_weight, MAX(s.reps) AS max_reps
        FROM sets s

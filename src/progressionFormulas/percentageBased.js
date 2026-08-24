@@ -4,6 +4,9 @@
 // caller shows only the historical placeholder plus a one-time prompt.
 // Week number = the count of distinct calendar weeks in this exercise's
 // recent history, cycling through the configured cycle length.
+// NOTE: this formula derives its weight from the per-exercise TRAINING MAX,
+// not from logged sets, so multi-weight (ramp/pyramid) sessions don't affect
+// it. It only reads history for week counting and the trainingMax stamp.
 const r2 = (v) => Math.round(v * 100) / 100;
 const weekKey = (t) => {
   const d = new Date(t);

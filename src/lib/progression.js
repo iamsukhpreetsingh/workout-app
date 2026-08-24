@@ -102,6 +102,17 @@ export async function getCachedProgressionSetting() {
 
 
 
+// Build the history contract: working sets (warm-ups excluded) from the
+// last 3 sessions containing this exercise, most recent session first,
+// stamped with sessionIndex / targetReps / trainingMax. Blank placeholder
+// rows are skipped; a REAL missed set (numbers but not completed) is kept —
+// it should block progression.
+// WEIGHT-GROUPING NOTE: sets within one exercise entry may span multiple
+// distinct working weights (ramp/pyramid structure) — always group by weight
+// and evaluate the top group (see progressionFormulas/weightGroups.js);
+// never assume all sets in an exercise share one target weight. targetReps
+// is stamped per session from the TOP weight group's best set so formulas
+// get a meaningful target even for ramped sessions.
 export async function getRecentHistoryForExercise(exerciseId, maxSessions = 3) {
   const db = await getDb();
   const userId = getCurrentUserId();
@@ -109,7 +120,7 @@ export async function getRecentHistoryForExercise(exerciseId, maxSessions = 3) {
   const ex = await db.getFirstAsync('SELECT training_max FROM exercises WHERE id = ?', [exerciseId]);
   const trainingMax = ex?.training_max ?? null;
   const rows = await db.getAllAsync(
-    `SELECT s.weight, s.reps, s.rpe, s.completed, s.position,
+    `SELECT s.weight, s.reps, s.rpe, s.completed, s.position, s.set_type,
             sess.id AS session_id, sess.start_time
      FROM sets s
      JOIN session_exercises se ON s.session_exercise_id = se.id
@@ -128,7 +139,14 @@ export async function getRecentHistoryForExercise(exerciseId, maxSessions = 3) {
   }
   const history = [];
   [...bySession.entries()].slice(0, maxSessions).forEach(([sid, sets], sessionIndex) => {
-    const targetReps = sets[0]?.reps ?? 0;
+    // targetReps comes from the TOP weight group of the session (the working
+    // set being progressed), NOT the opening set — ramped sessions start light.
+    const weights = sets.map((s) => Number(s.weight) || 0);
+    const topWeight = Math.max(...weights);
+    const targetReps = Math.max(
+      0,
+      ...sets.filter((s, i) => weights[i] === topWeight).map((s) => Number(s.reps) || 0)
+    );
     for (const st of sets) {
       history.push({
         weight: Number(st.weight) || 0,
@@ -136,6 +154,7 @@ export async function getRecentHistoryForExercise(exerciseId, maxSessions = 3) {
         targetReps,
         completed: st.completed !== 0,
         rpe: st.rpe ?? null,
+        setType: st.set_type || 'working',
         sessionIndex,
         trainingMax,
         performedAt: st.start_time,

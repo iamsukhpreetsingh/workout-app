@@ -13,11 +13,12 @@ const t = (name, cond, got) => cases.push([cond ? 'PASS' : 'FAIL', name, got]);
 const S = (weight, reps, targetReps, extra = {}) =>
   ({ weight, reps, targetReps, completed: true, rpe: null, sessionIndex: 0, ...extra });
 
-// ── Linear Progression ──
+// ── Linear Progression (reps-before-weight: <10 reps → same weight +1 rep;
+//    ≥10 reps → add weight) ──
 let r = linear.calculate([S(60,8,8), S(60,8,8), S(60,8,8)], { incrementKg: 2.5 });
-t('Linear: all sets hit → 62.5×8', r.suggestedWeight === 62.5 && r.suggestedReps === 8, r);
-r = linear.calculate([S(60,8,8), S(60,7,8)], { incrementKg: 2.5 });
-t('Linear: missed a rep → repeat 60×8', r.suggestedWeight === 60 && r.suggestedReps === 8, r);
+t('Linear: 8 reps < threshold → repeat 60×9', r.suggestedWeight === 60 && r.suggestedReps === 9, r);
+r = linear.calculate([S(60,10,10), S(60,10,10)], { incrementKg: 2.5 });
+t('Linear: 10 reps hit → 62.5×10', r.suggestedWeight === 62.5 && r.suggestedReps === 10, r);
 t('Linear: empty history → null', linear.calculate([], {}) === null, null);
 
 // ── Double Progression (8–12, +2.5kg) ──
@@ -33,7 +34,7 @@ t('RPE: avg 7.33 < 7.5 → 62.5', r.suggestedWeight === 62.5, r);
 r = rpe.calculate([S(60,8,8,{rpe:9}), S(60,8,8,{rpe:9.5})], {});
 t('RPE: avg 9.25 ≥ 9 → 57.5', r.suggestedWeight === 57.5, r);
 r = rpe.calculate([S(60,8,8), S(60,8,8)], { incrementKg: 2.5 });
-t('RPE: no RPE logged → linear fallback 62.5×8', r.suggestedWeight === 62.5 && r.suggestedReps === 8, r);
+t('RPE: no RPE logged → linear fallback 60×9', r.suggestedWeight === 60 && r.suggestedReps === 9, r);
 r = rpe.calculate([S(60,8,8,{rpe:8})], {});
 t('RPE: avg 8 → hold 60', r.suggestedWeight === 60, r);
 

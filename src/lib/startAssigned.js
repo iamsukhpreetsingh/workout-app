@@ -2,7 +2,7 @@
 // detail screen and Home's pinned strip. Resolves each plain-text exercise
 // name to a local SQLite exercise (creating a custom one if missing) and
 // feeds the standard live-session machinery.
-import { listExercises, createExercise } from '../db/queries';
+import { listExercises, createExercise, getLastSessionSetsByPosition } from '../db/queries';
 import { getSettings } from '../db/settings';
 
 function guessMuscleGroup(name) {
@@ -36,6 +36,8 @@ export async function startAssignedPlan(plan, { dispatch, navigation }) {
       target_sets: ex.target_sets,
       rest_seconds: ex.rest_seconds || settings.default_rest_seconds,
       group_id: ex.group_id || null,
+      // positional prior-session sets for per-set prefill
+      prevSets: await getLastSessionSetsByPosition(local.id),
     });
   }
 

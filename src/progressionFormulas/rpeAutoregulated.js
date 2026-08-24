@@ -3,6 +3,7 @@
 // formula delegates to Linear Progression's logic for that suggestion
 // instead of erroring or returning nothing.
 import linear from './linearProgression.js';
+import { topWeightGroup } from './weightGroups.js';
 
 
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -19,10 +20,10 @@ export default {
   ],
   calculate(recentHistory, params) {
     if (!Array.isArray(recentHistory) || !recentHistory.length) return null;
-    const last = recentHistory.filter((s) => (s.sessionIndex ?? 0) === 0 && s.completed);
-    if (!last.length) return null;
-
-    const withRpe = last.filter((s) => s.rpe != null);
+    // RPE is judged on the TOP weight group only — ramp sets at lighter
+    // weights don't reflect how the working weight felt.
+    const group = topWeightGroup(recentHistory);
+    const withRpe = group.filter((s) => s.rpe != null);
     if (!withRpe.length) {
       // no RPE data → Linear Progression's logic, not an error
       return linear.calculate(recentHistory, {
@@ -32,8 +33,8 @@ export default {
     }
 
     const avg = withRpe.reduce((n, s) => n + Number(s.rpe), 0) / withRpe.length;
-    const lastWeight = Number(last[0].weight) || 0;
-    const targetReps = last[0].targetReps ?? last[0].reps ?? 0;
+    const lastWeight = Number(group[0].weight) || 0;
+    const targetReps = Math.max(...group.map((s) => s.reps ?? 0));
     const easy = Number(params?.easyThreshold ?? 7.5);
     const hard = Number(params?.hardThreshold ?? 9);
 
