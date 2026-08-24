@@ -316,12 +316,13 @@ function normalizeAlternatives(exerciseId, primaryName, alternatives = []) {
   const seen = new Set([norm(primaryName)]);
   const out = [];
   for (const a of alternatives) {
-    const name = String(a?.name || '').trim();
+    // builders pass plain strings; some flows pass {name} objects
+    const name = String(typeof a === 'string' ? a : a?.name || '').trim();
     if (!name) continue;
     if (out.length >= 3) throw new Error('Up to 3 alternatives per exercise');
     if (seen.has(norm(name))) throw new Error(`"${name}" is already added as an alternative`);
     seen.add(norm(name));
-    out.push({ name, exerciseId: a.exerciseId ?? null });
+    out.push({ name, exerciseId: typeof a === 'object' ? a.exerciseId ?? null : null });
   }
   return out;
 }
