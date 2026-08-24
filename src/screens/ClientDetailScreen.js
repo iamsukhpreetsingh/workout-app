@@ -765,6 +765,15 @@ export default function ClientDetailScreen({ route, navigation }) {
                               swapped from {ex.original_exercise_name}
                             </Text>
                           ) : null}
+                          {ex.shared_note ? (
+                            <View style={styles.sharedNoteRow}>
+                              <Ionicons name="chatbubble-ellipses" size={11} color={colors.blue} />
+                              <Text style={styles.sharedNoteText}>
+                                <Text style={styles.sharedNoteLabel}>Shared note: </Text>
+                                {ex.shared_note}
+                              </Text>
+                            </View>
+                          ) : null}
                           {ex.sets.map((set, i) => (
                             <View key={i} style={styles.detailSetRow}>
                               <Text style={[styles.detailCell, NUMS]}>{set.set_number}</Text>
@@ -1285,6 +1294,13 @@ const makeStyles = (colors) =>
     detailEx: { marginBottom: 10 },
     detailExName: { color: colors.text, fontWeight: '700', fontSize: 13, marginBottom: 4 },
     detailSwapped: { color: colors.textDim, fontSize: 11, fontStyle: 'italic', marginTop: -2, marginBottom: 4 },
+    sharedNoteRow: {
+      flexDirection: 'row', alignItems: 'flex-start', gap: 5,
+      backgroundColor: colors.cardLight, borderRadius: 8,
+      paddingHorizontal: 8, paddingVertical: 6, marginBottom: 6,
+    },
+    sharedNoteText: { color: colors.text, fontSize: 11, fontStyle: 'italic', flex: 1 },
+    sharedNoteLabel: { fontStyle: 'normal', fontWeight: '700' },
     detailSetRow: { flexDirection: 'row' },
     detailCell: { color: colors.text, flex: 1, textAlign: 'center', fontSize: 12 },
     warmupText: { color: colors.textDim },

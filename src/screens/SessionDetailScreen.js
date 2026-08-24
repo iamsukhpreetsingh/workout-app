@@ -208,6 +208,12 @@ export default function SessionDetailScreen({ route, navigation }) {
             </Text>
           ) : null}
           {ex.notes ? <Text style={styles.exNote}>{ex.notes}</Text> : null}
+          {ex.trainer_note ? (
+            <View style={styles.trainerNoteRow}>
+              <Ionicons name="people" size={11} color={colors.blue} />
+              <Text style={styles.exNote}>Shared with trainer: {ex.trainer_note}</Text>
+            </View>
+          ) : null}
           <View style={styles.setHeader}>
             <Text style={styles.setHeaderLabel}>TYPE</Text>
             <Text style={styles.setHeaderLabel}>KG</Text>
@@ -335,6 +341,7 @@ const makeStyles = (colors) =>
     exName: { color: colors.text, fontSize: 16, fontWeight: '800', marginBottom: 2 },
     swappedLabel: { color: colors.textDim, fontSize: 11, fontStyle: 'italic', marginTop: -2 },
     exNote: { color: colors.textDim, fontSize: 12, fontStyle: 'italic', marginBottom: 8 },
+    trainerNoteRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
 
     setHeader: { flexDirection: 'row', marginTop: 8, marginBottom: 2 },
     setHeaderLabel: { color: colors.textDim, fontSize: 10, fontWeight: '700', flex: 1, textAlign: 'center', letterSpacing: 0.5 },

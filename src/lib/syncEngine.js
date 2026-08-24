@@ -228,7 +228,8 @@ async function buildSessionPayload(sid) {
       order_index: ex.position,
       rest_seconds: ex.rest_seconds,
       group_id: ex.group_id,
-      notes: ex.notes,
+          notes: ex.notes,
+          trainerNote: ex.trainer_note || null, // personal backup only
       sets: sets.map((st, j) => ({
         local_entity_id: `${s.id}:e${i}:s${j}`,
         weight: st.weight,

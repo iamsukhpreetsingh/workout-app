@@ -199,6 +199,9 @@ async function ensureSchema(db) {
   await addColumnSafe(db, 'exercises', 'training_max', 'REAL');
   await addColumnSafe(db, 'sets', 'suggested_weight', 'REAL');
   await addColumnSafe(db, 'sets', 'suggested_reps', 'INTEGER');
+  // v31 self-heal: guarantees the trainer-shared note column exists even on
+  // a DB whose user_version is already past the migration that adds it
+  await addColumnSafe(db, 'session_exercises', 'trainer_note', 'TEXT NULL');
   await addColumnSafe(db, 'exercises', 'body_part', 'TEXT');
   await addColumnSafe(db, 'exercises', 'equipment', 'TEXT');
   await addColumnSafe(db, 'exercises', 'target', 'TEXT');
@@ -838,6 +841,16 @@ const MIGRATIONS = [
       server_id TEXT NULL,
       UNIQUE(diet_plan_meal_item_ref, swap_date)
     );`);
+    // NOTE: trainer_note was BRIEFLY added here, but v30 had already shipped
+    // to devices — editing an applied migration never runs for them. It now
+    // lives in v31 below. Do not re-add it here.
+  },
+  // v31: "Share with Trainer" per-exercise note. Deliberate exception to
+  // the notes-free trainer sync: ONLY this field travels to the trainer as
+  // session_exercise_details.shared_note; the personal `notes` column
+  // remains private forever.
+  async (db) => {
+    await addColumnSafe(db, 'session_exercises', 'trainer_note', 'TEXT NULL');
   },
 ];
 

@@ -541,7 +541,7 @@ export async function getSession(id) {
     //         e.id AS exercise_id, e.name, e.muscle_group
     //  FROM session_exercises se
         `SELECT se.id AS session_exercise_id, se.position, se.rest_seconds, se.group_id, se.notes,
-            se.original_exercise_name,
+            se.trainer_note, se.original_exercise_name,
             e.id AS exercise_id, e.name, e.muscle_group, e.equipment, e.body_part,
             e.target, e.secondary_muscles, e.instructions, e.instruction_steps,
             e.media_id, e.gif_url, e.attribution, e.is_custom, e.training_max
@@ -672,9 +672,9 @@ export async function saveSession(session) {
   for (let i = 0; i < session.exercises.length; i++) {
     const ex = session.exercises[i];
     const r = await db.runAsync(
-      `INSERT INTO session_exercises (session_id, exercise_id, position, rest_seconds, group_id, notes, original_exercise_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [sessionId, ex.exerciseId, i, ex.restSeconds || 90, ex.groupId || null, ex.notes || null, ex.originalExerciseName || null]
+      `INSERT INTO session_exercises (session_id, exercise_id, position, rest_seconds, group_id, notes, trainer_note, original_exercise_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [sessionId, ex.exerciseId, i, ex.restSeconds || 90, ex.groupId || null, ex.notes || null, ex.trainerNote || null, ex.originalExerciseName || null]
     );
     const seId = r.lastInsertRowId;
     for (let j = 0; j < ex.sets.length; j++) {
@@ -1029,7 +1029,10 @@ export async function markSessionSyncAttempted(sessionId) {
 }
 
 // Per-set drill-down payload for one session. STRUCTURAL ONLY: weight,
-// reps, set_type, completed. RPE and notes are deliberately never included.
+// reps, set_type, completed. RPE and PERSONAL notes are deliberately never
+// included. THE one documented exception: trainer_note (the user's
+// "Share with Trainer" field) rides along as shared_note — that is its
+// entire purpose.
 export async function getSessionExerciseDetailPayload(sessionId) {
   const db = await getDb();
   const userId = getCurrentUserId();
@@ -1041,7 +1044,7 @@ export async function getSessionExerciseDetailPayload(sessionId) {
   if (!session) return null;
   const exercises = await db.getAllAsync(
     `SELECT e.name AS exercise_name, e.muscle_group, se.position AS order_index,
-            se.original_exercise_name
+            se.original_exercise_name, se.trainer_note AS shared_note
      FROM session_exercises se
      JOIN exercises e ON e.id = se.exercise_id
      WHERE se.session_id = ?
@@ -1054,6 +1057,7 @@ export async function getSessionExerciseDetailPayload(sessionId) {
       [sessionId, ex.order_index]
     );
     ex.original_exercise_name = ex.original_exercise_name || null;
+    ex.shared_note = ex.shared_note || null; // trainer-shared note ONLY — personal notes never leave the device
     ex.sets = sets.map((s, i) => ({
       set_number: i + 1,
       weight: s.weight || 0,

@@ -319,10 +319,23 @@ export default function ExercisePicker({ visible, onClose, onPick, excludeNames 
     chipText: { color: colors.textDim, fontSize: 12 },
     chipTextActive: { color: '#fff' },
     row: {
+      flexDirection: 'row',
+      alignItems: 'center',
       backgroundColor: colors.card,
       borderRadius: 10,
-      padding: 14,
+      paddingLeft: 14,
+      paddingRight: 4,
+      paddingVertical: 8,
       marginBottom: 8,
+    },
+    // selection target — ends BEFORE the info zone so the two never overlap
+    rowSelect: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingVertical: 6 },
+    // dedicated right-edge info zone, clearly separated from selection
+    rowInfoBtn: {
+      width: 44,
+      height: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     rowName: { color: colors.text, fontSize: 15, fontWeight: '600' },
     rowGroup: { color: colors.textDim, fontSize: 12, marginTop: 2 },
@@ -467,22 +480,27 @@ export default function ExercisePicker({ visible, onClose, onPick, excludeNames 
             data={filtered}
             keyExtractor={(item) => String(item.id)}
             renderItem={({ item }) => (
-              <TouchableOpacity style={styles.row} onPress={() => pick(item)}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+              // SIBLING touchables, not nested: the selection area ends
+              // BEFORE the info zone, so a tap on the row can never land in
+              // the ⓘ hit area (the old nested button + 10px hitSlop
+              // overlapped the row and stole taps meant to select).
+              <View style={styles.row}>
+                <TouchableOpacity style={styles.rowSelect} onPress={() => pick(item)}>
                   <MuscleIcon group={item.muscle_group} size={24} color={colors.primary} />
                   <View style={{ marginLeft: 12, flex: 1 }}>
                     <Text style={styles.rowName}>{item.name}</Text>
                     <Text style={styles.rowGroup}>{item.muscle_group}</Text>
                   </View>
-                </View>
-                <TouchableOpacity
-                  onPress={() => setDetail(item)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  style={{ padding: 6 }}
-                >
-                  <Ionicons name="information-circle-outline" size={22} color={colors.primary} />
                 </TouchableOpacity>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.rowInfoBtn}
+                  onPress={() => setDetail(item)}
+                  hitSlop={{ top: 6, bottom: 6 }}
+                  accessibilityLabel={`About ${item.name}`}
+                >
+                  <Ionicons name="information-circle-outline" size={22} color={colors.textDim} />
+                </TouchableOpacity>
+              </View>
             )}
           />
         </View>

@@ -168,6 +168,7 @@ function reducer(state, action) {
             restSeconds: e.restSeconds,
             groupId: e.groupId,
             notes: e.notes,
+            trainerNote: e.trainerNote,
             alternatives: [],
             originalExerciseName: originalName,
             sets: remaining.length ? remaining : [emptySet()],
@@ -345,6 +346,16 @@ function reducer(state, action) {
         ...state,
         exercises: state.exercises.map((e) =>
           e.key === action.exerciseKey ? { ...e, notes: action.notes } : e
+        ),
+      };
+    // "Share with Trainer" note — deliberately SEPARATE from the private
+    // personal note: this is the only exercise-level text that ever reaches
+    // the trainer (via the session detail payload's shared_note).
+    case 'SET_EXERCISE_TRAINER_NOTE':
+      return {
+        ...state,
+        exercises: state.exercises.map((e) =>
+          e.key === action.exerciseKey ? { ...e, trainerNote: action.note } : e
         ),
       };
     case 'LINK_SUPERSET': {

@@ -1081,3 +1081,68 @@ self-authored plan never reaches any trainer-facing route.
     picker, "Swapped from" badges, undo buttons, date navigator, trainer
     substitutions card.
 
+
+## Exercise Comment Tick-Save + Trainer-Shared Notes
+
+Three UX improvements to the exercise session/selection flow.
+
+### Tick mark for saved exercise comments
+
+The per-exercise comment editor (chatbox icon on an exercise card) is now
+DRAFT-based: typing stays local until the green checkmark-circle beside the
+field is tapped — only then is the note committed for THAT exercise
+("✓ Saved" flashes). Closing the editor without tapping discards the draft.
+State is keyed per exercise, so one card's tick/draft never affects another.
+The chatbox header icon still shows outline (empty) vs filled orange (a
+personal or trainer note exists). Notes persist with the session on Finish,
+as before.
+
+### Two types of exercise notes
+
+- **Personal Notes** — private, device/user-scoped exactly as before;
+  NEVER included in any trainer-facing payload (unchanged rule).
+- **Share with Trainer** — a second field in the same editor for notes the
+  user explicitly writes to their trainer ("knees felt slightly
+  uncomfortable during the last set").
+
+Storage/sync: `session_exercises.trainer_note` (SQLite, migration v31) →
+personal backup `backup_session_exercises.trainer_note` (migration 030) →
+trainer drill-down via the session detail payload's **`shared_note`**
+column (`session_exercise_details`, migration 030). This is THE ONE
+documented exception to the deliberately-notes-free redacted trainer sync:
+RPE and personal notes remain stripped everywhere; only this explicitly-
+labeled field maps through, capped at 2000 chars server-side. The trainer
+sees it as "Note from client" in Client Detail → Recent → expand; users see
+it labeled "Shared with trainer:" in their own Session Detail. Notes ride
+through mid-session swaps like personal notes do.
+
+### ⓘ button no longer steals row taps (Exercise Picker)
+
+The info button used to be nested INSIDE each row's touchable with an
+inflated hitSlop, so taps meant to select an exercise could open the detail
+sheet instead. Rows are now two SIBLING touch targets: the full-width
+selection area (icon + name + muscle group) ends before a dedicated 44px
+right-edge info zone — selecting requires tapping the row; ⓘ only fires
+when tapped directly.
+
+### Manual test notes
+
+1. Open Bench Press in a workout → add "Felt strong today" → tap the green
+   tick → "✓ Saved" flashes; chatbox icon turns filled orange. Kill and
+   reopen the app mid-session → draft state restored from active_workout.
+2. Per-exercise isolation: leave Squats' editor open with unsaved text →
+   Bench Press's saved note and tick state unaffected; closing Squats'
+   editor without ticking discards only Squats' draft.
+3. Personal vs trainer notes: save a Personal note AND a Share-with-Trainer
+   note on Squats. Sync as a client with a trainer → inspect the trainer
+   payload: `shared_note` present ONLY for the trainer note; personal note
+   appears nowhere in `/client/session-exercise-details`.
+4. Trainer view: Client Detail → Recent → expand that session → shared note
+   renders under the exercise ("Note from client"); personal note invisible.
+5. Own history: Session Detail shows the personal note italic + the trainer
+   note labeled "Shared with trainer:". Backup/restore round-trips both.
+6. Exercise Picker: tap anywhere on an exercise row → selects immediately;
+   tap the far-right ⓘ → opens the detail sheet without selecting; rapid
+   taps near the right edge of the title area never trigger ⓘ.
+7. Light/dark theme: notes editor labels/tick states, trainer note rows on
+   both screens, picker info zone.

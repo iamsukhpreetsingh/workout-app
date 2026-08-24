@@ -469,3 +469,24 @@ More scenarios (multi-item slots, repeated dish names across days,
 past-date undo, check-in independence, snapshot isolation, theme checks)
 live in the mobile README under "Diet Dish Alternatives + Date-Scoped
 Swap".
+
+## Trainer-Shared Exercise Notes (migration 030)
+
+DELIBERATE, DOCUMENTED EXCEPTION to the redacted trainer sync. The
+session-detail layer intentionally stores no subjective data ("RPE and
+notes never included") — that rule still holds for RPE and PERSONAL notes.
+Migration 030 adds exactly one client-authored field that does travel:
+
+- `session_exercise_details.shared_note` — the user's explicit
+  "Share with Trainer" text per exercise (client detail payload maps it
+  from `trainer_note` on the device; capped at 2000 chars, everything else
+  still stripped defensively in `upsertSessionDetails`)
+- `backup_session_exercises.trainer_note` — same field under its device
+  name, keeping the full-fidelity personal backup lossless
+
+Trainer surface: `getDetailsForSummary` returns `shared_note`; rendered as
+"Note from client" in the mobile Client Detail drill-down. Never map
+personal notes or RPE into this column.
+
+Manual test notes live in the mobile README under "Exercise Comment
+Tick-Save + Trainer-Shared Notes".

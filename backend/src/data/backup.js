@@ -123,10 +123,11 @@ async function upsertSession(userId, p) {
       await client.query(
         `INSERT INTO backup_session_exercises
            (user_id, local_entity_id, session_local_id, exercise_name, muscle_group,
-            order_index, rest_seconds, group_id, notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+            order_index, rest_seconds, group_id, notes, trainer_note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
         [userId, exLocal, sid, String(ex.exercise_name || ''), ex.muscle_group ?? null,
-         ex.order_index ?? i, ex.rest_seconds ?? null, ex.group_id ?? null, ex.notes ?? null]
+         ex.order_index ?? i, ex.rest_seconds ?? null, ex.group_id ?? null, ex.notes ?? null,
+         ex.trainerNote ?? null]
       );
       for (let j = 0; j < (ex.sets || []).length; j++) {
         const s = ex.sets[j] || {};

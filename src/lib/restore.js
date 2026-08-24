@@ -209,9 +209,10 @@ export async function performRestore(onProgress = () => {}) {
         if (!ex.exercise_name) continue;
         const exerciseId = await exerciseIdByName(ex.exercise_name, ex.muscle_group);
         const se = await db.runAsync(
-          `INSERT INTO session_exercises (session_id, exercise_id, position, rest_seconds, group_id, notes)
-           VALUES (?,?,?,?,?,?)`,
-          [sid, exerciseId, ex.order_index ?? i, ex.rest_seconds ?? 90, ex.group_id ?? null, ex.notes ?? null]);
+          `INSERT INTO session_exercises (session_id, exercise_id, position, rest_seconds, group_id, notes, trainer_note)
+           VALUES (?,?,?,?,?,?,?)`,
+          [sid, exerciseId, ex.order_index ?? i, ex.rest_seconds ?? 90, ex.group_id ?? null,
+           ex.notes ?? null, ex.trainerNote ?? null]);
         for (let j = 0; j < (ex.sets || []).length; j++) {
           const st = ex.sets[j] || {};
           await db.runAsync(
