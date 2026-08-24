@@ -32,6 +32,8 @@ async function upsertSessionDetails(clientId, payloads) {
     const clean = p.exercises.map((ex) => ({
       exercise_name: String(ex.exercise_name || ''),
       muscle_group: ex.muscle_group || null, // NULL for untagged customs — fine
+      // swap provenance: what was originally planned (NULL = as planned)
+      original_exercise_name: ex.original_exercise_name || null,
       order_index: ex.order_index ?? 0,
       sets: (ex.sets || []).map((s) => ({
         set_number: s.set_number ?? null,
@@ -47,9 +49,9 @@ async function upsertSessionDetails(clientId, payloads) {
     for (const ex of clean) {
       if (!ex.exercise_name) continue;
       await query(
-        `INSERT INTO session_exercise_details (session_summary_id, exercise_name, muscle_group, order_index, sets)
-         VALUES ($1, $2, $3, $4, $5::jsonb)`,
-        [p.session_summary_id, ex.exercise_name, ex.muscle_group, ex.order_index, JSON.stringify(ex.sets)]
+        `INSERT INTO session_exercise_details (session_summary_id, exercise_name, muscle_group, original_exercise_name, order_index, sets)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+        [p.session_summary_id, ex.exercise_name, ex.muscle_group, ex.original_exercise_name, ex.order_index, JSON.stringify(ex.sets)]
       );
     }
   }
@@ -58,7 +60,7 @@ async function upsertSessionDetails(clientId, payloads) {
 
 async function getDetailsForSummary(summaryId) {
   const { rows } = await query(
-    `SELECT exercise_name, order_index, sets FROM session_exercise_details
+    `SELECT exercise_name, original_exercise_name, order_index, sets FROM session_exercise_details
      WHERE session_summary_id = $1 ORDER BY order_index`,
     [summaryId]
   );
@@ -127,7 +129,7 @@ async function volumeByMuscleGroup(clientId, from, to) {
 async function listForClient(clientId) {
   try {
     const { rows } = await query(
-      `SELECT s.local_session_id, d.exercise_name, d.muscle_group, d.order_index, d.sets
+      `SELECT s.local_session_id, d.exercise_name, d.muscle_group, d.original_exercise_name, d.order_index, d.sets
        FROM session_exercise_details d
        JOIN session_summaries s ON s.id = d.session_summary_id
        WHERE s.client_id = $1
@@ -143,6 +145,7 @@ async function listForClient(clientId) {
       result[row.local_session_id].push({
         exercise_name: row.exercise_name,
         muscle_group: row.muscle_group,
+        original_exercise_name: row.original_exercise_name || null,
         order_index: row.order_index,
         sets: row.sets,
       });

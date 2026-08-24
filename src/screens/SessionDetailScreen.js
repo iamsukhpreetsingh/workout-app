@@ -192,7 +192,7 @@ export default function SessionDetailScreen({ route, navigation }) {
           )}
           {/* <Text style={styles.exName}>{ex.name}</Text>
           {ex.notes ? <Text style={styles.exNote}>{ex.notes}</Text> : null} */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             <Text style={styles.exName}>{ex.name}</Text>
             <TouchableOpacity
               // onPress={() => setDetailEx(ex)}
@@ -202,6 +202,11 @@ export default function SessionDetailScreen({ route, navigation }) {
               <Ionicons name="information-circle-outline" size={18} color={colors.primary} />
             </TouchableOpacity>
           </View>
+          {ex.original_exercise_name ? (
+            <Text style={styles.swappedLabel}>
+              swapped from {ex.original_exercise_name}
+            </Text>
+          ) : null}
           {ex.notes ? <Text style={styles.exNote}>{ex.notes}</Text> : null}
           <View style={styles.setHeader}>
             <Text style={styles.setHeaderLabel}>TYPE</Text>
@@ -328,6 +333,7 @@ const makeStyles = (colors) =>
     groupLabel: { color: colors.blue, fontWeight: '700', fontSize: 12, marginBottom: 6 },
 
     exName: { color: colors.text, fontSize: 16, fontWeight: '800', marginBottom: 2 },
+    swappedLabel: { color: colors.textDim, fontSize: 11, fontStyle: 'italic', marginTop: -2 },
     exNote: { color: colors.textDim, fontSize: 12, fontStyle: 'italic', marginBottom: 8 },
 
     setHeader: { flexDirection: 'row', marginTop: 8, marginBottom: 2 },

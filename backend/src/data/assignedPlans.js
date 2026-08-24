@@ -1,5 +1,6 @@
 // Data access for assigned plans. Creation requires an ACTIVE association.
 const { query, transaction } = require('../db/pool');
+const { normalizeAlternatives, insertForParent, fetchByParents } = require('./alternatives');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -32,10 +33,11 @@ async function createAssignedPlan({ trainerId, clientId, name, notes, exercises,
     );
     const plan = rows[0];
     for (const ex of exercises || []) {
-      await client.query(
+      const { rows: exRows } = await client.query(
         `INSERT INTO assigned_plan_exercises
          (assigned_plan_id, exercise_name, target_sets, target_reps, target_weight_note, order_index, rest_seconds, notes, group_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id`,
         [
           plan.id,
           ex.exercise_name,
@@ -47,6 +49,12 @@ async function createAssignedPlan({ trainerId, clientId, name, notes, exercises,
           ex.notes || null,
           ex.group_id || null,
         ]
+      );
+      await insertForParent(
+        client,
+        'assigned_plan_exercise_alternatives',
+        exRows[0].id,
+        normalizeAlternatives(ex.exercise_name, ex.alternatives)
       );
     }
     return plan;
@@ -74,7 +82,12 @@ async function getAssignedPlan(id) {
     'SELECT * FROM assigned_plan_exercises WHERE assigned_plan_id = $1 ORDER BY order_index',
     [id]
   );
-  plan.exercises = ex.rows;
+  const altMap = await fetchByParents(
+    'assigned_plan_exercise_alternatives',
+    'assigned_plan_exercise_id',
+    ex.rows.map((r) => r.id)
+  );
+  plan.exercises = ex.rows.map((r) => ({ ...r, alternatives: altMap[r.id] || [] }));
   return plan;
 }
 
@@ -131,10 +144,11 @@ async function updateAssignedPlan(planId, trainerId, clientId, name, notes, exer
     const plan = rows[0];
     await client.query('DELETE FROM assigned_plan_exercises WHERE assigned_plan_id = $1', [planId]);
     for (const ex of exercises || []) {
-      await client.query(
+      const { rows: exRows } = await client.query(
         `INSERT INTO assigned_plan_exercises
          (assigned_plan_id, exercise_name, target_sets, target_reps, target_weight_note, order_index, rest_seconds, notes, group_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id`,
         [
           planId,
           ex.exercise_name,
@@ -146,6 +160,12 @@ async function updateAssignedPlan(planId, trainerId, clientId, name, notes, exer
           ex.notes || null,
           ex.group_id || null,
         ]
+      );
+      await insertForParent(
+        client,
+        'assigned_plan_exercise_alternatives',
+        exRows[0].id,
+        normalizeAlternatives(ex.exercise_name, ex.alternatives)
       );
     }
     return plan;
@@ -168,7 +188,12 @@ async function listActiveForClientId(clientId) {
       'SELECT * FROM assigned_plan_exercises WHERE assigned_plan_id = $1 ORDER BY order_index',
       [plan.id]
     );
-    plan.exercises = ex.rows;
+    const altMap = await fetchByParents(
+      'assigned_plan_exercise_alternatives',
+      'assigned_plan_exercise_id',
+      ex.rows.map((r) => r.id)
+    );
+    plan.exercises = ex.rows.map((r) => ({ ...r, alternatives: altMap[r.id] || [] }));
   }
   return plans;
 }

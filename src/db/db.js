@@ -465,7 +465,14 @@ const MIGRATIONS = [
       last_error TEXT,
       status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SYNCING', 'COMPLETED', 'FAILED'))
     );`);
-    await db.execAsync(`CREATE TABLE IF NOT EXISTS sync_settings (
+  await db.execAsync(`CREATE TABLE IF NOT EXISTS plan_exercise_alternatives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_exercise_id TEXT NOT NULL,
+    alternative_exercise_name TEXT NOT NULL,
+    alternative_exercise_id_local TEXT NULL,
+    order_index INTEGER NOT NULL
+  );`);
+  await db.execAsync(`CREATE TABLE IF NOT EXISTS sync_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       sync_mode TEXT NOT NULL DEFAULT 'auto' CHECK (sync_mode IN ('auto', 'manual', 'local')),
       last_synced_at INTEGER,
@@ -709,7 +716,8 @@ const MIGRATIONS = [
     await addColumnSafe(db, 'exercises', 'instruction_steps', 'TEXT');
     await addColumnSafe(db, 'exercises', 'media_id', 'TEXT');
     await addColumnSafe(db, 'exercises', 'gif_url', 'TEXT');
-    await addColumnSafe(db, 'exercises', 'attribution', 'TEXT');
+  await addColumnSafe(db, 'exercises', 'attribution', 'TEXT');
+  await addColumnSafe(db, 'session_exercises', 'original_exercise_name', 'TEXT NULL');
 
     const CAT_TO_GROUP = {
       chest: 'Chest', back: 'Back', shoulders: 'Shoulders',
@@ -771,6 +779,20 @@ const MIGRATIONS = [
     await addColumnSafe(db, 'exercises', 'training_max', 'REAL');
     await addColumnSafe(db, 'sets', 'suggested_weight', 'REAL');
     await addColumnSafe(db, 'sets', 'suggested_reps', 'INTEGER');
+  },
+  // v29: equipment-aware exercise substitution — configured alternatives per
+  // plan exercise entry, and the swap marker on session exercises
+  // (original_exercise_name is populated only when a mid-session swap
+  // happened; NULL means the exercise was performed as planned).
+  async (db) => {
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS plan_exercise_alternatives (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      plan_exercise_id TEXT NOT NULL,
+      alternative_exercise_name TEXT NOT NULL,
+      alternative_exercise_id_local TEXT NULL,
+      order_index INTEGER NOT NULL
+    );`);
+    await addColumnSafe(db, 'session_exercises', 'original_exercise_name', 'TEXT NULL');
   },
 ];
 

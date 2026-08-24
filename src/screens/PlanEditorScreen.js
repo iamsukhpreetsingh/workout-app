@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { createPlan, getPlan, updatePlan } from '../db/queries';
 import { getSettings } from '../db/settings';
 import ExercisePicker from '../components/ExercisePicker';
+import AlternativesEditor from '../components/AlternativesEditor';
 import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import RestEditorModal from '../components/RestEditorModal';
 import ClientTagSelector from '../components/ClientTagSelector';
@@ -60,6 +61,7 @@ export default function PlanEditorScreen({ navigation, route }) {
               targetSets: e.target_sets,
               restSeconds: e.rest_seconds,
               groupId: e.group_id,
+              alternatives: (e.alternatives || []).map((a) => a.name ?? a),
             }))
           );
         }
@@ -115,6 +117,8 @@ export default function PlanEditorScreen({ navigation, route }) {
             targetSets: e.targetSets,
             restSeconds: e.restSeconds,
             groupId: e.groupId,
+            name: e.name,
+            alternatives: e.alternatives || [],
           })),
           tags
         );
@@ -127,6 +131,8 @@ export default function PlanEditorScreen({ navigation, route }) {
             targetSets: e.targetSets,
             restSeconds: e.restSeconds,
             groupId: e.groupId,
+            name: e.name,
+            alternatives: e.alternatives || [],
           })),
           tags
         );
@@ -294,6 +300,18 @@ export default function PlanEditorScreen({ navigation, route }) {
                   <Ionicons name="close" size={16} color={colors.textDim} />
                 </TouchableOpacity>
               </View>
+            )}
+            {!selectMode && (
+              <AlternativesEditor
+                primaryName={ex.name}
+                alternatives={ex.alternatives || []}
+                excludeNames={exercises.filter((_, j) => j !== idx).map((e) => e.name)}
+                onChange={(alternatives) =>
+                  setExercises((prev) =>
+                    prev.map((e, i) => (i === idx ? { ...e, alternatives } : e))
+                  )
+                }
+              />
             )}
           </View>
         );

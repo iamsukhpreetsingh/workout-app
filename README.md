@@ -868,3 +868,82 @@ text column. It is now a column of two blocks:
   different "bugs" (404s on new routes, this 409). If Metro shows an error
   you believe is fixed, restart with `npx expo start -c` to clear its cache.
 
+
+## Exercise Alternatives + Mid-Session Swap
+
+Equipment-aware exercise substitution. A routine/template/assigned-plan
+exercise entry can carry 0-3 configured alternatives ("if bench is taken,
+do incline dumbbell press instead"), and during a live workout the user can
+swap to one of them — or to any exercise ad hoc — for THIS SESSION ONLY.
+
+### Storage (three mirrored tables, deliberately NOT unified)
+
+Exercise entries live in three separate parent tables with no shared key,
+so each parent gets its own alternatives table mirroring the existing
+duplicate-structure-across-databases pattern:
+
+1. Local SQLite `plan_exercise_alternatives` (self-made routines — plain
+   users AND a trainer's personal workouts). Keyed by
+   `plan_exercise_id` (TEXT of the local plan_exercises row id), carries
+   `alternative_exercise_name` + optional `alternative_exercise_id_local`.
+2. Postgres `workout_template_exercise_alternatives` (trainer template
+   library) — migration `backend/migrations/028_exercise_alternatives.sql`.
+3. Postgres `assigned_plan_exercise_alternatives` (a specific client's
+   assigned plan) — same migration.
+
+Rules: max 3 per entry and no duplicates (of the primary or each other),
+enforced in the UI (`AlternativesEditor` disables "+ Add Alternative" at 3;
+the picker excludes used names) and re-validated server-side
+(`backend/src/data/alternatives.js` rejects a 4th/duplicate with an
+explicit 400 error — never silently truncated).
+
+### Snapshot rule
+
+Assigning a template copies its CURRENT alternatives into
+`assigned_plan_exercise_alternatives` rows. Editing the template afterward
+does NOT change any already-assigned client's copy — identical to the
+established snapshot-only behavior for sets/reps/rest.
+
+### Swap mechanism (live session)
+
+- Every exercise card on the logging screen has a "Swap" action.
+- Configured alternatives list first as one-tap options; "Choose a
+  different exercise" always opens the standard picker for ad hoc swaps.
+- No sets logged yet → the session_exercises entry is renamed going
+  forward. Sets already logged → SPLIT: logged sets stay attributed to the
+  original exercise; a new entry takes over the remaining sets at the same
+  position, keeping group_id/rest/notes ("this slot", not "this exercise").
+- Session-local ONLY: never mutates the source routine, template, or
+  assigned plan. Next start shows the originally planned exercise.
+- `session_exercises.original_exercise_name` records what was planned
+  (NULL = as planned); `exercise_name` always reflects what was performed.
+- Progression suggestions after a swap come from the swapped-to exercise's
+  OWN history; first-time exercises show nothing (existing null rule).
+
+History (client Session Detail) and the trainer's Client Detail drill-down
+both show "(swapped from X)" via the per-set detail sync payload.
+
+### Manual test notes
+1. Builders (all four: Routine, Template, Assign→Build New, Assign→Edit):
+   add/remove alternatives; cap at 3 disables "+ Add Alternative"
+   ("Up to 3 alternatives per exercise"); picking the primary exercise or
+   an existing alternative is impossible (excluded from picker results).
+2. Editing an existing routine with 2 alternatives shows both; remove one,
+   add another, save, reopen → updated set persisted.
+3. Worked example: build "Push Day" (Bench Press + 2 alternatives), start,
+   swap Bench → Incline Dumbbell Press BEFORE logging, complete session →
+   session logs Incline DB Press; Push Day still says Bench Press next time;
+   superset/order/rest carried over; History shows "(swapped from Bench
+   Press)".
+4. Split case: log 2 sets of Bench Press, THEN swap → those 2 sets remain
+   Bench Press; new sets go under the new exercise as a distinct entry.
+5. Ad hoc swap via "Choose a different exercise" behaves identically; a
+   brand-new exercise shows NO progression suggestion (null, not borrowed).
+6. Trainer sync: client with active trainer performs a swapped session →
+   after sync, trainer Client Detail → Recent → expand shows "(swapped from
+   X)".
+7. Template snapshot: assign "Push Day" from a template, then edit the
+   TEMPLATE's alternatives → already-assigned client's copy unchanged.
+8. Verify light and dark theme on the alternatives rows, Swap sheet, and
+   swapped labels.
+

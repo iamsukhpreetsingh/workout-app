@@ -85,6 +85,12 @@ function reducer(state, action) {
             restSeconds: ex.rest_seconds ?? ex.restSeconds ?? defaultRest ?? 90,
             groupId: ex.group_id ?? ex.groupId ?? null,
             notes: '',
+            // configured alternatives for the live-swap picker (0-3)
+            alternatives: (ex.alternatives || []).map((a) =>
+              typeof a === 'string' ? a : a.name
+            ),
+            // populated only when a mid-session swap occurred
+            originalExerciseName: null,
             sets,
           };
         }),
@@ -122,6 +128,52 @@ function reducer(state, action) {
             sets,
           },
         ],
+      };
+    }
+    // Mid-session swap. Session-local ONLY — the source routine/template/
+    // assigned plan is never touched.
+    //  - No logged sets yet: rename this entry in place (position, superset
+    //    group_id, rest seconds, notes and target sets all carry over).
+    //  - Sets already logged: SPLIT — logged sets stay attributed to the
+    //    original exercise; a new session_exercises entry for the swap
+    //    target takes over the remaining (unlogged) sets, inserted at the
+    //    same position so order/superset structure is preserved.
+    case 'SWAP_EXERCISE': {
+      const { exerciseKey, exercise } = action;
+      const hasValues = (s) =>
+        s.completed || parseFloat(s.weight) > 0 || parseInt(s.reps, 10) > 0;
+      return {
+        ...state,
+        exercises: state.exercises.flatMap((e) => {
+          if (e.key !== exerciseKey) return [e];
+          const originalName = e.originalExerciseName || e.name;
+          const logged = e.sets.filter(hasValues);
+          if (logged.length === 0) {
+            return [
+              {
+                ...e,
+                name: exercise.name,
+                exerciseId: exercise.id,
+                muscleGroup: exercise.muscle_group ?? exercise.muscleGroup ?? null,
+                originalExerciseName: originalName,
+              },
+            ];
+          }
+          const remaining = e.sets.filter((s) => !hasValues(s));
+          const swappedEntry = {
+            key: nextKey(),
+            exerciseId: exercise.id,
+            name: exercise.name,
+            muscleGroup: exercise.muscle_group ?? exercise.muscleGroup ?? null,
+            restSeconds: e.restSeconds,
+            groupId: e.groupId,
+            notes: e.notes,
+            alternatives: [],
+            originalExerciseName: originalName,
+            sets: remaining.length ? remaining : [emptySet()],
+          };
+          return [{ ...e, sets: logged }, swappedEntry];
+        }),
       };
     }
     case 'REMOVE_EXERCISE': {

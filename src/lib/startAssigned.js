@@ -16,6 +16,20 @@ function guessMuscleGroup(name) {
   return 'Core';
 }
 
+// Resolve an exercise NAME to the local library row, creating a custom
+// exercise when missing. Shared by the assigned-plan starter and the
+// live-session swap flow.
+export async function resolveExerciseByName(name) {
+  const localExercises = await listExercises();
+  const match = localExercises.find(
+    (e) => e.name.toLowerCase() === String(name).trim().toLowerCase()
+  );
+  if (match) return match;
+  const guessGroup = guessMuscleGroup(name);
+  const newId = await createExercise(name, guessGroup);
+  return { id: newId, name, muscle_group: guessGroup };
+}
+
 export async function startAssignedPlan(plan, { dispatch, navigation }) {
   const localExercises = await listExercises();
   const byName = new Map(localExercises.map((e) => [e.name.toLowerCase(), e]));
@@ -36,6 +50,10 @@ export async function startAssignedPlan(plan, { dispatch, navigation }) {
       target_sets: ex.target_sets,
       rest_seconds: ex.rest_seconds || settings.default_rest_seconds,
       group_id: ex.group_id || null,
+      // configured alternatives for the live-swap picker
+      alternatives: (ex.alternatives || []).map((a) =>
+        typeof a === 'string' ? a : a.alternative_exercise_name ?? a.name
+      ),
       // positional prior-session sets for per-set prefill
       prevSets: await getLastSessionSetsByPosition(local.id),
     });

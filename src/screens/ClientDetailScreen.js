@@ -760,6 +760,11 @@ export default function ClientDetailScreen({ route, navigation }) {
                       details.map((ex) => (
                         <View key={`${ex.exercise_name}-${ex.order_index}`} style={styles.detailEx}>
                           <Text style={styles.detailExName}>{ex.exercise_name}</Text>
+                          {ex.original_exercise_name ? (
+                            <Text style={styles.detailSwapped}>
+                              swapped from {ex.original_exercise_name}
+                            </Text>
+                          ) : null}
                           {ex.sets.map((set, i) => (
                             <View key={i} style={styles.detailSetRow}>
                               <Text style={[styles.detailCell, NUMS]}>{set.set_number}</Text>
@@ -1279,6 +1284,7 @@ const makeStyles = (colors) =>
     detailWrap: { marginTop: 10, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 10 },
     detailEx: { marginBottom: 10 },
     detailExName: { color: colors.text, fontWeight: '700', fontSize: 13, marginBottom: 4 },
+    detailSwapped: { color: colors.textDim, fontSize: 11, fontStyle: 'italic', marginTop: -2, marginBottom: 4 },
     detailSetRow: { flexDirection: 'row' },
     detailCell: { color: colors.text, flex: 1, textAlign: 'center', fontSize: 12 },
     warmupText: { color: colors.textDim },

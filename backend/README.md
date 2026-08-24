@@ -344,3 +344,36 @@ any query (no injection); suspended users are blocked at app login;
 impersonation tokens carry `impersonation: 'read_only'` and ALL mutating
 verbs made with them are rejected by the app's auth middleware;
 `GET /config/feature-flags` is public for the mobile app.
+
+## Exercise Alternatives (migration 028)
+
+Three mirrored tables, deliberately NOT unified into one polymorphic table
+(exercise entries live in three separate parent tables — local SQLite
+plan_exercises, workout_template_exercises, assigned_plan_exercises — and
+the codebase duplicates matching structures across local SQLite/Postgres by
+pattern):
+
+- `workout_template_exercise_alternatives` (template library)
+- `assigned_plan_exercise_alternatives` (specific client assignments)
+
+Validation lives in `src/data/alternatives.js`: max 3 alternatives per
+exercise entry and no duplicates (primary or siblings, case-insensitive).
+A 4th alternative or duplicate is REJECTED with 400 ("X is already added
+as an alternative") on any create/update endpoint accepting an
+`alternatives` array — never silently truncated.
+
+**Snapshot rule**: `assignFromTemplate` copies the template's CURRENT
+alternatives into assigned_plan rows. Editing the template afterward does
+not retroactively change existing assignments — same snapshot-only
+behavior as sets/reps/rest. Template delete stays safe: assignment
+snapshots are independent rows.
+
+**Swap mechanism** is session-local only on the mobile side; the backend's
+only involvement beyond the two tables above is
+`session_exercise_details.original_exercise_name` (migration 028) — set
+from the per-set detail sync payload when a client swapped an exercise
+mid-session, NULL when performed as planned, surfaced to trainers in the
+drill-down endpoint.
+
+Manual test notes live in the mobile README under "Exercise Alternatives +
+Mid-Session Swap".

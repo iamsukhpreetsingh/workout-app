@@ -276,8 +276,15 @@ import ExerciseDetailSheet from './ExerciseDetailSheet';
 // and allows creating custom exercises. onPick(exercise) is called on selection.
 // Every row also carries an ⓘ button opening the ExerciseDetailSheet
 // (multilingual instructions, equipment, steps) as a SIBLING of this Modal.
-export default function ExercisePicker({ visible, onClose, onPick }) {
+// `excludeNames`: names already in use (e.g. the primary exercise or an
+// existing alternative) are filtered out of the results — duplicate
+// prevention at the picker level for the alternatives feature.
+export default function ExercisePicker({ visible, onClose, onPick, excludeNames = [] }) {
   const colors = useColors();
+  const excludeSet = React.useMemo(
+    () => new Set(excludeNames.map((n) => String(n || '').trim().toLowerCase())),
+    [excludeNames]
+  );
   const [exercises, setExercises] = useState([]);
   const [query, setQuery] = useState('');
   const [group, setGroup] = useState('All');
@@ -345,6 +352,7 @@ export default function ExercisePicker({ visible, onClose, onPick }) {
   }, [visible]);
 
   const filtered = exercises.filter((e) => {
+    if (excludeSet.has(String(e.name).trim().toLowerCase())) return false;
     const matchesGroup = group === 'All' || e.muscle_group === group;
     const matchesQuery = e.name.toLowerCase().includes(query.toLowerCase());
     return matchesGroup && matchesQuery;

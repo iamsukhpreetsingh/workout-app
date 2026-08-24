@@ -2,6 +2,7 @@
 // are SNAPSHOT copies — templates and assigned_plans never stay in sync.
 const { query, transaction } = require('../db/pool');
 const { assertActiveAssociation } = require('./assignedPlans');
+const { normalizeAlternatives, insertForParent, fetchByParents } = require('./alternatives');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -26,9 +27,18 @@ function normalizeExercises(exercises) {
   })).filter((ex) => ex.exercise_name);
 }
 
+// Server-side validation happens here: a 4th alternative or a duplicate
+// name is REJECTED (400), not truncated.
+function normalizeExercisesWithAlternatives(exercises) {
+  return normalizeExercises(exercises).map((ex, i) => ({
+    ...ex,
+    alternatives: normalizeAlternatives(ex.exercise_name, exercises[i]?.alternatives),
+  }));
+}
+
 async function createTemplate(trainerId, { name, notes, tags, exercises }) {
   if (!name || !String(name).trim()) throw new HttpError(400, 'name is required');
-  const items = normalizeExercises(exercises);
+  const items = normalizeExercisesWithAlternatives(exercises);
   return transaction(async (client) => {
     const { rows } = await client.query(
       `INSERT INTO workout_templates (trainer_id, name, notes, tags)
@@ -43,14 +53,16 @@ async function createTemplate(trainerId, { name, notes, tags, exercises }) {
 
 async function insertExercises(client, templateId, items) {
   for (const ex of items) {
-    await client.query(
+    const { rows } = await client.query(
       `INSERT INTO workout_template_exercises
          (workout_template_id, exercise_name, target_sets, target_reps, target_weight_note,
           order_index, rest_seconds, notes, group_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       RETURNING id`,
       [templateId, ex.exercise_name, ex.target_sets, ex.target_reps, ex.target_weight_note,
        ex.order_index, ex.rest_seconds, ex.notes, ex.group_id]
     );
+    await insertForParent(client, 'workout_template_exercise_alternatives', rows[0].id, ex.alternatives || []);
   }
 }
 
@@ -77,7 +89,12 @@ async function getTemplate(trainerId, id) {
     'SELECT * FROM workout_template_exercises WHERE workout_template_id = $1 ORDER BY order_index',
     [id]
   );
-  rows[0].exercises = ex.rows;
+  const altMap = await fetchByParents(
+    'workout_template_exercise_alternatives',
+    'workout_template_exercise_id',
+    ex.rows.map((r) => r.id)
+  );
+  rows[0].exercises = ex.rows.map((r) => ({ ...r, alternatives: altMap[r.id] || [] }));
   return rows[0];
 }
 
@@ -85,7 +102,7 @@ async function updateTemplate(trainerId, id, { name, notes, tags, exercises }) {
   const existing = await getTemplate(trainerId, id);
   if (!existing) throw new HttpError(404, 'Template not found');
   if (!name || !String(name).trim()) throw new HttpError(400, 'name is required');
-  const items = normalizeExercises(exercises);
+  const items = normalizeExercisesWithAlternatives(exercises);
   return transaction(async (client) => {
     await client.query(
       `UPDATE workout_templates SET name=$2, notes=$3, tags=$4, updated_at=now()
@@ -123,13 +140,23 @@ async function assignFromTemplate(trainerId, clientId, templateId) {
     );
     const plan = rows[0];
     for (const ex of tpl.exercises) {
-      await client.query(
+      const { rows: exRows } = await client.query(
         `INSERT INTO assigned_plan_exercises
            (assigned_plan_id, exercise_name, target_sets, target_reps, target_weight_note,
             order_index, rest_seconds, notes, group_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING id`,
         [plan.id, ex.exercise_name, ex.target_sets, ex.target_reps, ex.target_weight_note,
          ex.order_index, ex.rest_seconds, ex.notes, ex.group_id]
+      );
+      // SNAPSHOT the template's CURRENT alternatives into the assignment.
+      // Later edits to the template never retroactively change this copy —
+      // same snapshot-only rule as sets/reps/rest.
+      await insertForParent(
+        client,
+        'assigned_plan_exercise_alternatives',
+        exRows[0].id,
+        (ex.alternatives || []).map((name, i) => ({ alternative_exercise_name: name, order_index: i }))
       );
     }
     return plan;

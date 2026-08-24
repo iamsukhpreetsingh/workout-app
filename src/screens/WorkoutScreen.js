@@ -8,6 +8,8 @@ import {
   Alert,
   ScrollView,
   StyleSheet,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as KeepAwake from 'expo-keep-awake';
@@ -15,6 +17,7 @@ import { useWorkout, groupLabels, elapsedSeconds } from '../store/WorkoutContext
 import { saveSession, createPlan } from '../db/queries';
 import { getSettings, updateSettings } from '../db/settings';
 import ExercisePicker from '../components/ExercisePicker';
+import { resolveExerciseByName } from '../lib/startAssigned';
 import RestTimerBar from '../components/RestTimerBar';
 import RestEditorModal from '../components/RestEditorModal';
 import PlateSheet from '../components/PlateSheet';
@@ -46,6 +49,8 @@ export default function WorkoutScreen({ navigation }) {
   const [selected, setSelected] = useState([]);
   const [prToast, setPrToast] = useState(null);
   const [notesKey, setNotesKey] = useState(null); // exercise with open notes editor
+  const [swapKey, setSwapKey] = useState(null); // exercise with open swap picker
+  const [adHocPickerVisible, setAdHocPickerVisible] = useState(false);
   const sessionBest = useRef({});
   const restoredRef = useRef(false);
   const [suggestions, setSuggestions] = useState({}); // exerciseKey → {suggestion, missingTrainingMax}
@@ -150,6 +155,7 @@ export default function WorkoutScreen({ navigation }) {
           restSeconds: e.restSeconds,
           groupId: e.groupId,
           notes: e.notes || null,
+          originalExerciseName: e.originalExerciseName || null,
           sets: e.sets
             .filter((s) => parseFloat(s.weight) > 0 || parseInt(s.reps, 10) > 0)
             .map((s) => ({
@@ -278,6 +284,27 @@ export default function WorkoutScreen({ navigation }) {
     }
   };
 
+  // Mid-session swap: replaces the card's identity for THIS SESSION ONLY.
+  // Progression suggestions reset so the swapped-to exercise gets its OWN
+  // history-based suggestion (null for a first-time exercise — never
+  // borrowed from the original).
+  const doSwap = async (item, targetName) => {
+    setSwapKey(null);
+    setAdHocPickerVisible(false);
+    try {
+      const exercise = await resolveExerciseByName(targetName);
+      delete suggestionsRef.current[item.key];
+      setSuggestions({ ...suggestionsRef.current });
+      dispatch({
+        type: 'SWAP_EXERCISE',
+        exerciseKey: item.key,
+        exercise: { id: exercise.id, name: exercise.name, muscle_group: exercise.muscle_group },
+      });
+    } catch (e) {
+      Alert.alert('Could not swap', String(e.message || e));
+    }
+  };
+
   const toggleSelect = (key) => {
     setSelected((prev) =>
       prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
@@ -296,6 +323,7 @@ export default function WorkoutScreen({ navigation }) {
 
   const restEditEx = workout.exercises.find((e) => e.key === restEditKey);
   const notesEx = workout.exercises.find((e) => e.key === notesKey);
+  const swapEx = workout.exercises.find((e) => e.key === swapKey);
   const plateSet = (() => {
     for (const e of workout.exercises) {
       const s = e.sets.find((x) => x.key === plateForKey);
@@ -413,6 +441,11 @@ export default function WorkoutScreen({ navigation }) {
                 )}
                 {!selectMode && (
                   <View style={styles.headerActions}>
+                    {/* Equipment-aware substitution: swap for the rest of
+                        this session only (never touches the source plan) */}
+                    <TouchableOpacity onPress={() => setSwapKey(item.key)}>
+                      <Text style={styles.headerAction}>Swap</Text>
+                    </TouchableOpacity>
                     {/* Per-exercise note: outline when empty, filled when set */}
                     <TouchableOpacity
                       onPress={() => setNotesKey(notesKey === item.key ? null : item.key)}
@@ -740,6 +773,52 @@ export default function WorkoutScreen({ navigation }) {
         }
       />
 
+      {/* Swap picker: configured alternatives first (one tap), then the
+          standard exercise picker for an ad hoc substitute — handles both
+          "no alternatives configured" and "none of them are free either". */}
+      <Modal
+        visible={!!swapEx}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSwapKey(null)}
+      >
+        <Pressable style={styles.swapOverlay} onPress={() => setSwapKey(null)}>
+          <View style={styles.swapSheet}>
+            <Text style={styles.swapTitle}>Swap {swapEx?.name}</Text>
+            <View style={styles.swapDivider} />
+            {(swapEx?.alternatives || []).map((name) => (
+              <TouchableOpacity
+                key={name}
+                style={styles.swapOption}
+                onPress={() => doSwap(swapEx, name)}
+              >
+                <Ionicons name="swap-horizontal" size={16} color={colors.primary} />
+                <Text style={styles.swapOptionText}>{name}</Text>
+              </TouchableOpacity>
+            ))}
+            <View style={styles.swapDivider} />
+            <TouchableOpacity
+              style={styles.swapOption}
+              onPress={() => {
+                setAdHocPickerVisible(true);
+              }}
+            >
+              <Ionicons name="search" size={16} color={colors.blue} />
+              <Text style={[styles.swapOptionText, styles.swapAdHocText]}>
+                Choose a different exercise →
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <ExercisePicker
+        visible={adHocPickerVisible}
+        onClose={() => setAdHocPickerVisible(false)}
+        onPick={(exercise) => doSwap(swapEx, exercise.name)}
+        excludeNames={[swapEx?.name].filter(Boolean)}
+      />
+
       <RestEditorModal
         visible={!!restEditEx}
         exerciseName={restEditEx?.name}
@@ -906,4 +985,23 @@ const makeStyles = (colors) =>
     deltaTextSmall: { fontSize: 9, fontWeight: '600' },
     deltaUp: { color: colors.green },
     deltaDown: { color: colors.orange },
+    swapOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 32 },
+    swapSheet: {
+      backgroundColor: colors.card,
+      borderRadius: 14,
+      paddingVertical: 8,
+      paddingHorizontal: 6,
+    },
+    swapTitle: { color: colors.text, fontWeight: '800', fontSize: 16, padding: 12 },
+    swapDivider: { height: 1, backgroundColor: colors.border },
+    swapOption: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingVertical: 13,
+      paddingHorizontal: 14,
+      borderRadius: 10,
+    },
+    swapOptionText: { color: colors.text, fontSize: 15, fontWeight: '600' },
+    swapAdHocText: { color: colors.blue },
   });
