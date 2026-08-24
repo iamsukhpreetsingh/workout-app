@@ -206,6 +206,16 @@ export async function listPlans() {
     plan.exerciseCount = (
       await db.getAllAsync('SELECT COUNT(*) AS c FROM plan_exercises WHERE plan_id = ?', [plan.id])
     )[0].c;
+    // total configured alternatives across all exercises — drives the
+    // "↔ N swappable" badge on the routine list cards
+    plan.alternativeCount = (
+      await db.getAllAsync(
+        `SELECT COUNT(*) AS c FROM plan_exercise_alternatives a
+         JOIN plan_exercises pe ON CAST(pe.id AS TEXT) = a.plan_exercise_id
+         WHERE pe.plan_id = ?`,
+        [plan.id]
+      )
+    )[0].c;
     plan.tags = plan.tags ? JSON.parse(plan.tags) : [];
   }
   return plans;

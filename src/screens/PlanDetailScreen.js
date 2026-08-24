@@ -125,6 +125,18 @@ export default function PlanDetailScreen({ route, navigation }) {
                   <Text style={styles.exSetsUnit}>sets</Text>
                   <Text style={styles.exGroup}>{ex.muscle_group}</Text>
                 </View>
+                {(ex.alternatives || []).length > 0 && (
+                  <View style={styles.altWrap}>
+                    {ex.alternatives.map((alt, j) => (
+                      <View key={j} style={styles.altChip}>
+                        <Ionicons name="swap-horizontal" size={10} color={colors.blue} />
+                        <Text style={styles.altText}>
+                          {typeof alt === 'string' ? alt : alt.name}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
               </View>
               <View style={styles.restChip}>
 
@@ -200,6 +212,17 @@ const makeStyles = (colors) =>
     idxText: { color: colors.primary, fontWeight: '800', fontSize: 13 },
     exName: { color: colors.text, fontWeight: '700', fontSize: 15 },
     exMetaRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4, marginTop: 2 },
+    altWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 },
+    altChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      backgroundColor: colors.cardLight,
+      borderRadius: 7,
+      paddingHorizontal: 7,
+      paddingVertical: 3,
+    },
+    altText: { color: colors.blue, fontSize: 11, fontWeight: '600' },
     exSets: { color: colors.text, fontSize: 13, fontWeight: '800' },
     exSetsUnit: { color: colors.textDim, fontSize: 11, marginRight: 8 },
     exGroup: { color: colors.textDim, fontSize: 12 },

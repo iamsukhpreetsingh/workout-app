@@ -823,6 +823,14 @@ function MyRoutinesList({ styles, colors, navigation, pinned, onTogglePin }) {
               {item.exerciseCount} exercises
               {item.used_count > 0 ? ` · used ${item.used_count}×` : ' · never used'}
             </Text>
+            {item.alternativeCount > 0 && (
+              <View style={styles.swapBadge}>
+                <Ionicons name="swap-horizontal" size={11} color={colors.blue} />
+                <Text style={styles.swapBadgeText}>
+                  {item.alternativeCount} swap option{item.alternativeCount === 1 ? '' : 's'}
+                </Text>
+              </View>
+            )}
             {planTags.length > 0 && (
               <View style={styles.tagRow}>
                 {planTags.slice(0, 3).map((tag) => (
@@ -1050,6 +1058,18 @@ const makeStyles = (colors) =>
     pinBtn: { padding: 6 },
     name: { color: colors.text, fontSize: 15, fontWeight: '700' },
     meta: { color: colors.textDim, fontSize: 12, marginTop: 2 },
+    swapBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      alignSelf: 'flex-start',
+      backgroundColor: colors.cardLight,
+      borderRadius: 8,
+      paddingHorizontal: 7,
+      paddingVertical: 3,
+      marginTop: 5,
+    },
+    swapBadgeText: { color: colors.blue, fontSize: 11, fontWeight: '600' },
     tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 },
     tagChip: {
       backgroundColor: colors.cardLight,
