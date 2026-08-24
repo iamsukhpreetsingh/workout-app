@@ -327,6 +327,12 @@ async function buildDietPlanPayload(localId) {
     for (const m of d.meals) {
       m.items = await db.getAllAsync(
         'SELECT * FROM local_diet_plan_meal_items WHERE diet_meal_local_id = ? ORDER BY order_index', [m.local_id]);
+      // configured dish alternatives travel INSIDE each item's payload
+      for (const it of m.items) {
+        it.alternatives = await db.getAllAsync(
+          `SELECT * FROM local_diet_plan_meal_item_alternatives
+           WHERE local_diet_plan_meal_item_id = ? ORDER BY order_index`, [it.local_id]);
+      }
     }
   }
   return {
@@ -347,6 +353,11 @@ async function buildDietPlanPayload(localId) {
           prep_time_minutes: it.prep_time_minutes, cook_time_minutes: it.cook_time_minutes,
           difficulty: it.difficulty, alternate_servings: parseJsonArr(it.alternate_servings),
           tags: parseJsonArr(it.tags),
+          alternatives: (it.alternatives || []).map((a) => ({
+            name: a.alternative_name, calories: a.alternative_calories,
+            protein_g: a.alternative_protein_g, carbs_g: a.alternative_carbs_g,
+            fat_g: a.alternative_fat_g, recipe_local_id: a.alternative_recipe_local_id || null,
+          })),
         })),
       })),
     })),
@@ -536,6 +547,54 @@ const HANDLERS = {
       const db = await getDb();
       const p = await db.getFirstAsync('SELECT synced FROM local_diet_plans WHERE local_id = ?', [planLocalId]);
       return p && p.synced === 0 ? [planLocalId] : [];
+    },
+  },
+  // diet_swap: "on DATE I ate X instead of Y" — date-scoped, unlike the
+  // session-scoped workout swap. Entity id is "itemRef|date". Every swap is
+  // privately backed up (self-authored AND trainer-assigned plans); the
+  // server decides trainer visibility via plan_server_id.
+  diet_swap: {
+    path: '/user/backup/diet-swaps',
+    async upsert(entityId) {
+      const [itemRef, date] = String(entityId).split('|');
+      const db = await getDb();
+      const s = await db.getFirstAsync(
+        'SELECT * FROM local_diet_item_swaps WHERE diet_plan_meal_item_ref = ? AND swap_date = ?',
+        [itemRef, date]
+      );
+      if (!s) return;
+      const rows = await api(this.path, {
+        method: 'POST',
+        body: [{
+          plan_ref: s.plan_ref,
+          plan_server_id: s.plan_ref && !/^(dp_|mig_)/.test(String(s.plan_ref)) ? s.plan_ref : null,
+          diet_plan_meal_item_ref: s.diet_plan_meal_item_ref,
+          swap_date: s.swap_date,
+          original_name: s.original_name,
+          swapped_name: s.swapped_name,
+          swapped_calories: s.swapped_calories,
+          swapped_protein_g: s.swapped_protein_g,
+          swapped_carbs_g: s.swapped_carbs_g,
+          swapped_fat_g: s.swapped_fat_g,
+        }],
+      });
+      await db.runAsync(
+        'UPDATE local_diet_item_swaps SET synced = 1, server_id = ? WHERE id = ?',
+        [rows?.[0]?.id || null, s.id]
+      );
+    },
+    async remove(entityId) {
+      const [itemRef, date] = String(entityId).split('|');
+      await api(`${this.path}/${encodeURIComponent(itemRef)}/${encodeURIComponent(date)}`, { method: 'DELETE' });
+    },
+    async deps(entityId) {
+      const [itemRef] = String(entityId).split('|');
+      const db = await getDb();
+      const s = await db.getFirstAsync(
+        'SELECT plan_ref FROM local_diet_item_swaps WHERE diet_plan_meal_item_ref = ?', [itemRef]);
+      if (!s || !/^(dp_|mig_)/.test(String(s.plan_ref))) return []; // assigned plan — no local parent
+      const p = await db.getFirstAsync('SELECT synced FROM local_diet_plans WHERE local_id = ?', [s.plan_ref]);
+      return p && p.synced === 0 ? [s.plan_ref] : [];
     },
   },
   supplement_plan: {

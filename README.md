@@ -947,3 +947,137 @@ both show "(swapped from X)" via the per-set detail sync payload.
 8. Verify light and dark theme on the alternatives rows, Swap sheet, and
    swapped labels.
 
+
+## Diet Dish Alternatives + Date-Scoped Swap
+
+Dish substitution for diet plans, mirroring the workout feature above —
+with ONE structural difference that matters: **a diet swap is DATE-scoped,
+not session-scoped.** A workout happens once and is logged once. A diet
+plan is followed day after day ("did I follow my plan today?"), so a swap
+must mean "on August 24th I had Greek Yogurt Parfait instead of the planned
+Oatmeal." The plan's own definition never changes; every OTHER day is
+completely unaffected. If you read the workout swap section and assume this
+works identically, re-read this paragraph.
+
+### Storage (two mirrored tables for alternatives + a swaps table)
+
+Diet meal items have only TWO structural homes (there is no reusable diet
+template library — the trainer's Meal Catalog is the reusable part, not
+whole plans), so alternatives mirror across:
+
+1. Local SQLite `local_diet_plan_meal_item_alternatives` (self-authored
+   plans — plain users AND a trainer's own personal diet). Keyed by
+   `local_diet_plan_meal_item_id`, snapshot macro columns, optional
+   `alternative_recipe_local_id` (personal recipe reference; NULL if
+   free-typed).
+2. Postgres `diet_plan_meal_item_alternatives` (trainer-assigned plans) —
+   migration `backend/migrations/029_diet_alternatives_and_swaps.sql`,
+   FK to `diet_plan_meal_items` ON DELETE CASCADE, optional
+   `alternative_catalog_item_id`.
+
+Self-authored plans also sync to the backup tables; there each item carries
+its alternatives INSIDE its payload as an `alternatives` JSONB column on
+`backup_diet_plan_meal_items` (added by migration 029), keeping backup
+restores lossless without inventing a third relational home.
+
+Rules (identical to workouts): max 3 alternatives per dish and no duplicates
+(primary or sibling, case-insensitive) — enforced in the UI
+(`MealItemAlternativesEditor`, ONE shared component used by BOTH builder
+contexts since both render through `DietPlanBuilderScreen`; the shared
+`DishPickerModal` excludes used names) and re-validated server-side
+(`backend/src/data/dietAlternatives.js` → 400 on a 4th/duplicate, never
+truncated).
+
+### Snapshot rule (same as everywhere else)
+
+Alternative macros are copied at add time. Editing the catalog recipe (or
+personal recipe) LATER does not retroactively change an already-configured
+alternative. Catalog/recipe ids are kept as references only, never joined
+for display.
+
+### Swap mechanism (following the plan)
+
+- `local_diet_item_swaps` (SQLite) / `diet_item_swaps` (Postgres): one row
+  per (meal item, exact calendar date) via UNIQUE constraint. Swapping on
+  Monday cannot touch Tuesday — nothing carries forward, including on
+  "Every Day" plans where the same day structure repeats daily.
+- The Diet Plan detail screen now has a date navigator (`‹ Mon, Aug 24 ›`,
+  defaults to real today) because swaps are keyed by calendar date. A swap
+  always applies to the viewed date, never to "the Monday slot" as an
+  abstract recurring thing.
+- "Swap" opens configured alternatives first (one tap each); "Choose a
+  different dish" always available as ad-hoc fallback through the same
+  catalog/custom search modal (source: My Dishes for self-authored plans,
+  the coach's Meal Catalog read-only via `/client/coach-dishes` for
+  assigned ones).
+- Swapped items display their own name/macros with a "↺ Swapped from X"
+  label + "Undo Swap" (deletes the item+date row). Undo works on PAST dates
+  too — navigate there deliberately.
+- Daily totals recompute per viewed date using swapped macros where a swap
+  is in effect (Monday shows 280, not 310).
+- Check-ins are untouched: following the plan WITH a logged swap still
+  counts as followed if the user taps Yes. A swap is intentional
+  substitution, not non-adherence — never auto-marked as "not followed".
+- Swap history survives plan edits/deletion: swaps carry NO foreign key on
+  the item reference and snapshot `original_name`, so "Mon, Aug 24:
+  Oatmeal → Greek Yogurt Parfait" remains viewable even if Oatmeal later
+  changes or disappears from the current plan structure.
+
+### Sync & trainer visibility
+
+Every swap syncs to `/user/backup/diet-swaps` (entity type `diet_swap`) so
+a device change loses nothing — including SELF-authored plan swaps (private
+backup only). Trainer visibility is separate and filtered server-side by
+`plan_server_id`: only trainer-ASSIGNED plan swaps appear in
+`GET /trainer/clients/:id/diet-plans/:planId` (`recent_swaps`) and surface
+as a "Recent substitutions" list on the trainer's plan detail. A swap on a
+self-authored plan never reaches any trainer-facing route.
+
+### Manual test notes
+
+1. Worked example end-to-end: build "Push Day Nutrition" for client Sarah
+   (Breakfast: Oatmeal 310 cal, alternatives Greek Yogurt Parfait 280 cal +
+   Protein Pancakes 390 cal). As Sarah on Monday tap Swap on Oatmeal → pick
+   Greek Yogurt Parfait → Monday breakfast shows it with "↺ Swapped from
+   Oatmeal", daily total reflects 280 not 310. Step the date to Tuesday →
+   Oatmeal as planned, total back to 310, no swap badge. Step back to
+   Monday → swap still shown (per-date rows).
+2. Builder alternatives (BOTH contexts: My Routines→Diet self builder and
+   Assign Diet Plan): add/remove alternatives; at 3 the add button disables
+   with "Up to 3 alternatives"; primary dish and already-added alternatives
+   are absent from picker results; editing a saved plan loads them fully
+   editable. Verify the SAME component renders in both contexts.
+3. Cap/duplicate negatives: attempt a 4th alternative client-side
+   (disabled) and via API/curl (400 from `dietAlternatives.js`, message
+   "Up to 3 alternatives"); duplicate names rejected case-insensitively on
+   both sides.
+4. Snapshot isolation: edit the trainer's Meal Catalog "Greek Yogurt
+   Parfait" AFTER adding it as an alternative → saved alternative keeps its
+   original snapshotted macros everywhere.
+5. Multi-item slot edge case: Breakfast contains Oatmeal AND Orange Juice
+   as two items; swap Oatmeal → Orange Juice stays untouched (swaps are per
+   ITEM, not per slot); totals change only by the oatmeal delta.
+6. Day-specific plan edge case: Day 1 and Day 3 both have "Oatmeal"
+   (distinct item rows); swap the Day 1 instance while viewing Day 1's date
+   → Day 3's instance unaffected even if the same calendar week is in
+   range.
+7. Fallback swap: use "Choose a different dish" (not a pre-configured
+   alternative) → works identically; custom-typed dish accepted; undo
+   reverts.
+8. Past-date undo: step back to last week, Undo Swap on a swapped date →
+   reverts exactly that date; other dates unchanged.
+9. Plan-edit survival: after Sarah swaps on Aug 24, trainer edits/removes
+   Oatmeal from the plan → Aug 24 history still shows "Oatmeal → Greek
+   Yogurt Parfait" (original_name snapshot, no FK cascade).
+10. Sync visibility split: swap on a TRAINER-ASSIGNED plan → appears under
+    "Recent substitutions" on the trainer's Client Detail → Diet → plan
+    view after next refresh, correct date and before/after names. Swap on a
+    SELF-AUTHORED plan → verify NO trainer-facing entry (server
+    `diet_item_swaps` row exists privately with plan_server_id NULL; no
+    route returns it to any trainer).
+11. Check-in independence: perform a swap, then check in "Followed it" →
+    recorded as followed; swap never implies non-adherence.
+12. Light/dark theme on: alternatives editor rows, swap sheet, fallback
+    picker, "Swapped from" badges, undo buttons, date navigator, trainer
+    substitutions card.
+

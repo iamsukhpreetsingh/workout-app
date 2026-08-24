@@ -794,6 +794,51 @@ const MIGRATIONS = [
     );`);
     await addColumnSafe(db, 'session_exercises', 'original_exercise_name', 'TEXT NULL');
   },
+  // v30: diet dish alternatives + date-scoped item swaps.
+  //
+  // local_diet_plan_meal_item_alternatives — configured alternatives on a
+  // self-authored meal item (mirrors plan_exercise_alternatives). Macros are
+  // SNAPSHOTS taken at add time; alternative_recipe_local_id is a kept
+  // reference only and is never joined for display.
+  //
+  // local_diet_item_swaps — "on DATE I actually ate X instead of Y". Unlike
+  // a workout swap (session-scoped, logged once), a diet swap MUST be
+  // date-scoped because a diet plan is followed repeatedly day after day:
+  // UNIQUE(diet_plan_meal_item_ref, swap_date) guarantees swapping today
+  // never bleeds into tomorrow. diet_plan_meal_item_ref holds the LOCAL id
+  // for self-authored plans or the SERVER uuid for trainer-assigned plans;
+  // original_name is snapshotted so history survives later plan edits or
+  // deletion of the original item.
+  async (db) => {
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS local_diet_plan_meal_item_alternatives (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      local_diet_plan_meal_item_id TEXT NOT NULL,
+      alternative_name TEXT NOT NULL,
+      alternative_calories INTEGER NULL,
+      alternative_protein_g NUMERIC NULL,
+      alternative_carbs_g NUMERIC NULL,
+      alternative_fat_g NUMERIC NULL,
+      alternative_recipe_local_id TEXT NULL,
+      order_index INTEGER NOT NULL
+    );`);
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS local_diet_item_swaps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      diet_plan_meal_item_ref TEXT NOT NULL,
+      plan_ref TEXT NOT NULL,
+      swap_date TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      swapped_name TEXT NOT NULL,
+      swapped_calories INTEGER NULL,
+      swapped_protein_g NUMERIC NULL,
+      swapped_carbs_g NUMERIC NULL,
+      swapped_fat_g NUMERIC NULL,
+      from_alternative_id INTEGER NULL,
+      synced BOOLEAN NOT NULL DEFAULT 0,
+      server_id TEXT NULL,
+      UNIQUE(diet_plan_meal_item_ref, swap_date)
+    );`);
+  },
 ];
 
 async function backfillPRs(db) {

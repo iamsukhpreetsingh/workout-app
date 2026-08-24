@@ -10,6 +10,7 @@ const mealCatalog = require('../data/mealCatalog');
 const workoutTemplates = require('../data/workoutTemplates');
 const notifications = require('../data/notifications');
 const intakeProfiles = require('../data/intakeProfiles');
+const backup = require('../data/backup');
 const { query } = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
@@ -405,6 +406,14 @@ for (const kind of ['diet', 'supplement']) {
       if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
       const plan = await coaching.getPlanWithItems(kind, req.params.planId);
       if (!plan || plan.trainer_id !== req.user.id) return res.status(404).json({ error: 'Plan not found' });
+      if (kind === 'diet') {
+        // recent date-scoped dish substitutions the client made while
+        // following this assigned plan (empty for self-authored swaps —
+        // those carry plan_server_id IS NULL and can never match)
+        plan.recent_swaps = await backup.listAssignedPlanSwaps(
+          req.user.id, req.params.clientId, req.params.planId
+        );
+      }
       res.json(plan);
     } catch (e) {
       httpError(res, e);

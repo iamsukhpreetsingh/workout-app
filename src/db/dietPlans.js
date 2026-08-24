@@ -20,6 +20,38 @@ const parse = (v) => {
 const arr = (v) => JSON.stringify(Array.isArray(v) ? v : []);
 const newLocalId = () => `dp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
+export const MAX_MEAL_ITEM_ALTERNATIVES = 3;
+
+// Same rules as the workout version (queries.js normalizeAlternatives) and
+// the server-side check in backend/src/data/dietAlternatives.js: max 3,
+// case-insensitive duplicates rejected — never silently truncated.
+export function normalizeDietAlternatives(itemName, alternatives) {
+  const out = [];
+  for (const a of Array.isArray(alternatives) ? alternatives : []) {
+    const name = String(a?.name ?? a ?? '').trim();
+    if (!name) continue;
+    if (out.length >= MAX_MEAL_ITEM_ALTERNATIVES) {
+      throw new Error(`Up to ${MAX_MEAL_ITEM_ALTERNATIVES} alternatives per dish`);
+    }
+    const lower = name.toLowerCase();
+    if (
+      lower === String(itemName || '').trim().toLowerCase() ||
+      out.some((x) => x.name.toLowerCase() === lower)
+    ) {
+      throw new Error(`"${name}" is already added as an alternative`);
+    }
+    out.push({
+      name,
+      calories: a?.calories ?? null,
+      protein_g: a?.protein_g ?? null,
+      carbs_g: a?.carbs_g ?? null,
+      fat_g: a?.fat_g ?? null,
+      recipe_local_id: a?.recipe_local_id ?? a?.catalog_item_id ?? null,
+    });
+  }
+  return out;
+}
+
 // local plan ids are our generated 'dp_…' ids or migration-025 'mig_…' ids —
 // never the UUIDs of trainer-assigned plans
 export const isLocalDietPlanId = (id) =>
@@ -81,6 +113,19 @@ export async function ensureDietPlansLoaded() {
                it.cook_time_minutes ?? null, it.difficulty ?? null,
                JSON.stringify(it.alternate_servings || []), arr(it.tags)]
             );
+            for (let ai = 0; ai < parse(it.alternatives).length; ai++) {
+              const a = it.alternatives[ai];
+              await db.runAsync(
+                `INSERT INTO local_diet_plan_meal_item_alternatives
+                   (local_diet_plan_meal_item_id, alternative_name, alternative_calories,
+                    alternative_protein_g, alternative_carbs_g, alternative_fat_g,
+                    alternative_recipe_local_id, order_index)
+                 VALUES (?,?,?,?,?,?,?,?)`,
+                [it.local_entity_id, String(a?.name ?? '').trim(), a?.calories ?? null,
+                 a?.protein_g ?? null, a?.carbs_g ?? null, a?.fat_g ?? null,
+                 a?.recipe_local_id ?? null, ai]
+              );
+            }
           }
         }
       }
@@ -100,7 +145,7 @@ export async function ensureDietPlansLoaded() {
   }
 }
 
-function hydrateItem(it) {
+function hydrateItem(it, alternatives = []) {
   return {
     id: it.local_id,
     local_id: it.local_id,
@@ -118,7 +163,32 @@ function hydrateItem(it) {
     difficulty: it.difficulty,
     alternate_servings: parse(it.alternate_servings),
     tags: parse(it.tags),
+    alternatives,
   };
+}
+
+async function attachItemAlternatives(db, itemLocalIds) {
+  const map = new Map();
+  for (const id of itemLocalIds) map.set(id, []);
+  if (itemLocalIds.length === 0) return map;
+  const rows = await db.getAllAsync(
+    `SELECT * FROM local_diet_plan_meal_item_alternatives
+     WHERE local_diet_plan_meal_item_id IN (${itemLocalIds.map(() => '?').join(',')})
+     ORDER BY order_index`,
+    itemLocalIds
+  );
+  for (const r of rows) {
+    const list = map.get(r.local_diet_plan_meal_item_id);
+    if (list) {
+      list.push({
+        name: r.alternative_name,
+        calories: r.alternative_calories, protein_g: r.alternative_protein_g,
+        carbs_g: r.alternative_carbs_g, fat_g: r.alternative_fat_g,
+        recipe_local_id: r.alternative_recipe_local_id || null,
+      });
+    }
+  }
+  return map;
 }
 
 async function attachDays(db, plans) {
@@ -131,7 +201,8 @@ async function attachDays(db, plans) {
       for (const m of meals) {
         const items = await db.getAllAsync(
           'SELECT * FROM local_diet_plan_meal_items WHERE diet_meal_local_id = ? ORDER BY order_index', [m.local_id]);
-        m.items = items.map(hydrateItem);
+        const altMap = await attachItemAlternatives(db, items.map((i) => i.local_id));
+        m.items = items.map((it) => hydrateItem(it, altMap.get(it.local_id) || []));
         m.id = m.local_id;
         m.slot_note = m.slot_note || '';
       }
@@ -322,6 +393,20 @@ async function writePlanTree(db, userId, planLocalId, payload, now, createdAt) {
            JSON.stringify(Array.isArray(it.alternate_servings) ? it.alternate_servings : []),
            arr(it.tags)]
         );
+        // configured dish alternatives — snapshot macros at write time
+        const alts = normalizeDietAlternatives(it.name, it.alternatives);
+        for (let ai = 0; ai < alts.length; ai++) {
+          const a = alts[ai];
+          await db.runAsync(
+            `INSERT INTO local_diet_plan_meal_item_alternatives
+               (local_diet_plan_meal_item_id, alternative_name, alternative_calories,
+                alternative_protein_g, alternative_carbs_g, alternative_fat_g,
+                alternative_recipe_local_id, order_index)
+             VALUES (?,?,?,?,?,?,?,?)`,
+            [`${mealLocal}:i${ii}`, a.name, a.calories ?? null, a.protein_g ?? null,
+             a.carbs_g ?? null, a.fat_g ?? null, a.recipe_local_id || null, ai]
+          );
+        }
       }
     }
   }
@@ -330,6 +415,12 @@ async function writePlanTree(db, userId, planLocalId, payload, now, createdAt) {
 
 
 async function deletePlanTree(db, planLocalId) {
+  await db.runAsync(
+    `DELETE FROM local_diet_plan_meal_item_alternatives WHERE local_diet_plan_meal_item_id IN (
+       SELECT i.local_id FROM local_diet_plan_meal_items i
+       JOIN local_diet_plan_meals m ON i.diet_meal_local_id = m.local_id
+       JOIN local_diet_plan_days d ON d.local_id = m.diet_day_local_id
+       WHERE d.diet_plan_local_id = ?)`, [planLocalId]);
   await db.runAsync(
     `DELETE FROM local_diet_plan_meal_items WHERE diet_meal_local_id IN (
        SELECT m.local_id FROM local_diet_plan_meals m

@@ -22,14 +22,16 @@ export default function CoachingPlanDetailScreen({ route, navigation }) {
 
   const load = useCallback(async () => {
     try {
-      const [p, cis] = await Promise.all([
+      const [p, cis, prof] = await Promise.all([
         api(`/trainer/clients/${clientId}/${seg}/${planId}`),
         api(`/trainer/clients/${clientId}/${seg}/${planId}/checkins`).catch(() => []),
         api(`/trainer/clients/${clientId}/intake-profile`).catch(() => null),
       ]);
       setPlan(p);
       setCheckins(cis);
-      setClientProfile(profile && profile.completed_at ? profile : null);
+      // BUGFIX: this previously referenced an undefined `profile`, throwing
+      // inside the try and surfacing "Could not load plan" on every open
+      setClientProfile(prof && prof.completed_at ? prof : null);
       navigation.setOptions({ title: p.name || 'Plan' });
     } catch (e) {
       Alert.alert('Could not load plan', e.message || 'Please try again.', [
@@ -207,6 +209,27 @@ export default function CoachingPlanDetailScreen({ route, navigation }) {
             </View>
           ))}
 
+      {/* Recent substitutions — date-scoped dish swaps the client logged
+          while following THIS assigned plan (self-authored swaps are never
+          visible here). Same adherence-signal purpose as workout swaps:
+          constant substitution of one dish means change the plan. */}
+      {kind === 'diet' && (plan.recent_swaps || []).length > 0 && (
+        <View style={styles.card}>
+          <Text style={styles.groupLabel}>Recent substitutions</Text>
+          {plan.recent_swaps.map((s) => (
+            <View key={s.id} style={styles.swapRow}>
+              <Ionicons name="swap-horizontal" size={12} color={colors.blue} />
+              <Text style={styles.swapText} numberOfLines={1}>
+                {new Date(`${String(s.swap_date).slice(0, 10)}T12:00:00`).toLocaleDateString(undefined, {
+                  weekday: 'short', month: 'short', day: 'numeric',
+                })}
+                : {s.original_name} → {s.swapped_name}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+
       {/* adherence strip — neutral for days with no check-in */}
       <Text style={styles.groupLabel}>Adherence — last 4 weeks</Text>
       <View style={styles.card}>
@@ -286,6 +309,8 @@ const makeStyles = (colors) =>
     mealTypeLabel: { color: colors.textDim, fontSize: 11, fontWeight: '800', letterSpacing: 1, marginBottom: 6 },
     nestedItem: { borderTopWidth: 1, borderTopColor: colors.border, marginTop: 8, paddingTop: 8 },
     clientNote: { color: colors.yellow, fontSize: 11, fontStyle: 'italic', marginTop: 3 },
+    swapRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4 },
+    swapText: { color: colors.text, fontSize: 12, flex: 1 },
 
     stripRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
     stripCell: {

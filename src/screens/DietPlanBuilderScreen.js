@@ -7,19 +7,15 @@ import {
   TouchableOpacity,
   StyleSheet,
   Alert,
-  Modal,
-  FlatList,
-  ActivityIndicator,
-  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
-import CatalogSearch from '../components/CatalogSearch';
-import DishForm from '../components/DishForm';
-import { listRecipes, createRecipe, getRecipe } from '../db/recipes';
+import DishPickerModal from '../components/DishPickerModal';
+import MealItemAlternativesEditor from '../components/MealItemAlternativesEditor';
+import { listRecipes, createRecipe } from '../db/recipes';
 import { createDietPlan, updateDietPlan, getDietPlan, isLocalDietPlanId } from '../db/dietPlans';
-import { getAllergenConflicts, splitAllergens } from '../lib/allergens';
+import { getAllergenConflicts } from '../lib/allergens';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 const MEAL_TYPES = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Pre-Workout', 'Post-Workout'];
@@ -65,14 +61,8 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
   const [busy, setBusy] = useState(false);
   const [collapsed, setCollapsed] = useState(new Set());
 
-  const [picker, setPicker] = useState(null); // { mealKey, mealType, mode }
-  const [pickQuery, setPickQuery] = useState('');
-  const [pickTag, setPickTag] = useState(null);
-  const [pickFav, setPickFav] = useState(false);
-  const [quickCreate, setQuickCreate] = useState(false); // nested DishForm inside the picker
+  const [picker, setPicker] = useState(null); // { mealKey, mealType }
   const [catalog, setCatalog] = useState(null);
-  const [catalogQuery, setCatalogQuery] = useState('');
-  const [customForm, setCustomForm] = useState(null); // { mealKey, form, saveToCatalog }
 
 
 
@@ -180,6 +170,17 @@ const planConflicts = (() => {
                 difficulty: it.difficulty || null,
                 alternate_servings: it.alternate_servings || [],
                 tags: it.tags || [],
+                // saved dish alternatives (shape varies by source: local
+                // rows, backup JSONB, or server alternative rows)
+                alternatives: (it.alternatives || []).map((a, ai) => ({
+                  key: `e${di}_${mi}_${ii}_alt${ai}`,
+                  name: a.name ?? a.alternative_name,
+                  calories: a.calories ?? a.alternative_calories ?? null,
+                  protein_g: a.protein_g ?? a.alternative_protein_g ?? null,
+                  carbs_g: a.carbs_g ?? a.alternative_carbs_g ?? null,
+                  fat_g: a.fat_g ?? a.alternative_fat_g ?? null,
+                  catalog_item_id: a.catalog_item_id ?? a.recipe_local_id ?? null,
+                })),
               })),
             })),
           }))
@@ -189,18 +190,17 @@ const planConflicts = (() => {
   }, [editPlanId]);
 
   useEffect(() => {
-    // // trainers browse their meal catalog; clients browse their My Dishes —
-    // // same picker, owner-appropriate source
-    // const url = self ? '/client/my-dishes' : '/trainer/meal-catalog';
-    // api(url)
-    //   .then(setCatalog)
-    //   .catch(() => setCatalog([]));
-      if (self) {
+    // trainers browse their meal catalog; clients browse their My Dishes —
+    // same picker, owner-appropriate source
+    if (self) {
       listRecipes().then(setCatalog).catch(() => setCatalog([]));
     } else {
       api('/trainer/meal-catalog').then(setCatalog).catch(() => setCatalog([]));
     }
   }, [self]);
+
+  const refreshCatalog = () =>
+    (self ? listRecipes() : api('/trainer/meal-catalog')).then((c) => setCatalog(c));
 
   const mutateDays = (fn) => setDays((prev) => fn(prev.map((d) => ({ ...d, meals: [...d.meals] }))));
 
@@ -287,6 +287,18 @@ const planConflicts = (() => {
       }))
     );
 
+  const setItemAlternatives = (mealKey, itemKey, alternatives) =>
+    mutateDays((ds) =>
+      ds.map((d) => ({
+        ...d,
+        meals: d.meals.map((m) =>
+          m.key === mealKey
+            ? { ...m, items: m.items.map((i) => (i.key === itemKey ? { ...i, alternatives } : i)) }
+            : m
+        ),
+      }))
+    );
+
   const save = async () => {
     if (busy) return;
     if (!name.trim()) return Alert.alert('Name required', 'Give this plan a name.');
@@ -330,6 +342,15 @@ const planConflicts = (() => {
               difficulty: i.difficulty || null,
               alternate_servings: i.alternate_servings || [],
               tags: i.tags || [],
+              // configured dish alternatives (0–3, macro snapshots)
+              alternatives: (i.alternatives || []).map((a) => ({
+                name: a.name,
+                calories: a.calories ?? null,
+                protein_g: a.protein_g ?? null,
+                carbs_g: a.carbs_g ?? null,
+                fat_g: a.fat_g ?? null,
+                catalog_item_id: a.catalog_item_id || null,
+              })),
             })),
           })),
         })),
@@ -359,117 +380,34 @@ const planConflicts = (() => {
     }
   };
 
-  // catalog picker data — search + tag + favorites, and dishes tagged for
-  // the slot being filled surface FIRST (advisory ranking, never a filter —
-  // any dish stays attachable to any slot)
-  const slotWord = String(picker?.mealType || '').toLowerCase().replace('-', '');
-  const rankFor = (c) =>
-    (c.suggested_meal_types || []).some(
-      (t) => t.toLowerCase().replace('-', '').replace(' ', '') === slotWord
-    )
-      ? 0
-      : 1;
-  const pickFiltered = (catalog || []).filter((c) => {
-    const q = pickQuery.trim().toLowerCase();
-    const matchesText = !q || c.name.toLowerCase().includes(q) || (c.tags || []).some((t) => t.toLowerCase().includes(q));
-    const matchesTag = !pickTag || (c.tags || []).includes(pickTag);
-    const matchesFav = !pickFav || c.is_favorite;
-    return matchesText && matchesTag && matchesFav;
-  }).slice().sort((a, b) => rankFor(a) - rankFor(b));
-
-  // one tap → snapshot attach → close
-  // const attachCatalogItem = (c) => {
-  //   addItemToMeal(picker.mealKey, {
-  //     catalog_item_id: c.id,
-  //     name: c.name,
-  //     calories: c.calories,
-  //     protein_g: c.protein_g,
-  //     carbs_g: c.carbs_g,
-  //     fat_g: c.fat_g,
-  //     serving_size: c.serving_size,
-  //     recipe_url: c.recipe_url,
-  //     photo_path: c.photo_path,
-  //     ingredients: c.ingredients,
-  //     allergens: c.allergens,
-  //     prep_time_minutes: c.prep_time_minutes,
-  //     cook_time_minutes: c.cook_time_minutes,
-  //     difficulty: c.difficulty,
-  //     alternate_servings: c.alternate_servings,
-  //   });
-  //   setPicker(null);
-  //   setPickFav(false);
-  // };
-
-
-
-    // one tap → snapshot attach → close. Allergen conflicts trigger a soft
-  // confirm first — never a hard block (trainer's clinical judgment wins).
+  // one tap → snapshot attach → close (allergen soft-confirm lives inside
+  // the shared DishPickerModal now)
   const attachCatalogItem = (c) => {
-    const conflicts = clientProfile
-      ? getAllergenConflicts(clientProfile.allergens, c.allergens)
-      : [];
-
-    const doAttach = () => {
-      addItemToMeal(picker.mealKey, {
-        catalog_item_id: c.id,
-        name: c.name,
-        calories: c.calories,
-        protein_g: c.protein_g,
-        carbs_g: c.carbs_g,
-        fat_g: c.fat_g,
-        serving_size: c.serving_size,
-        recipe_url: c.recipe_url,
-        photo_path: c.photo_path,
-        ingredients: c.ingredients,
-        allergens: c.allergens,
-        prep_time_minutes: c.prep_time_minutes,
-        cook_time_minutes: c.cook_time_minutes,
-        difficulty: c.difficulty,
-        alternate_servings: c.alternate_servings,
-      });
-      setPicker(null);
-      setPickFav(false);
-    };
-
-    if (conflicts.length) {
-      Alert.alert(
-        'Allergen warning',
-        `This recipe contains ${conflicts.join(', ')}, which ${
-          clientName || 'the client'
-        } has listed as an allergen. Add anyway?`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Add Anyway', style: 'destructive', onPress: doAttach },
-        ],
-        { cancelable: true }
-      );
-      return; // Cancel keeps the picker open so another dish can be chosen
-    }
-
-    doAttach();
+    addItemToMeal(picker.mealKey, {
+      catalog_item_id: c.id,
+      name: c.name,
+      calories: c.calories,
+      protein_g: c.protein_g,
+      carbs_g: c.carbs_g,
+      fat_g: c.fat_g,
+      serving_size: c.serving_size,
+      recipe_url: c.recipe_url,
+      photo_path: c.photo_path,
+      ingredients: c.ingredients,
+      allergens: c.allergens,
+      prep_time_minutes: c.prep_time_minutes,
+      cook_time_minutes: c.cook_time_minutes,
+      difficulty: c.difficulty,
+      alternate_servings: c.alternate_servings,
+    });
+    setPicker(null);
   };
 
-  const submitCustom = async () => {
-    const f = customForm.form;
-    if (!f.name?.trim()) {
-      Alert.alert('Name required', 'Give this item a name.');
-      return;
-    }
-    const item = {
-      name: f.name.trim(),
-      calories: f.calories === '' ? null : Number(f.calories),
-      protein_g: f.protein_g === '' ? null : Number(f.protein_g),
-      carbs_g: f.carbs_g === '' ? null : Number(f.carbs_g),
-      fat_g: f.fat_g === '' ? null : Number(f.fat_g),
-      serving_size: f.serving_size || null,
-      recipe_url: f.recipe_url || null,
-      client_note: f.client_note?.trim() || null,
-    };
-    if (customForm.saveToCatalog) {
+  // free-typed custom item; optionally saved to My Dishes / trainer catalog
+  const pickCustom = async (item) => {
+    if (item.saveToCatalog) {
       try {
-        // const url = self ? '/client/my-dishes' : '/trainer/meal-catalog';
-        // await api(url, { method: 'POST', body: item });
-          if (self) {
+        if (self) {
           await createRecipe(item);
         } else {
           await api('/trainer/meal-catalog', { method: 'POST', body: item });
@@ -479,8 +417,8 @@ const planConflicts = (() => {
         Alert.alert('Could not save dish', e.message || 'Please try again.');
       }
     }
-    addItemToMeal(customForm.mealKey, item);
-    setCustomForm(null);
+    addItemToMeal(picker.mealKey, item);
+    setPicker(null);
   };
 
   return (
@@ -591,16 +529,7 @@ const planConflicts = (() => {
                     <Text style={styles.mealType}>{String(m.meal_type).toUpperCase()}</Text>
                     <TouchableOpacity
                       style={styles.addItemMini}
-                      onPress={() => {
-                        setPickQuery('');
-                        setPickTag(null);
-                        setPicker({ mealKey: m.key, mealType: m.meal_type, mode: 'catalog' });
-                        // refresh dishes on every open so newly saved items appear
-                        // api(self ? '/client/my-dishes' : '/trainer/meal-catalog')
-                          (self ? listRecipes() : api('/trainer/meal-catalog'))
-                          .then(setCatalog)
-                          .catch(() => {});
-                      }}
+                      onPress={() => setPicker({ mealKey: m.key, mealType: m.meal_type })}
                     >
                       <Ionicons name="add" size={13} color={colors.primary} />
                       <Text style={styles.addItemMiniText}>Item</Text>
@@ -626,6 +555,21 @@ const planConflicts = (() => {
                           </TouchableOpacity>
                         </View>
                         <Text style={[styles.itemMacro, NUMS]}>{macroLine(i)}</Text>
+                        {/* configured dish alternatives — same component in
+                            BOTH builder contexts (self-authored + assign) */}
+                        <MealItemAlternativesEditor
+                          primaryName={i.name}
+                          alternatives={i.alternatives || []}
+                          onChange={(next) => setItemAlternatives(m.key, i.key, next)}
+                          excludeNames={m.items
+                            .filter((x) => x.key !== i.key)
+                            .map((x) => x.name)}
+                          self={self}
+                          catalog={catalog}
+                          refreshCatalog={refreshCatalog}
+                          clientProfile={clientProfile}
+                          clientName={clientName}
+                        />
                         <TextInput
                           style={styles.itemNote}
                           value={i.client_note}
@@ -653,242 +597,21 @@ const planConflicts = (() => {
         <Text style={styles.assignText}>{busy ? 'Saving…' : editPlanId ? 'Save Changes' : self ? 'Save Diet Plan' : 'Assign Diet Plan'}</Text>
       </TouchableOpacity>
 
-      {/* Add-Item modal: From Catalog (searchable, one-tap attach) | Custom */}
-      <Modal visible={!!picker} transparent animationType="slide" onRequestClose={() => { if (!quickCreate) { setPicker(null); setPickFav(false); } }}>
-        <View style={styles.pickWrap}>
-          <View style={styles.pickSheet}>
-            <Text style={styles.pickTitle}>Add to {picker?.mealType || 'Meal'}</Text>
-            <View style={styles.pickTabs}>
-              {[
-                { key: 'catalog', label: self ? 'My Dishes' : 'From Catalog' },
-                { key: 'custom', label: 'Custom Item' },
-              ].map((t) => {
-                const on = picker?.mode === t.key;
-                return (
-                  <TouchableOpacity
-                    key={t.key}
-                    style={[styles.pickTab, on && styles.pickTabOn]}
-                    onPress={() => setPicker((p) => (p ? { ...p, mode: t.key } : p))}
-                  >
-                    <Text style={[styles.pickTabText, on && { color: '#fff' }]}>{t.label}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {picker?.mode === 'catalog' ? (
-                <View style={{ flex: 1 }}>
-                  <CatalogSearch
-                    query={pickQuery}
-                    onQuery={setPickQuery}
-                    tag={pickTag}
-                    onTag={setPickTag}
-                    favOnly={pickFav}
-                    onFavOnly={setPickFav}
-                  />
-                  {catalog === null ? (
-                    <ActivityIndicator color={colors.primary} size="small" style={{ marginTop: 20 }} />
-                  ) : pickFiltered.length === 0 ? (
-                    <View style={styles.pickEmpty}>
-                      <Text style={styles.pickEmptyText}>
-                        {catalog.length === 0
-                          ? self
-                            ? 'No saved dishes yet — create one below'
-                            : 'Your catalog is empty'
-                          : 'No dishes found'}
-                      </Text>
-                      <TouchableOpacity
-                        style={styles.pickQuickBtn}
-                        onPress={() => setQuickCreate(true)}
-                      >
-                        <Ionicons name="add" size={15} color={colors.primary} />
-                        <Text style={styles.pickQuickText}>Add New Dish</Text>
-                      </TouchableOpacity>
-                    </View>
-                  ) : (
-                    <FlatList
-                      data={pickFiltered}
-                      keyExtractor={(c) => String(c.id)}
-                      contentContainerStyle={{ paddingBottom: 10 }}
-                      renderItem={({ item: c }) => (
-                        <TouchableOpacity
-                          style={styles.pickRow}
-                          // one tap attaches the snapshot and closes
-                          onPress={() => attachCatalogItem(c)}
-                        >
-                          {c.photo_path ? (
-                            <Image source={{ uri: c.photo_path }} style={styles.pickThumb} />
-                          ) : (
-                            <View style={[styles.pickThumb, { backgroundColor: colors.cardLight, alignItems: 'center', justifyContent: 'center' }]}>
-                              <Ionicons name="restaurant-outline" size={14} color={colors.textDim} />
-                            </View>
-                          )}
-                          <View style={{ flex: 1 }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                              {c.is_favorite && <Ionicons name="star" size={11} color={colors.yellow} />}
-                              <Text style={styles.pickName} numberOfLines={1}>
-                                {c.name}
-                              </Text>
-                            </View>
-                            <Text style={[styles.pickMacro, NUMS]}>
-                              {c.calories != null ? `${c.calories} cal` : ''}
-                              {c.protein_g != null ? ` · ${Math.round(c.protein_g)}P` : ''}
-                              {c.carbs_g != null ? ` ${Math.round(c.carbs_g)}C` : ''}
-                              {c.fat_g != null ? ` ${Math.round(c.fat_g)}F` : ''}
-                            </Text>
-                              {(() => {
-                              const { conflicts, others } = clientProfile
-                                ? splitAllergens(clientProfile.allergens, c.allergens)
-                                : { conflicts: [], others: c.allergens || [] };
-                              return (
-                                <>
-                                  {conflicts.length > 0 && (
-                                    <View style={styles.pickAllergen}>
-                                      <Ionicons name="warning" size={10} color={colors.red} />
-                                      <Text style={styles.pickAllergenText}>
-                                        Contains: {conflicts.join(', ')} — client allergy
-                                      </Text>
-                                    </View>
-                                  )}
-                                  {others.length > 0 && (
-                                    <View style={styles.pickAllergen}>
-                                      <Ionicons name="warning" size={10} color={colors.red} />
-                                      <Text style={styles.pickAllergenText}>Contains: {others.join(', ')}</Text>
-                                    </View>
-                                  )}
-                                </>
-                              );
-                            })()}
-                          </View>
-                          <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
-                        </TouchableOpacity>
-                      )}
-                    />
-                  )}
-                </View>
-            ) : (
-              <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
-                <TextInput
-                  style={styles.sheetField}
-                  placeholder="Item name"
-                  placeholderTextColor={colors.textDim}
-                  value={customForm?.form?.name || ''}
-                  onChangeText={(v) => setCustomForm((c) => (c ? { ...c, form: { ...c.form, name: v } } : { form: { name: v } }))}
-                />
-                <View style={styles.macroRow}>
-                  {[
-                    ['calories', 'Cal'],
-                    ['protein_g', 'P'],
-                    ['carbs_g', 'C'],
-                    ['fat_g', 'F'],
-                  ].map(([k, label]) => (
-                    <View key={k} style={styles.macroCell}>
-                      <Text style={styles.macroLabel}>{label}</Text>
-                      <TextInput
-                        style={[styles.sheetField, styles.macroInput, NUMS]}
-                        keyboardType="numeric"
-                        value={customForm?.form?.[k] || ''}
-                        onChangeText={(v) => setCustomForm((c) => ((c && c.form) ? { ...c, form: { ...c.form, [k]: v } } : { form: { [k]: v } }))}
-                        placeholder="—"
-                        placeholderTextColor={colors.textDim}
-                      />
-                    </View>
-                  ))}
-                </View>
-                <TextInput
-                  style={styles.sheetField}
-                  placeholder="Serving size (optional)"
-                  placeholderTextColor={colors.textDim}
-                  value={customForm?.form?.serving_size || ''}
-                  onChangeText={(v) => setCustomForm((c) => ((c && c.form) ? { ...c, form: { ...c.form, serving_size: v } } : { form: { serving_size: v } }))}
-                />
-                <TextInput
-                  style={styles.sheetField}
-                  placeholder="Recipe link (optional)"
-                  placeholderTextColor={colors.textDim}
-                  autoCapitalize="none"
-                  value={customForm?.form?.recipe_url || ''}
-                  onChangeText={(v) => setCustomForm((c) => ((c && c.form) ? { ...c, form: { ...c.form, recipe_url: v } } : { form: { recipe_url: v } }))}
-                />
-                <TextInput
-                  style={[styles.sheetField, { minHeight: 52 }]}
-                  placeholder={`Note for ${clientName || 'client'} on this item (optional)`}
-                  placeholderTextColor={colors.textDim}
-                  value={customForm?.form?.client_note || ''}
-                  onChangeText={(v) => setCustomForm((c) => ((c && c.form) ? { ...c, form: { ...c.form, client_note: v } } : { form: { client_note: v } }))}
-                  multiline
-                />
-                <TouchableOpacity
-                  style={styles.checkRow}
-                  onPress={() => setCustomForm((c) => ((c && c.form) ? { ...c, saveToCatalog: !c.saveToCatalog } : { form: {}, saveToCatalog: false }))}
-                >
-                  <Ionicons
-                    name={customForm?.saveToCatalog ? 'checkbox' : 'square-outline'}
-                    size={18}
-                    color={colors.primary}
-                  />
-                  <Text style={styles.checkText}>
-                    {self ? 'Save to My Dishes too' : 'Save to my catalog too'}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.pickAttachBtn}
-                  onPress={() => {
-                    submitCustom();
-                    setPicker(null);
-                  }}
-                >
-                  <Text style={styles.pickAttachText}>Add Item</Text>
-                </TouchableOpacity>
-              </ScrollView>
-            )}
-
-            <TouchableOpacity style={styles.cancelBtn} onPress={() => { setPicker(null); setPickFav(false); }}>
-              <Text style={styles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* empty-catalog escape hatch: create a dish without leaving the
-              picker; lands back in the catalog tab, ready to attach */}
-          <DishForm
-            visible={quickCreate}
-            dish={{}}
-            onClose={() => setQuickCreate(false)}
-            onSave={async (item) => {
-              // Save to My Dishes / trainer catalog, then attach
-              try {
-                // const url = self ? '/client/my-dishes' : '/trainer/meal-catalog';
-                // const created = await api(url, { method: 'POST', body: item });
-                  const created = self
-                  ? await getRecipe(await createRecipe(item))
-                  : await api('/trainer/meal-catalog', { method: 'POST', body: item });
-                setCatalog((prev) => (prev || []).concat([created]));
-                if (picker) attachCatalogItem(created);
-              } catch (e) {
-                Alert.alert('Could not save dish', e.message || 'Please try again.');
-              }
-              setQuickCreate(false);
-            }}
-            onUseOnce={async (item) => {
-              // add to this plan only — never saved to the catalog
-              if (picker) {
-                addItemToMeal(picker.mealKey, {
-                  name: item.name,
-                  calories: item.calories ?? null,
-                  protein_g: item.protein_g ?? null,
-                  carbs_g: item.carbs_g ?? null,
-                  fat_g: item.fat_g ?? null,
-                  serving_size: item.serving_size || null,
-                  recipe_url: item.recipe_url || null,
-                });
-              }
-              setQuickCreate(false);
-              setPicker(null);
-            }}
-            onDelete={null}
-          />
-        </View>
-      </Modal>
+      {/* Add-Item modal: From Catalog (searchable, one-tap attach) | Custom
+          — ONE shared component for primary items AND alternatives */}
+      <DishPickerModal
+        visible={!!picker}
+        onClose={() => setPicker(null)}
+        title={`Add to ${picker?.mealType || 'Meal'}`}
+        self={self}
+        catalog={catalog}
+        refreshCatalog={refreshCatalog}
+        slotHint={picker?.mealType || ''}
+        clientProfile={clientProfile}
+        clientName={clientName}
+        onPickCatalog={attachCatalogItem}
+        onPickCustom={pickCustom}
+      />
     </ScrollView>
   );
 }

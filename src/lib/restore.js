@@ -258,13 +258,26 @@ export async function performRestore(onProgress = () => {}) {
                   ingredients, allergens, prep_time_minutes, cook_time_minutes, difficulty,
                   alternate_servings, tags)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-              [it.local_entity_id, m.local_entity_id, it.local_recipe_id ?? null, it.name,
-               it.calories ?? null, it.protein_g ?? null, it.carbs_g ?? null, it.fat_g ?? null,
-               it.serving_size ?? null, it.recipe_url ?? null, it.quantity_multiplier ?? 1,
-               it.client_note ?? null, it.order_index ?? 0, it.photo_path ?? null,
-               JSON.stringify(it.ingredients || []), JSON.stringify(it.allergens || []),
-               it.prep_time_minutes ?? null, it.cook_time_minutes ?? null, it.difficulty ?? null,
-               JSON.stringify(it.alternate_servings || []), JSON.stringify(it.tags || [])]);
+               [it.local_entity_id, m.local_entity_id, it.local_recipe_id ?? null, it.name,
+                it.calories ?? null, it.protein_g ?? null, it.carbs_g ?? null, it.fat_g ?? null,
+                it.serving_size ?? null, it.recipe_url ?? null, it.quantity_multiplier ?? 1,
+                it.client_note ?? null, it.order_index ?? 0, it.photo_path ?? null,
+                JSON.stringify(it.ingredients || []), JSON.stringify(it.allergens || []),
+                it.prep_time_minutes ?? null, it.cook_time_minutes ?? null, it.difficulty ?? null,
+                JSON.stringify(it.alternate_servings || []), JSON.stringify(it.tags || [])]);
+            // configured dish alternatives ride inside the item payload
+            for (let ai = 0; ai < (it.alternatives || []).length; ai++) {
+              const a = it.alternatives[ai];
+              await db.runAsync(
+                `INSERT INTO local_diet_plan_meal_item_alternatives
+                   (local_diet_plan_meal_item_id, alternative_name, alternative_calories,
+                    alternative_protein_g, alternative_carbs_g, alternative_fat_g,
+                    alternative_recipe_local_id, order_index)
+                 VALUES (?,?,?,?,?,?,?,?)`,
+                [it.local_entity_id, String(a?.name ?? '').trim(), a?.calories ?? null,
+                 a?.protein_g ?? null, a?.carbs_g ?? null, a?.fat_g ?? null,
+                 a?.recipe_local_id ?? null, ai]);
+            }
           }
         }
       }
@@ -284,10 +297,33 @@ export async function performRestore(onProgress = () => {}) {
            it.timing ?? null, it.notes ?? null, it.order_index ?? 0]);
       }
     }
-    const [dietCis, suppCis] = await Promise.all([
+    const [dietCis, suppCis, dietSwaps] = await Promise.all([
       api('/user/backup/diet-checkins'),
       api('/user/backup/supplement-checkins'),
+      api('/user/backup/diet-swaps').catch(() => []),
     ]);
+    for (const s of dietSwaps) {
+      // swaps restore as already-synced — they ARE the server truth
+      await db.runAsync(
+        `INSERT INTO local_diet_item_swaps
+           (user_id, diet_plan_meal_item_ref, plan_ref, swap_date, original_name,
+            swapped_name, swapped_calories, swapped_protein_g, swapped_carbs_g,
+            swapped_fat_g, synced, server_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,1,?)
+         ON CONFLICT(diet_plan_meal_item_ref, swap_date) DO UPDATE SET
+           plan_ref = excluded.plan_ref,
+           original_name = excluded.original_name,
+           swapped_name = excluded.swapped_name,
+           swapped_calories = excluded.swapped_calories,
+           swapped_protein_g = excluded.swapped_protein_g,
+           swapped_carbs_g = excluded.swapped_carbs_g,
+           swapped_fat_g = excluded.swapped_fat_g,
+           synced = 1, server_id = excluded.server_id`,
+        [userId, s.diet_plan_meal_item_ref, s.plan_ref, String(s.swap_date).slice(0, 10),
+         s.original_name, s.swapped_name, s.swapped_calories ?? null,
+         s.swapped_protein_g ?? null, s.swapped_carbs_g ?? null, s.swapped_fat_g ?? null,
+         s.id]);
+    }
     for (const c of dietCis) {
       await db.runAsync(
         `INSERT INTO local_diet_checkins (user_id, diet_plan_local_id, date, followed, note, synced)

@@ -404,6 +404,19 @@ router.put('/intake-profile', requireAuth, requireRole(['user', 'trainer']), asy
 
 
 // ---- My Dishes (user-owned catalog) ----
+// Read-only view of the ACTIVE trainer's Meal Catalog — powers the diet
+// plan viewer's "Choose a different dish" swap fallback (the client
+// following a trainer's plan may substitute from that trainer's dishes).
+router.get('/coach-dishes', requireAuth, requireRole(['user', 'trainer']), async (req, res) => {
+  try {
+    const t = await trainerClients.getActiveTrainerForClient(req.user.id);
+    if (!t) return res.json([]);
+    res.json(await mealCatalog.list(t.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
 router.get('/my-dishes', requireAuth, requireRole(['user', 'trainer']), async (req, res) => {
   try {
     res.json(await mealCatalog.listUserDishes(req.user.id));

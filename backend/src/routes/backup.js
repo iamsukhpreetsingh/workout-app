@@ -178,6 +178,34 @@ router.get('/backup/diet-checkins', requireAuth, async (req, res) => {
   }
 });
 
+// ── Diet item swaps (date-scoped substitutions) ─────────────────────────
+// Private backup for ALL swaps (self-authored AND trainer-assigned plans).
+// Trainer-facing visibility is a separate route that filters on
+// plan_server_id — nothing here ever exposes another user's data.
+router.post('/backup/diet-swaps', requireAuth, async (req, res) => {
+  try {
+    res.status(201).json(await backup.upsertDietSwaps(req.user.id, req.body));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+router.get('/backup/diet-swaps', requireAuth, async (req, res) => {
+  try {
+    res.json(await backup.listDietSwaps(req.user.id, req.query.since));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+router.delete('/backup/diet-swaps/:itemRef/:date', requireAuth, async (req, res) => {
+  try {
+    res.json(await backup.deleteDietSwap(req.user.id, req.params.itemRef, req.params.date));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
 // ── Supplement plans (nested) ───────────────────────────────────────────
 router.post('/backup/supplement-plans', requireAuth, async (req, res) => {
   try {

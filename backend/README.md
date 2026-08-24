@@ -377,3 +377,95 @@ drill-down endpoint.
 
 Manual test notes live in the mobile README under "Exercise Alternatives +
 Mid-Session Swap".
+
+## Diet Dish Alternatives + Date-Scoped Swaps (migration 029)
+
+Mirrors migration 028 for diet plans. Meal items have only TWO structural
+homes (there is no reusable diet template library — the trainer's
+`meal_catalog_items` catalog is the reusable part, not whole plans):
+
+- `diet_plan_meal_item_alternatives` (trainer-assigned plans; FK to
+  `diet_plan_meal_items` ON DELETE CASCADE, optional reference-only
+  `alternative_catalog_item_id`)
+- local SQLite `local_diet_plan_meal_item_alternatives` on the device for
+  self-authored plans (see mobile README)
+
+plus an `alternatives JSONB` column on `backup_diet_plan_meal_items`
+(029) so self-authored plan backups/restores carry alternatives inside the
+item payload without a third relational table.
+
+Validation in `src/data/dietAlternatives.js`: max 3 per dish, no duplicates
+(primary or siblings, case-insensitive) → 400, never truncated. Wired into
+both `createDietTree`/`updateOwnDietPlan` (trainer assign / client edit)
+and `upsertDietPlan` (backup payload). **Snapshot rule**: alternative
+macros are copied at add time; editing a catalog dish later never changes
+an already-configured alternative — consistent with every other
+catalog-sourced value.
+
+### Date-scoped swaps — READ THIS BEFORE ASSUMING THEY WORK LIKE WORKOUT SWAPS
+
+A workout swap is SESSION-scoped: one session, logged once. A diet plan is
+followed repeatedly day after day, so `diet_item_swaps` keys each swap to
+an exact calendar date (`UNIQUE(user_id, diet_plan_meal_item_ref,
+swap_date)`): "on 2026-08-24 the client ate X instead of Y". The plan's own
+definition and every other day are untouched.
+
+Deliberate schema choices (do not "normalize" these away):
+
+- **No FK on `diet_plan_meal_item_ref`** and **`original_name` snapshotted**
+  — a swap is a historical record of what actually happened and must
+  survive the original item later being edited or removed from the plan.
+- `plan_server_id` is NULL for self-authored-plan swaps, set only for
+  trainer-assigned ones. All swaps sync privately via `/user/backup/
+  diet-swaps` (POST upsert / GET list / DELETE by item+date, idempotent).
+  Trainer visibility is a SEPARATE concern: `listAssignedPlanSwaps` joins
+  `diet_plans` on trainer+client ownership and can therefore never return a
+  self-authored swap. Surfaced as `recent_swaps` inside
+  `GET /trainer/clients/:id/diet-plans/:planId`.
+
+### Manual test sequence (curl)
+
+```bash
+# 1. Assign a plan with configured alternatives (trainer)
+curl -X POST $API/trainer/clients/$CLIENT_ID/diet-plans \
+  -H "$TRAINER_AUTH" -H 'Content-Type: application/json' \
+  -d '{"name":"Push Day Nutrition","days":[{"day_label":"Every Day",
+    "meals":[{"meal_type":"Breakfast","items":[{"catalog_item_id":"'$OATMEAL_UUID'",
+      "alternatives":[{"name":"Greek Yogurt Parfait","calories":280},
+                      {"catalog_item_id":"'$PANCAKES_UUID'"]}]}]}]}]}'
+# NEGATIVE: same call with 4 alternatives or a duplicate name → 400
+# ("Up to 3 alternatives per dish" / "already added")
+
+# 2. Plan detail carries alternatives + recent_swaps: []
+curl $API/trainer/clients/$CLIENT_ID/diet-plans/$PLAN_UUID -H "$TRAINER_AUTH"
+
+# 3. Client swaps Oatmeal → Greek Yogurt Parfait for today (sync queue does
+#    this automatically; shown here directly)
+curl -X POST $API/user/backup/diet-swaps -H "$CLIENT_AUTH" \
+  -H 'Content-Type: application/json' \
+  -d '[{"plan_ref":"'$PLAN_UUID'","plan_server_id":"'$PLAN_UUID'",
+        "diet_plan_meal_item_ref":"'$ITEM_UUID'","swap_date":"2026-08-24",
+        "original_name":"Oatmeal","swapped_name":"Greek Yogurt Parfait",
+        "swapped_calories":280}]'
+
+# 4. Trainer now sees history with correct date + before/after names:
+curl $API/trainer/clients/$CLIENT_ID/diet-plans/$PLAN_UUID -H "$TRAINER_AUTH"
+#    → recent_swaps: [{swap_date: 2026-08-24, original_name: Oatmeal, ...}]
+
+# 5. NEGATIVE — self-authored swap must NOT reach any trainer route:
+curl -X POST $API/user/backup/diet-swaps -H "$CLIENT_AUTH" \
+  -H 'Content-Type: application/json' \
+  -d '[{"plan_ref":"dp_local_123","diet_plan_meal_item_ref":"dp_local_x",
+        "swap_date":"2026-08-25","original_name":"Oatmeal",
+        "swapped_name":"Toast","plan_server_id":null}]'
+#    row exists privately (GET /user/backup/diet-swaps), but step 4's
+#    recent_swaps cannot include it (plan_server_id NULL → join misses).
+
+# 6. Undo = idempotent delete (never 404-loops):
+curl -X DELETE $API/user/backup/diet-swaps/$ITEM_UUID/2026-08-24 -H "$CLIENT_AUTH"
+```
+
+More scenarios (multi-item slots, repeated dish names across days,
+past-date undo, check-in independence, snapshot isolation, theme checks)
+live in the mobile README under "Diet Dish Alternatives + Date-Scoped
+Swap".

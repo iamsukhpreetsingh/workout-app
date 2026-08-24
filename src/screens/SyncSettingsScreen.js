@@ -245,6 +245,7 @@ const ENTITY_LABELS = {
   recipe: 'Dish (My Dishes)',
   diet_plan: 'Diet plan',
   diet_checkin: 'Diet check-in',
+  diet_swap: 'Diet dish swap',
   supplement_plan: 'Supplement plan',
   supplement_checkin: 'Supplement check-in',
   personal_record: 'Personal record',
