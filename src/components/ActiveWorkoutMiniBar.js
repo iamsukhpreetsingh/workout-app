@@ -5,6 +5,7 @@ import { useNavigation, useNavigationState } from '@react-navigation/native';
 import { useWorkout, elapsedSeconds, formatDuration } from '../store/WorkoutContext';
 import { useColors } from '../theme';
 import { lightImpact } from '../lib/haptics';
+import { ACTIVE_WORKOUT, MAIN_TABS } from '../shared/constants/routes';
 
 // Spotify-style persistent bar for an active workout. Rendered at the app
 // root: visible on every screen while a workout is in progress or paused,
@@ -18,11 +19,11 @@ export default function ActiveWorkoutMiniBar() {
   const slide = new Animated.Value(0);
   // True when the tab bar sits beneath us → offset the bar above it
   const overTabs = useNavigationState(
-    (state) => state?.routes?.[state.index ?? 0]?.name === 'Main'
+    (state) => state?.routes?.[state.index ?? 0]?.name === MAIN_TABS
   );
   // Hide while the full logging view (expanded state) is on screen
   const expanded = useNavigationState(
-    (state) => state?.routes?.[state.index ?? 0]?.name === 'ActiveWorkout'
+    (state) => state?.routes?.[state.index ?? 0]?.name === ACTIVE_WORKOUT
   );
 
   // live timer refresh
@@ -45,7 +46,7 @@ export default function ActiveWorkoutMiniBar() {
   const expand = () => {
     lightImpact();
     Animated.timing(slide, { toValue: 1, duration: 150, useNativeDriver: true }).start();
-    navigation.navigate('ActiveWorkout');
+    navigation.navigate(ACTIVE_WORKOUT);
   };
 
   const togglePause = () => {

@@ -144,27 +144,26 @@ async function ensureBaseTables(db) {
     sync_enabled INTEGER NOT NULL DEFAULT 1
   );`);
   await db.runAsync('INSERT OR IGNORE INTO sync_settings (id) VALUES (1)');
-  // const count = await db.getFirstAsync('SELECT COUNT(*) AS c FROM exercises');
-  // if (count.c === 0) {
-  //   for (const ex of SEED_EXERCISES) {
-  //     await db.runAsync(
-  //       'INSERT OR IGNORE INTO exercises (name, muscle_group) VALUES (?, ?)',
-  //       [ex.name, ex.muscle]
-  //     );
-  //   }
-  // }
-    // Seed the exercise library. Runs UNCONDITIONALLY on every launch:
-  // INSERT OR IGNORE makes it a no-op for rows that already exist, and
-  // unconditional execution HEALS devices whose seed silently failed.
-  // BUGFIX: this used to bind `ex.muscle`, but the seed data's key is
-  // `muscle_group` — every insert put NULL into a NOT NULL column and
+  // Seed the exercise library. Skipped on healthy installs (row count >=
+  // seed size) so cold start stays fast; still runs — and INSERT OR IGNORE
+  // keeps it idempotent — when the library is missing or incomplete, which
+  // heals fresh installs and devices whose seed silently failed.
+  // BUGFIX (historical): this used to bind `ex.muscle`, but the seed data's
+  // key is `muscle_group` — every insert put NULL into a NOT NULL column and
   // INSERT OR IGNORE silently skipped ALL 39 rows, leaving fresh installs
   // with an empty exercise library.
-  for (const ex of SEED_EXERCISES) {
-    await db.runAsync(
-      'INSERT OR IGNORE INTO exercises (name, muscle_group) VALUES (?, ?)',
-      [ex.name, ex.muscle_group]
-    );
+  try {
+    const { c } = await db.getFirstAsync('SELECT COUNT(*) AS c FROM exercises');
+    if (c < SEED_EXERCISES.length) {
+      for (const ex of SEED_EXERCISES) {
+        await db.runAsync(
+          'INSERT OR IGNORE INTO exercises (name, muscle_group) VALUES (?, ?)',
+          [ex.name, ex.muscle_group]
+        );
+      }
+    }
+  } catch (e) {
+    console.warn('[DB] exercise seed skipped:', e?.message || e);
   }
 }
 
@@ -186,8 +185,12 @@ async function ensureSchema(db) {
   await addColumnSafe(db, 'user_settings', 'streak_tolerance', 'INTEGER NOT NULL DEFAULT 1');
   await addColumnSafe(db, 'workout_plans', 'user_id', 'TEXT');
   await addColumnSafe(db, 'workout_plans', 'tags', 'TEXT');
-  // Delete legacy plans without user_id
-  await db.runAsync('DELETE FROM workout_plans WHERE user_id IS NULL OR user_id = ""');
+  // NOTE: this used to DELETE legacy plans with a NULL/empty user_id on every
+  // launch. All writers now stamp user_id (createPlan throws without it) and
+  // every reader filters by user_id, so such rows are simply invisible —
+  // deleting them here silently destroyed data if anything ever wrote a
+  // NULL user_id (e.g. a restore race). The one-time v20/v21 migrations keep
+  // their historical cleanup for devices that predate them.
   await addColumnSafe(db, 'user_settings', 'theme_mode', "TEXT NOT NULL DEFAULT 'system'");
   await addColumnSafe(db, 'user_settings', 'length_unit', "TEXT NOT NULL DEFAULT 'cm'");
   await addColumnSafe(db, 'exercises', 'user_id', 'TEXT');
@@ -852,6 +855,31 @@ const MIGRATIONS = [
   async (db) => {
     await addColumnSafe(db, 'session_exercises', 'trainer_note', 'TEXT NULL');
   },
+  // v32: ONE-TIME re-upload sweep for workout routines. Exercise-alternative
+  // swap options were previously NOT included in the backup payload, so
+  // every already-synced routine sits on the server without them (and a
+  // wipe/reinstall loses them). Re-queueing each local plan forces a fresh
+  // payload (which now carries alternatives) to overwrite the server copy.
+  // Idempotent upsert server-side; rows for other accounts on this device
+  // are skipped cleanly at push time by their handler.
+  async (db) => {
+    const plans = await db.getAllAsync('SELECT id FROM workout_plans');
+    const now = Date.now();
+    for (const p of plans) {
+      await db.runAsync(
+        `INSERT INTO sync_queue
+           (operation_id, entity_type, entity_id, operation, payload,
+            created_at, updated_at, status)
+         SELECT ?, 'workout_plan', ?, 'CREATE', NULL, ?, ?, 'PENDING'
+         WHERE NOT EXISTS (
+           SELECT 1 FROM sync_queue
+           WHERE entity_type = 'workout_plan' AND entity_id = ?
+             AND status IN ('PENDING','SYNCING','FAILED')
+         )`,
+        [`v32-resync-${p.id}`, String(p.id), now, now, String(p.id)]
+      );
+    }
+  },
 ];
 
 async function backfillPRs(db) {
@@ -903,81 +931,6 @@ async function backfillPRs(db) {
   )`);
 }
 
-// async function initDb() {
-//   const db = await SQLite.openDatabaseAsync('workout.db');
-//   await db.execAsync('PRAGMA journal_mode = WAL;');
-//   let { version } = await getFirstUserVersion(db);
-//   try {
-//     for (let v = version; v < MIGRATIONS.length; v++) {
-//       await MIGRATIONS[v](db);
-//       await db.runAsync(`PRAGMA user_version = ${v + 1}`);
-//     }
-//   } catch (e) {
-//     // A failed migration must not wedge getDb() forever — ensureSchema
-//     // self-heals missing tables/columns, and the failed migration will be
-//     // retried on next launch (user_version only advances on success).
-//     console.warn('migration skipped:', e.message || e);
-//   }
-//   await ensureSchema(db);
-//   dbInstance = db;
-//   return db;
-// }
-
-// async function getFirstUserVersion(db) {
-//   try {
-//     return await db.getFirstAsync('PRAGMA user_version');
-//   } catch {
-//     return { version: 0 };
-//   }
-// }
-
-
-
-
-// async function initDb() {
-//   const db = await SQLite.openDatabaseAsync('workout.db');
-//   await db.execAsync('PRAGMA journal_mode = WAL;');
-
-//   // NOTE: the migration runner had a silent bug since the app was first
-//   // built — it destructured the wrong key from PRAGMA user_version, so
-//   // versioned migrations NEVER ran; every schema change actually came from
-//   // ensureSchema()'s self-healing. Fixed here: read the correct key, and
-//   // detect existing installs (tables present, counter at 0) so we skip the
-//   // historical v1–v22 (their schema already exists via self-heal) and go
-//   // straight to v23.
-//   const row = await getFirstUserVersion(db);
-//   let version = Number(row?.user_version ?? row?.version ?? 0) || 0;
-//   console.log('[DB] user_version at launch:', version);
-
-//   if (version < 23) {
-//     let existing = [];
-//     try {
-//       existing = await db.getAllAsync(
-//         "SELECT name FROM sqlite_master WHERE type='table' AND name='workout_sessions'"
-//       );
-//     } catch {}
-//     if (existing.length) {
-//       version = 22; // pre-v23 schema is guaranteed present via self-heal
-//       console.log('[DB] existing install detected — starting at v23');
-//     }
-//   }
-
-//   try {
-//     for (let v = version; v < MIGRATIONS.length; v++) {
-//       await MIGRATIONS[v](db);
-//       await db.runAsync(`PRAGMA user_version = ${v + 1}`);
-//       console.log('[DB] applied migration v' + (v + 1));
-//     }
-//   } catch (e) {
-//     // A failed migration must not wedge getDb() forever — ensureSchema
-//     // self-heals missing tables/columns, and the failed migration will be
-//     // retried on next launch (user_version only advances on success).
-//     console.warn('migration skipped:', e.message || e);
-//   }
-//   await ensureSchema(db);
-//   dbInstance = db;
-//   return db;
-// }
 
 
 

@@ -2,11 +2,13 @@ import React, { useCallback, useState, useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Alert, StyleSheet, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import LoadError from '../shared/components/LoadError';
 import { getSession, deleteSession, updateSetType, updateSessionName } from '../db/queries';
 import { getPRSetIdsForSession } from '../db/pr';
 import { shareSessionAsRoutine } from '../lib/share';
 import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
-import { useColors, fmtDate } from '../theme';
+import { useColors } from '../theme';
+import { fmtDate } from '../shared/utils/format';
 import { formatDuration, groupLabels } from '../store/WorkoutContext';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
@@ -19,6 +21,8 @@ export default function SessionDetailScreen({ route, navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [session, setSession] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
   const [prSetIds, setPrSetIds] = useState(new Set());
   const [editingName, setEditingName] = useState(false);
   const [editedName, setEditedName] = useState('');
@@ -40,19 +44,29 @@ export default function SessionDetailScreen({ route, navigation }) {
   const reload = useCallback(() => {
     let mounted = true;
     async function load() {
-      const s = await getSession(route.params.sessionId);
-      if (!mounted) return;
-      setSession(s);
-      if (s) {
-        const prs = await getPRSetIdsForSession(s.id);
-        if (mounted) setPrSetIds(prs);
+      try {
+        const s = await getSession(route.params.sessionId);
+        if (!mounted) return;
+        setSession(s);
+        if (s) {
+          const prs = await getPRSetIdsForSession(s.id);
+          if (mounted) setPrSetIds(prs);
+        }
+        if (mounted) setLoadError(false);
+      } catch (e) {
+        console.warn('[SessionDetailScreen] load failed:', e?.message || e);
+        if (mounted) setLoadError(true);
       }
     }
     load();
     return () => { mounted = false; };
-  }, [route.params.sessionId]);
+  }, [route.params.sessionId, retryTick]);
 
   useFocusEffect(reload);
+
+  if (loadError && !session) {
+    return <LoadError onRetry={() => setRetryTick((t) => t + 1)} />;
+  }
 
   if (!session) {
     return (

@@ -22,6 +22,7 @@ import DishPickerModal from '../components/DishPickerModal';
 import { listRecipes } from '../db/recipes';
 import { todayLocalISO, isFutureDate, buildCheckinMap } from '../lib/checkinDates';
 import { useColors } from '../theme';
+import { COACHING_PLAN_BUILDER, DIET_PLAN_BUILDER } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -813,9 +814,9 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
             style={styles.editBtn}
             onPress={() => {
               if (isSupplement) {
-                navigation.navigate('CoachingPlanBuilder', { kind: 'supplement', self: true, editPlanId: planId });
+                navigation.navigate(COACHING_PLAN_BUILDER, { kind: 'supplement', self: true, editPlanId: planId });
               } else {
-                navigation.navigate('DietPlanBuilder', { self: true, editPlanId: planId });
+                navigation.navigate(DIET_PLAN_BUILDER, { self: true, editPlanId: planId });
               }
             }}
           >
@@ -1018,14 +1019,6 @@ const makeStyles = (colors) =>
 
 
     checkedLabel: { color: colors.textDim, fontSize: 11, textAlign: 'center', marginTop: 4 },
-    checkinRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
-    checkBtn: {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
-      borderRadius: 12, paddingVertical: 12, paddingHorizontal: 28,
-      backgroundColor: colors.cardLight, borderWidth: 1.5, borderColor: 'transparent',
-    },
-    yesBtnOn: { backgroundColor: colors.green, borderColor: colors.green },
-    noBtnOn: { borderColor: colors.red },
     yesText: { color: '#fff', fontWeight: '800' },
     noText: { color: colors.red, fontWeight: '800' },
     checkinCard: {

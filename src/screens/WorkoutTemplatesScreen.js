@@ -6,6 +6,7 @@ import { api } from '../lib/api';
 import CatalogSearch from '../components/CatalogSearch';
 import TagEditorModal from '../components/TagEditorModal';
 import { useColors } from '../theme';
+import { WORKOUT_TEMPLATE_EDITOR } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -24,7 +25,7 @@ export default function WorkoutTemplatesScreen({ navigation }) {
     navigation.setOptions({
       headerRight: () => (
         <TouchableOpacity
-          onPress={() => navigation.navigate('WorkoutTemplateEditor', {})}
+          onPress={() => navigation.navigate(WORKOUT_TEMPLATE_EDITOR, {})}
           style={{ padding: 8 }}
         >
           <Ionicons name="add" size={22} color={colors.primary} />
@@ -105,7 +106,7 @@ export default function WorkoutTemplatesScreen({ navigation }) {
             </Text>
             <TouchableOpacity
               style={styles.emptyBtn}
-              onPress={() => navigation.navigate('WorkoutTemplateEditor', {})}
+              onPress={() => navigation.navigate(WORKOUT_TEMPLATE_EDITOR, {})}
             >
               <Ionicons name="add" size={17} color={colors.primary} />
               <Text style={styles.emptyBtnText}>New Template</Text>
@@ -116,7 +117,7 @@ export default function WorkoutTemplatesScreen({ navigation }) {
           <TouchableOpacity
             style={styles.card}
             activeOpacity={0.8}
-            onPress={() => navigation.navigate('WorkoutTemplateEditor', { templateId: item.id })}
+            onPress={() => navigation.navigate(WORKOUT_TEMPLATE_EDITOR, { templateId: item.id })}
           >
             <View style={styles.templateTag}>
               <Ionicons name="copy-outline" size={13} color={colors.primary} />

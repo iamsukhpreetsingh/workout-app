@@ -2,15 +2,18 @@ import React, { useCallback, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { getProgressOverview, getExerciseProgressList } from '../db/queries';
-import { getBodyWeightHistory } from '../db/body';
+import { getProgressOverview, getExerciseProgressList } from '../services/workoutService';
+import { getBodyWeightHistory } from '../services/bodyService';
 import { calculateStreak, getCalendarData } from '../lib/streaks';
 import { getVolumeWarnings } from '../lib/volumeWarnings';
-import { getSettings } from '../db/settings';
+import { getSettings } from '../services/settingsService';
 import LineChart from '../components/LineChart';
 import CalendarHeatmap from '../components/CalendarHeatmap';
 import { useColors } from '../theme';
+import { kgToLb } from '../shared/utils/units';
 import { useHeaderActions } from '../components/HeaderActions';
+import LoadError from '../shared/components/LoadError';
+import { BODY, EXERCISE_PROGRESS } from '../shared/constants/routes';
 
 export default function ProgressScreen({ navigation }) {
   const colors = useColors();
@@ -22,6 +25,8 @@ export default function ProgressScreen({ navigation }) {
   const [calendarData, setCalendarData] = useState({});
   const [settings, setSettings] = useState(null);
   const [warnings, setWarnings] = useState([]);
+  const [loadError, setLoadError] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
 
   const styles = {
     container: { flex: 1 },
@@ -55,27 +60,33 @@ export default function ProgressScreen({ navigation }) {
     useCallback(() => {
       let mounted = true;
       async function load() {
-        const [overviewData, exercisesData, history, streakData, calendar, s, w] = await Promise.all([
-          getProgressOverview(),
-          getExerciseProgressList(),
-          getBodyWeightHistory(),
-          calculateStreak(1),
-          getCalendarData(6),
-          getSettings(),
-          getVolumeWarnings(),
-        ]);
-        if (!mounted) return;
-        setOverview(overviewData);
-        setExercises(exercisesData);
-        setBodyData(history);
-        setStreak(streakData);
-        setCalendarData(calendar);
-        setSettings(s);
-        setWarnings(w);
+        try {
+          const [overviewData, exercisesData, history, streakData, calendar, s, w] = await Promise.all([
+            getProgressOverview(),
+            getExerciseProgressList(),
+            getBodyWeightHistory(),
+            calculateStreak(1),
+            getCalendarData(6),
+            getSettings(),
+            getVolumeWarnings(),
+          ]);
+          if (!mounted) return;
+          setOverview(overviewData);
+          setExercises(exercisesData);
+          setBodyData(history);
+          setStreak(streakData);
+          setCalendarData(calendar);
+          setSettings(s);
+          setWarnings(w);
+          if (mounted) setLoadError(false);
+        } catch (e) {
+          console.warn('[ProgressScreen] load failed:', e?.message || e);
+          if (mounted) setLoadError(true);
+        }
       }
       load();
       return () => { mounted = false; };
-    }, [])
+    }, [retryTick])
   );
 
   const completed = overview.filter((s) => s.end_time);
@@ -90,8 +101,12 @@ export default function ProgressScreen({ navigation }) {
   const unit = settings?.weight_unit || 'kg';
   const weightData = bodyData.map(h => ({
     x: new Date(h.date).getTime(),
-    y: unit === 'lb' ? h.value * 2.205 : h.value,
+    y: unit === 'lb' ? kgToLb(h.value) : h.value,
   }));
+
+  if (loadError && overview.length === 0) {
+    return <LoadError onRetry={() => setRetryTick((t) => t + 1)} />;
+  }
 
   return (
     <ScrollView style={[styles.container, { backgroundColor: colors.bg }]} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
@@ -107,7 +122,7 @@ export default function ProgressScreen({ navigation }) {
           style={[styles.segmentBtn, { backgroundColor: colors.card }, segment === 'body' && { backgroundColor: colors.primary }]}
           onPress={() => {
             setSegment('body');
-            navigation.navigate('Body');
+            navigation.navigate(BODY);
           }}
         >
           <Text style={[styles.segmentText, { color: colors.textDim }, segment === 'body' && { color: '#fff' }]}>Body</Text>
@@ -188,7 +203,7 @@ export default function ProgressScreen({ navigation }) {
             <TouchableOpacity
               key={ex.id}
               style={[styles.exRow, { backgroundColor: colors.card }]}
-              onPress={() => navigation.navigate('ExerciseProgress', { exerciseId: ex.id, name: ex.name })}
+              onPress={() => navigation.navigate(EXERCISE_PROGRESS, { exerciseId: ex.id, name: ex.name })}
             >
               <View style={{ flex: 1 }}>
                 <Text style={[styles.exName, { color: colors.text }]}>{ex.name}</Text>

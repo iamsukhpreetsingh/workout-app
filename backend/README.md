@@ -490,3 +490,13 @@ personal notes or RPE into this column.
 
 Manual test notes live in the mobile README under "Exercise Comment
 Tick-Save + Trainer-Shared Notes".
+
+## Workout Plan Backup Fidelity (alternatives)
+
+`client_workout_plans.exercises` JSONB elements may now carry an
+`alternatives: string[]` field (configured swap options per exercise).
+Validated in `upsertTemplates` via `normalizeAlternatives` — max 3,
+case-insensitive duplicates rejected with 400, never truncated. Returned
+verbatim by `listForClient`; device restore rebuilds
+`plan_exercise_alternatives` from it (mobile migration v32 force-resyncs
+pre-existing routines once). Mirrors the diet `alternatives` JSONB rule.

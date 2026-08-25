@@ -11,14 +11,14 @@ import { listLocalSupplementPlans } from '../db/supplementPlans';
 import { fetchAndCacheTrainerContent } from '../lib/trainerCache';
 import { useColors } from '../theme';
 import { useHeaderActions } from '../components/HeaderActions';
+import { CLIENT_ASSIGNED_DETAIL, CLIENT_DIET_PLAN_DETAIL, COACHING_PLAN_BUILDER, DIET_PLAN_BUILDER, MY_DISHES, PLAN_DETAIL, PLAN_EDITOR } from '../shared/constants/routes';
+import PlanCard, { PlanEmptyState, NewPlanButton } from '../features/routines/components/PlanCard';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
 export default function PlansScreen({ navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
-  const [plans, setPlans] = useState([]);
-  const [assigned, setAssigned] = useState([]);
   const [tab, setTab] = useState('mine'); // 'mine' | 'trainer'
   const [pinned, setPinned] = useState(new Set());
   const [subTab, setSubTab] = useState('workouts'); // workouts | diet | supplements
@@ -30,10 +30,7 @@ export default function PlansScreen({ navigation }) {
 
   useFocusEffect(
     useCallback(() => {
-      let mounted = true;
-      listPlans().then((p) => { if (mounted) setPlans(p); });
-      getPinnedSet().then((set) => { if (mounted) setPinned(set); });
-      return () => { mounted = false; };
+      getPinnedSet().then(setPinned);
     }, [])
   );
 
@@ -47,20 +44,6 @@ export default function PlansScreen({ navigation }) {
       }
     }
   };
-
-  useFocusEffect(
-    useCallback(() => {
-      if (!isClient) {
-        setAssigned([]);
-        return;
-      }
-      let mounted = true;
-      api('/client/assigned-plans')
-        .then((rows) => { if (mounted) setAssigned(rows); })
-        .catch(() => { if (mounted) setAssigned([]); });
-      return () => { mounted = false; };
-    }, [isClient])
-  );
 
   // Shared settings + profile icons replace the header "+ New" — routine
   // creation now lives inside the My Routines tab only (nothing is created
@@ -182,9 +165,9 @@ export default function PlansScreen({ navigation }) {
         onPress={() => {
           handleClearSearch();
           if (item.type === 'workout') {
-            navigation.navigate(item.source.includes('From Trainer') ? 'ClientAssignedDetail' : 'PlanDetail', { planId: item.id });
+            navigation.navigate(item.source.includes('From Trainer') ? CLIENT_ASSIGNED_DETAIL : PLAN_DETAIL, { planId: item.id });
           } else {
-            navigation.navigate('ClientDietPlanDetail', { planId: item.id, self: !item.source.includes('From Trainer'), plan: { name: item.name, kind: item.type } });
+            navigation.navigate(CLIENT_DIET_PLAN_DETAIL, { planId: item.id, self: !item.source.includes('From Trainer'), plan: { name: item.name, kind: item.type } });
           }
         }}
       >
@@ -297,144 +280,6 @@ export default function PlansScreen({ navigation }) {
   );
 }
 
-// // Client diet plans surface: self-authored (My Routines context) and
-// // trainer-assigned (From Trainer context) share this list; the builder
-// // and viewer are shared too — only catalog access differs (trainer-only).
-// function DietPlansList({ styles, colors, navigation, fromTrainer }) {
-//   const [plans, setPlans] = useState([]);
-
-//   useFocusEffect(
-//     useCallback(() => {
-//       let mounted = true;
-//       api('/client/diet-plans')
-//         .then((rows) => {
-//           if (mounted) setPlans(rows.filter((p) => (fromTrainer ? p.created_by === 'trainer' : p.created_by === 'client')));
-//         })
-//         .catch(() => { if (mounted) setPlans([]); });
-//       return () => { mounted = false; };
-//     }, [fromTrainer])
-//   );
-
-//   const checkIn = async (plan, followed) => {
-//     const today = new Date().toISOString().slice(0, 10);
-//     try {
-//       await api(`/client/diet-plans/${plan.id}/checkins`, {
-//         method: 'POST',
-//         body: { date: today, followed },
-//       });
-//     } catch (e) {
-//       Alert.alert('Check-in failed', e.message || 'Please try again.');
-//     }
-//   };
-
-//   if (plans.length === 0) {
-//     return (
-//       <View style={{ flex: 1 }}>
-//         {!fromTrainer && (
-//           <View style={styles.dietSegRow}>
-//             <View style={[styles.dietSegBtn, styles.dietSegBtnOn]}>
-//               <Text style={[styles.dietSegText, { color: '#fff' }]}>Plans</Text>
-//             </View>
-//             <TouchableOpacity
-//               style={styles.dietSegBtn}
-//               onPress={() => navigation.navigate('MyDishes')}
-//             >
-//               <Text style={styles.dietSegText}>My Dishes ›</Text>
-//             </TouchableOpacity>
-//           </View>
-//         )}
-//         <View style={styles.emptyWrap}>
-//           <Ionicons name="nutrition-outline" size={38} color={colors.textDim} />
-//           <Text style={styles.emptyTitle}>{fromTrainer ? 'Nothing assigned yet' : 'No diet plans yet'}</Text>
-//           <Text style={styles.emptySub}>
-//             {fromTrainer
-//               ? 'Diet plans your trainer assigns will appear here.'
-//               : 'Build your own day-by-day nutrition plan.'}
-//           </Text>
-//           {!fromTrainer && (
-//             <TouchableOpacity
-//               style={styles.emptyBtn}
-//               onPress={() => navigation.navigate('DietPlanBuilder', { self: true })}
-//             >
-//               <Ionicons name="add" size={17} color={colors.primary} />
-//               <Text style={styles.emptyBtnText}>New Diet Plan</Text>
-//             </TouchableOpacity>
-//           )}
-//         </View>
-//       </View>
-//     );
-//   }
-
-//   return (
-//     <View style={{ flex: 1 }}>
-//       {!fromTrainer && (
-//         <View style={styles.dietSegRow}>
-//           <View style={[styles.dietSegBtn, styles.dietSegBtnOn]}>
-//             <Text style={[styles.dietSegText, { color: '#fff' }]}>Plans</Text>
-//           </View>
-//           <TouchableOpacity
-//             style={styles.dietSegBtn}
-//             onPress={() => navigation.navigate('MyDishes')}
-//           >
-//             <Text style={styles.dietSegText}>My Dishes ›</Text>
-//           </TouchableOpacity>
-//         </View>
-//       )}
-
-//       <FlatList
-//         data={plans}
-//         keyExtractor={(p) => String(p.id)}
-//         contentContainerStyle={{ padding: 20, paddingTop: 6, paddingBottom: 40 }}
-//         ListHeaderComponent={
-//           !fromTrainer ? (
-//             <TouchableOpacity
-//               style={styles.newRoutineBtn}
-//               onPress={() => navigation.navigate('DietPlanBuilder', { self: true })}
-//             >
-//               <Ionicons name="add" size={17} color={colors.primary} />
-//               <Text style={styles.newRoutineText}>New Diet Plan</Text>
-//             </TouchableOpacity>
-//           ) : null
-//         }
-//         renderItem={({ item: plan }) => {
-//           const itemCount = (plan.days || []).reduce(
-//             (n, d) => n + (d.meals || []).reduce((m, mm) => m + (mm.items || []).length, 0), 0
-//           );
-//           const planTags = plan.display_tags || plan.tags || [];
-//           return (
-//             <TouchableOpacity
-//               style={styles.card}
-//               activeOpacity={0.8}
-//               onPress={() => navigation.navigate('ClientDietPlanDetail', { planId: plan.id, self: !fromTrainer, plan: { name: plan.name, trainer_name: plan.trainer_name } })}
-//             >
-//               <View style={styles.templateTag}>
-//                 <Ionicons name="nutrition-outline" size={13} color={fromTrainer ? colors.blue : colors.primary} />
-//               </View>
-//               <View style={{ flex: 1 }}>
-//                 <Text style={styles.name} numberOfLines={1}>
-//                   {plan.name}
-//                 </Text>
-//                 <Text style={[styles.meta, NUMS]}>
-//                   {(fromTrainer ? `From ${plan.trainer_name || 'your trainer'} · ` : '') + itemCount + ' items' + (plan.daily_calorie_target ? ` · ${plan.daily_calorie_target} cal/day` : '')}
-//                 </Text>
-//                 {planTags.length > 0 && (
-//                   <View style={styles.tagRow}>
-//                     {planTags.slice(0, 3).map((tag) => (
-//                       <View key={tag} style={[styles.tagChip, fromTrainer && styles.tagChipTrainer]}>
-//                         <Text style={[styles.tagChipText, fromTrainer && styles.tagChipTextTrainer]}>{tag}</Text>
-//                       </View>
-//                     ))}
-//                   </View>
-//                 )}
-//               </View>
-//               <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-//             </TouchableOpacity>
-//           );
-//         }}
-//       />
-//     </View>
-//   );
-// }
 
 
 
@@ -450,8 +295,6 @@ function DietPlansList({ styles, colors, navigation, fromTrainer }) {
       let mounted = true;
         if (fromTrainer) {
         fetchAndCacheTrainerContent('trainer:diet-plans', () => api('/client/diet-plans'))
-      // if (fromTrainer) {
-      //   api('/client/diet-plans')
           .then((rows) => {
             if (mounted) setPlans(rows.filter((p) => p.created_by === 'trainer'));
           })
@@ -463,73 +306,54 @@ function DietPlansList({ styles, colors, navigation, fromTrainer }) {
     }, [fromTrainer])
   );
 
+  const segRow = !fromTrainer && (
+    <View style={styles.dietSegRow}>
+      <View style={[styles.dietSegBtn, styles.dietSegBtnOn]}>
+        <Text style={[styles.dietSegText, { color: '#fff' }]}>Plans</Text>
+      </View>
+      <TouchableOpacity style={styles.dietSegBtn} onPress={() => navigation.navigate(MY_DISHES)}>
+        <Text style={styles.dietSegText}>My Dishes ›</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   if (plans.length === 0) {
     return (
       <View style={{ flex: 1 }}>
-        {!fromTrainer && (
-          <View style={styles.dietSegRow}>
-            <View style={[styles.dietSegBtn, styles.dietSegBtnOn]}>
-              <Text style={[styles.dietSegText, { color: '#fff' }]}>Plans</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.dietSegBtn}
-              onPress={() => navigation.navigate('MyDishes')}
-            >
-              <Text style={styles.dietSegText}>My Dishes ›</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-        <View style={styles.emptyWrap}>
-          <Ionicons name="nutrition-outline" size={38} color={colors.textDim} />
-          <Text style={styles.emptyTitle}>{fromTrainer ? 'Nothing assigned yet' : 'No diet plans yet'}</Text>
-          <Text style={styles.emptySub}>
-            {fromTrainer
+        {segRow}
+        <PlanEmptyState
+          styles={styles}
+          colors={colors}
+          icon="nutrition-outline"
+          iconSize={38}
+          title={fromTrainer ? 'Nothing assigned yet' : 'No diet plans yet'}
+          subtitle={
+            fromTrainer
               ? 'Diet plans your trainer assigns will appear here.'
-              : 'Build your own day-by-day nutrition plan.'}
-          </Text>
-          {!fromTrainer && (
-            <TouchableOpacity
-              style={styles.emptyBtn}
-              onPress={() => navigation.navigate('DietPlanBuilder', { self: true })}
-            >
-              <Ionicons name="add" size={17} color={colors.primary} />
-              <Text style={styles.emptyBtnText}>New Diet Plan</Text>
-            </TouchableOpacity>
-          )}
-        </View>
+              : 'Build your own day-by-day nutrition plan.'
+          }
+          actionLabel={!fromTrainer ? 'New Diet Plan' : null}
+          onAction={() => navigation.navigate(DIET_PLAN_BUILDER, { self: true })}
+        />
       </View>
     );
   }
 
   return (
     <View style={{ flex: 1 }}>
-      {!fromTrainer && (
-        <View style={styles.dietSegRow}>
-          <View style={[styles.dietSegBtn, styles.dietSegBtnOn]}>
-            <Text style={[styles.dietSegText, { color: '#fff' }]}>Plans</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.dietSegBtn}
-            onPress={() => navigation.navigate('MyDishes')}
-          >
-            <Text style={styles.dietSegText}>My Dishes ›</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
+      {segRow}
       <FlatList
         data={plans}
         keyExtractor={(p) => String(p.id)}
         contentContainerStyle={{ padding: 20, paddingTop: 6, paddingBottom: 40 }}
         ListHeaderComponent={
           !fromTrainer ? (
-            <TouchableOpacity
-              style={styles.newRoutineBtn}
-              onPress={() => navigation.navigate('DietPlanBuilder', { self: true })}
-            >
-              <Ionicons name="add" size={17} color={colors.primary} />
-              <Text style={styles.newRoutineText}>New Diet Plan</Text>
-            </TouchableOpacity>
+            <NewPlanButton
+              styles={styles}
+              colors={colors}
+              label="New Diet Plan"
+              onPress={() => navigation.navigate(DIET_PLAN_BUILDER, { self: true })}
+            />
           ) : null
         }
         renderItem={({ item: plan }) => {
@@ -538,33 +362,19 @@ function DietPlansList({ styles, colors, navigation, fromTrainer }) {
           );
           const planTags = plan.display_tags || plan.tags || [];
           return (
-            <TouchableOpacity
-              style={styles.card}
-              activeOpacity={0.8}
-              onPress={() => navigation.navigate('ClientDietPlanDetail', { planId: plan.id, self: !fromTrainer, plan: { name: plan.name, trainer_name: plan.trainer_name } })}
-            >
-              <View style={styles.templateTag}>
-                <Ionicons name="nutrition-outline" size={13} color={fromTrainer ? colors.blue : colors.primary} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.name} numberOfLines={1}>
-                  {plan.name}
-                </Text>
-                <Text style={[styles.meta, NUMS]}>
-                  {(fromTrainer ? `From ${plan.trainer_name || 'your trainer'} · ` : '') + itemCount + ' items' + (plan.daily_calorie_target ? ` · ${plan.daily_calorie_target} cal/day` : '')}
-                </Text>
-                {planTags.length > 0 && (
-                  <View style={styles.tagRow}>
-                    {planTags.slice(0, 3).map((tag) => (
-                      <View key={tag} style={[styles.tagChip, fromTrainer && styles.tagChipTrainer]}>
-                        <Text style={[styles.tagChipText, fromTrainer && styles.tagChipTextTrainer]}>{tag}</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-            </TouchableOpacity>
+            <PlanCard
+              styles={styles}
+              colors={colors}
+              icon="nutrition-outline"
+              iconColor={fromTrainer ? colors.blue : colors.primary}
+              name={plan.name}
+              meta={
+                (fromTrainer ? `From ${plan.trainer_name || 'your trainer'} · ` : '') + itemCount + ' items' + (plan.daily_calorie_target ? ` · ${plan.daily_calorie_target} cal/day` : '')
+              }
+              tags={planTags}
+              trainerTagStyle={fromTrainer}
+              onPress={() => navigation.navigate(CLIENT_DIET_PLAN_DETAIL, { planId: plan.id, self: !fromTrainer, plan: { name: plan.name, trainer_name: plan.trainer_name } })}
+            />
           );
         }}
       />
@@ -572,109 +382,13 @@ function DietPlansList({ styles, colors, navigation, fromTrainer }) {
   );
 }
 
-
-// function SupplementPlansList({ styles, colors, navigation, fromTrainer }) {
-//   const [plans, setPlans] = useState([]);
-
-//   useFocusEffect(
-//     useCallback(() => {
-//       let mounted = true;
-//       api('/client/supplement-plans')
-//         .then((rows) => {
-//           if (mounted) setPlans(rows.filter((p) => (fromTrainer ? p.created_by === 'trainer' : p.created_by === 'client')));
-//         })
-//         .catch(() => { if (mounted) setPlans([]); });
-//       return () => { mounted = false; };
-//     }, [fromTrainer])
-//   );
-
-//   if (plans.length === 0) {
-//     return (
-//       <View style={styles.emptyWrap}>
-//         <Ionicons name="medkit-outline" size={38} color={colors.textDim} />
-//         <Text style={styles.emptyTitle}>{fromTrainer ? 'Nothing assigned yet' : 'No supplement plans yet'}</Text>
-//         <Text style={styles.emptySub}>
-//           {fromTrainer
-//             ? 'Supplement plans your trainer assigns will appear here.'
-//             : 'Track your supplements and vitamins.'}
-//         </Text>
-//         {!fromTrainer && (
-//           <TouchableOpacity
-//             style={styles.emptyBtn}
-//             onPress={() => navigation.navigate('CoachingPlanBuilder', { kind: 'supplement', self: true })}
-//           >
-//             <Ionicons name="add" size={17} color={colors.primary} />
-//             <Text style={styles.emptyBtnText}>New Supplement Plan</Text>
-//           </TouchableOpacity>
-//         )}
-//       </View>
-//     );
-//   }
-
-//   return (
-//     <View style={{ flex: 1 }}>
-//       <FlatList
-//         data={plans}
-//         keyExtractor={(p) => String(p.id)}
-//         contentContainerStyle={{ padding: 20, paddingTop: 6, paddingBottom: 40 }}
-//         ListHeaderComponent={
-//           !fromTrainer ? (
-//             <TouchableOpacity
-//               style={styles.newRoutineBtn}
-//               onPress={() => navigation.navigate('CoachingPlanBuilder', { kind: 'supplement', self: true })}
-//             >
-//               <Ionicons name="add" size={17} color={colors.primary} />
-//               <Text style={styles.newRoutineText}>New Supplement Plan</Text>
-//             </TouchableOpacity>
-//           ) : null
-//         }
-//         renderItem={({ item: plan }) => {
-//           const itemCount = (plan.items || []).length;
-//           const planTags = plan.tags || plan.display_tags || [];
-//           return (
-//             <TouchableOpacity
-//               style={styles.card}
-//               activeOpacity={0.8}
-//               onPress={() => navigation.navigate('ClientDietPlanDetail', { planId: plan.id, self: !fromTrainer, plan: { name: plan.name, trainer_name: plan.trainer_name, kind: 'supplement' } })}
-//             >
-//               <View style={styles.templateTag}>
-//                 <Ionicons name="medkit-outline" size={13} color={fromTrainer ? colors.blue : colors.primary} />
-//               </View>
-//               <View style={{ flex: 1 }}>
-//                 <Text style={styles.name} numberOfLines={1}>
-//                   {plan.name}
-//                 </Text>
-//                 <Text style={[styles.meta, NUMS]}>
-//                   {(fromTrainer ? `From ${plan.trainer_name || 'your trainer'} · ` : '') + itemCount + ' supplements'}
-//                 </Text>
-//                 {planTags.length > 0 && (
-//                   <View style={styles.tagRow}>
-//                     {planTags.slice(0, 3).map((tag) => (
-//                       <View key={tag} style={[styles.tagChip, fromTrainer && styles.tagChipTrainer]}>
-//                         <Text style={[styles.tagChipText, fromTrainer && styles.tagChipTextTrainer]}>{tag}</Text>
-//                       </View>
-//                     ))}
-//                   </View>
-//                 )}
-//               </View>
-//               <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-//             </TouchableOpacity>
-//           );
-//         }}
-//       />
-//     </View>
-//   );
-// }
-
 function SupplementPlansList({ styles, colors, navigation, fromTrainer }) {
   const [plans, setPlans] = useState([]);
 
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
-      // if (fromTrainer) {
-      //   api('/client/supplement-plans')
-        if (fromTrainer) {
+      if (fromTrainer) {
         fetchAndCacheTrainerContent('trainer:supplement-plans', () => api('/client/supplement-plans'))
           .then((rows) => {
             if (mounted) setPlans(rows.filter((p) => p.created_by === 'trainer'));
@@ -689,24 +403,20 @@ function SupplementPlansList({ styles, colors, navigation, fromTrainer }) {
 
   if (plans.length === 0) {
     return (
-      <View style={styles.emptyWrap}>
-        <Ionicons name="medkit-outline" size={38} color={colors.textDim} />
-        <Text style={styles.emptyTitle}>{fromTrainer ? 'Nothing assigned yet' : 'No supplement plans yet'}</Text>
-        <Text style={styles.emptySub}>
-          {fromTrainer
+      <PlanEmptyState
+        styles={styles}
+        colors={colors}
+        icon="medkit-outline"
+        iconSize={38}
+        title={fromTrainer ? 'Nothing assigned yet' : 'No supplement plans yet'}
+        subtitle={
+          fromTrainer
             ? 'Supplement plans your trainer assigns will appear here.'
-            : 'Track your supplements and vitamins.'}
-        </Text>
-        {!fromTrainer && (
-          <TouchableOpacity
-            style={styles.emptyBtn}
-            onPress={() => navigation.navigate('CoachingPlanBuilder', { kind: 'supplement', self: true })}
-          >
-            <Ionicons name="add" size={17} color={colors.primary} />
-            <Text style={styles.emptyBtnText}>New Supplement Plan</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+            : 'Track your supplements and vitamins.'
+        }
+        actionLabel={!fromTrainer ? 'New Supplement Plan' : null}
+        onAction={() => navigation.navigate(COACHING_PLAN_BUILDER, { kind: 'supplement', self: true })}
+      />
     );
   }
 
@@ -718,53 +428,37 @@ function SupplementPlansList({ styles, colors, navigation, fromTrainer }) {
         contentContainerStyle={{ padding: 20, paddingTop: 6, paddingBottom: 40 }}
         ListHeaderComponent={
           !fromTrainer ? (
-            <TouchableOpacity
-              style={styles.newRoutineBtn}
-              onPress={() => navigation.navigate('CoachingPlanBuilder', { kind: 'supplement', self: true })}
-            >
-              <Ionicons name="add" size={17} color={colors.primary} />
-              <Text style={styles.newRoutineText}>New Supplement Plan</Text>
-            </TouchableOpacity>
+            <NewPlanButton
+              styles={styles}
+              colors={colors}
+              label="New Supplement Plan"
+              onPress={() => navigation.navigate(COACHING_PLAN_BUILDER, { kind: 'supplement', self: true })}
+            />
           ) : null
         }
         renderItem={({ item: plan }) => {
           const itemCount = (plan.items || []).length;
           const planTags = plan.tags || plan.display_tags || [];
           return (
-            <TouchableOpacity
-              style={styles.card}
-              activeOpacity={0.8}
-              onPress={() => navigation.navigate('ClientDietPlanDetail', { planId: plan.id, self: !fromTrainer, plan: { name: plan.name, trainer_name: plan.trainer_name, kind: 'supplement' } })}
-            >
-              <View style={styles.templateTag}>
-                <Ionicons name="medkit-outline" size={13} color={fromTrainer ? colors.blue : colors.primary} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.name} numberOfLines={1}>
-                  {plan.name}
-                </Text>
-                <Text style={[styles.meta, NUMS]}>
-                  {(fromTrainer ? `From ${plan.trainer_name || 'your trainer'} · ` : '') + itemCount + ' supplements'}
-                </Text>
-                {planTags.length > 0 && (
-                  <View style={styles.tagRow}>
-                    {planTags.slice(0, 3).map((tag) => (
-                      <View key={tag} style={[styles.tagChip, fromTrainer && styles.tagChipTrainer]}>
-                        <Text style={[styles.tagChipText, fromTrainer && styles.tagChipTextTrainer]}>{tag}</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-            </TouchableOpacity>
+            <PlanCard
+              styles={styles}
+              colors={colors}
+              icon="medkit-outline"
+              iconColor={fromTrainer ? colors.blue : colors.primary}
+              name={plan.name}
+              meta={
+                (fromTrainer ? `From ${plan.trainer_name || 'your trainer'} · ` : '') + itemCount + ' supplements'
+              }
+              tags={planTags}
+              trainerTagStyle={fromTrainer}
+              onPress={() => navigation.navigate(CLIENT_DIET_PLAN_DETAIL, { planId: plan.id, self: !fromTrainer, plan: { name: plan.name, trainer_name: plan.trainer_name, kind: 'supplement' } })}
+            />
           );
         }}
       />
     </View>
   );
 }
-
 
 function MyRoutinesList({ styles, colors, navigation, pinned, onTogglePin }) {
   const [plans, setPlans] = useState([]);
@@ -779,27 +473,28 @@ function MyRoutinesList({ styles, colors, navigation, pinned, onTogglePin }) {
 
   if (!plans.length) {
     return (
-      <View style={styles.emptyWrap}>
-        <Ionicons name="list-outline" size={40} color={colors.textDim} />
-        <Text style={styles.emptyTitle}>No routines yet</Text>
-        <Text style={styles.emptySub}>
-          Build a reusable template once — start it in one tap every time.
-        </Text>
-        <TouchableOpacity style={styles.emptyBtn} onPress={() => navigation.navigate('PlanEditor', {})}>
-          <Ionicons name="add" size={18} color={colors.primary} />
-          <Text style={styles.emptyBtnText}>Create a Routine</Text>
-        </TouchableOpacity>
-      </View>
+      <PlanEmptyState
+        styles={styles}
+        colors={colors}
+        icon="list-outline"
+        title="No routines yet"
+        subtitle="Build a reusable template once — start it in one tap every time."
+        actionLabel="Create a Routine"
+        actionIconSize={18}
+        onAction={() => navigation.navigate(PLAN_EDITOR, {})}
+      />
     );
   }
 
   return (
     <FlatList
       ListHeaderComponent={
-        <TouchableOpacity style={styles.newRoutineBtn} onPress={() => navigation.navigate('PlanEditor', {})}>
-          <Ionicons name="add" size={17} color={colors.primary} />
-          <Text style={styles.newRoutineText}>New Routine</Text>
-        </TouchableOpacity>
+        <NewPlanButton
+          styles={styles}
+          colors={colors}
+          label="New Routine"
+          onPress={() => navigation.navigate(PLAN_EDITOR, {})}
+        />
       }
       data={plans}
       keyExtractor={(item) => String(item.id)}
@@ -807,49 +502,23 @@ function MyRoutinesList({ styles, colors, navigation, pinned, onTogglePin }) {
       renderItem={({ item }) => {
         const planTags = item.tags || [];
         return (
-        <TouchableOpacity
-          style={styles.card}
-          activeOpacity={0.8}
-          onPress={() => navigation.navigate('PlanDetail', { planId: item.id })}
-        >
-          <View style={styles.templateTag}>
-            <Ionicons name="copy-outline" size={13} color={colors.primary} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.name} numberOfLines={1}>
-              {item.name}
-            </Text>
-            <Text style={[styles.meta, NUMS]}>
-              {item.exerciseCount} exercises
-              {item.used_count > 0 ? ` · used ${item.used_count}×` : ' · never used'}
-            </Text>
-            {item.alternativeCount > 0 && (
-              <View style={styles.swapBadge}>
-                <Ionicons name="swap-horizontal" size={11} color={colors.blue} />
-                <Text style={styles.swapBadgeText}>
-                  {item.alternativeCount} swap option{item.alternativeCount === 1 ? '' : 's'}
-                </Text>
-              </View>
-            )}
-            {planTags.length > 0 && (
-              <View style={styles.tagRow}>
-                {planTags.slice(0, 3).map((tag) => (
-                  <View key={tag} style={styles.tagChip}>
-                    <Text style={styles.tagChipText}>{tag}</Text>
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-          <PinButton
+          <PlanCard
             styles={styles}
             colors={colors}
+            icon="copy-outline"
+            name={item.name}
+            meta={
+              `${item.exerciseCount} exercises` +
+              (item.used_count > 0 ? ` · used ${item.used_count}×` : ' · never used')
+            }
+            tags={planTags}
+            // swapBadgeCount={item.alternativeCount || null}
             pinned={pinned.has(`self:${item.id}`)}
-            onPress={() => onTogglePin('self', item.id)}
+            onTogglePin={() => onTogglePin('self', item.id)}
+            onPress={() => navigation.navigate(PLAN_DETAIL, { planId: item.id })}
           />
-          <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-        </TouchableOpacity>
-      );}}
+        );
+      }}
     />
   );
 }
@@ -865,8 +534,7 @@ function AssignedList({ styles, colors, navigation, pinned, onTogglePin }) {
         return;
       }
       let mounted = true;
-      // api('/client/assigned-plans')
-        fetchAndCacheTrainerContent('trainer:assigned-workouts', () => api('/client/assigned-plans'))
+      fetchAndCacheTrainerContent('trainer:assigned-workouts', () => api('/client/assigned-plans'))
         .then((rows) => { if (mounted) setAssigned(rows); })
         .catch(() => { if (mounted) setAssigned([]); });
       return () => { mounted = false; };
@@ -875,13 +543,13 @@ function AssignedList({ styles, colors, navigation, pinned, onTogglePin }) {
 
   if (!assigned.length) {
     return (
-      <View style={styles.emptyWrap}>
-        <Ionicons name="fitness-outline" size={40} color={colors.textDim} />
-        <Text style={styles.emptyTitle}>Nothing assigned yet</Text>
-        <Text style={styles.emptySub}>
-          When your trainer assigns a workout, it will show up here ready to start.
-        </Text>
-      </View>
+      <PlanEmptyState
+        styles={styles}
+        colors={colors}
+        icon="fitness-outline"
+        title="Nothing assigned yet"
+        subtitle="When your trainer assigns a workout, it will show up here ready to start."
+      />
     );
   }
 
@@ -893,39 +561,21 @@ function AssignedList({ styles, colors, navigation, pinned, onTogglePin }) {
       renderItem={({ item: ap }) => {
         const planTags = ap.tags || [];
         return (
-        <TouchableOpacity
-          style={styles.assignedCard}
-          activeOpacity={0.8}
-          onPress={() => navigation.navigate('ClientAssignedDetail', { planId: ap.id })}
-        >
-          <View style={styles.assignedAccent} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.name} numberOfLines={1}>
-              {ap.name}
-            </Text>
-            <Text style={[styles.meta, NUMS]}>
-              Assigned by {ap.trainer_name || 'your trainer'} ·{' '}
-              {ap.exercises?.length ?? 0} exercises
-            </Text>
-            {planTags.length > 0 && (
-              <View style={styles.tagRow}>
-                {planTags.slice(0, 3).map((tag) => (
-                  <View key={tag} style={[styles.tagChip, styles.tagChipTrainer]}>
-                    <Text style={[styles.tagChipText, styles.tagChipTextTrainer]}>{tag}</Text>
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-          <PinButton
+          <PlanCard
             styles={styles}
             colors={colors}
+            variant="assigned"
+            accent
+            name={ap.name}
+            meta={`Assigned by ${ap.trainer_name || 'your trainer'} · ${ap.exercises?.length ?? 0} exercises`}
+            tags={planTags}
+            trainerTagStyle
             pinned={pinned.has(`trainer_assigned:${ap.id}`)}
-            onPress={() => onTogglePin('trainer_assigned', ap.id)}
+            onTogglePin={() => onTogglePin('trainer_assigned', ap.id)}
+            onPress={() => navigation.navigate(CLIENT_ASSIGNED_DETAIL, { planId: ap.id })}
           />
-          <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-        </TouchableOpacity>
-      );}}
+        );
+      }}
     />
   );
 }
@@ -953,18 +603,6 @@ function SegmentedControl({ styles, colors, tab, setTab }) {
         );
       })}
     </View>
-  );
-}
-
-function PinButton({ styles, colors, pinned, onPress }) {
-  return (
-    <TouchableOpacity onPress={onPress} style={styles.pinBtn} hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}>
-      <Ionicons
-        name={pinned ? 'star' : 'star-outline'}
-        size={18}
-        color={pinned ? colors.yellow : colors.textDim}
-      />
-    </TouchableOpacity>
   );
 }
 

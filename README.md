@@ -1146,3 +1146,37 @@ when tapped directly.
    taps near the right edge of the title area never trigger ⓘ.
 7. Light/dark theme: notes editor labels/tick states, trainer note rows on
    both screens, picker info zone.
+
+## Workout Routine Alternatives Survive Wipe/Reinstall
+
+Closes a backup-fidelity gap: configured exercise alternatives (the swap
+options on routine entries) previously existed ONLY in local SQLite —
+`buildPlanPayload` never included them, so the server copy had none and a
+data clear / reinstall restored routines with zero alternatives (and no
+swap options mid-workout). Diet already handled this; workouts now match:
+
+- `buildPlanPayload` emits `alternatives: [names…]` per exercise; they ride
+  INSIDE the existing `client_workout_plans.exercises` JSONB (no schema
+  change), validated server-side with the same max-3/no-duplicates rules
+- Device restore recreates the `plan_exercise_alternatives` rows
+- One-time migration v32 re-enqueues every existing local routine so
+  already-synced plans get their alternatives onto the server on next sync
+
+Trainer-assigned plans always kept alternatives server-side; additionally,
+Home's pinned strip and Assigned Plan Detail now fall back to the cached
+assigned-plans copy when offline (`fetchAndCacheTrainerContent`, same as
+the Plans list) instead of silently disappearing / erroring.
+
+### Manual test notes
+
+1. Configure 2 alternatives on Bench Press in a saved routine → wait for
+   sync → clear app data → restore → routine shows both alternatives;
+   starting the workout offers them under Swap.
+2. Negative: hand-craft a payload with 4 alternatives or a duplicate name →
+   POST /user/backup/workout-plans returns 400 ("Up to 3 alternatives per
+   exercise"), nothing truncated.
+3. Existing-plan migration: upgrade the app with pre-v32 routines → first
+   sync re-uploads each plan once → server JSONB now contains alternatives.
+4. Offline: airplane mode → Home pinned assigned workouts still visible;
+   opening an assigned plan works from cache with its alternatives.
+5. Light/dark theme unaffected (no new UI surfaces).

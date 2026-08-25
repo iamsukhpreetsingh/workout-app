@@ -17,6 +17,7 @@ import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import RestEditorModal from '../components/RestEditorModal';
 import { groupLabels } from '../store/WorkoutContext';
 import { useColors } from '../theme';
+import { CLIENT_DETAIL } from '../shared/constants/routes';
 
 let groupCounter = 0;
 const nextGroupId = () => `a${Date.now()}_${++groupCounter}`;
@@ -186,7 +187,7 @@ export default function AssignWorkoutScreen({ route, navigation }) {
         });
       }
       }
-      navigation.navigate('ClientDetail', {
+      navigation.navigate(CLIENT_DETAIL, {
         ...route.params,
         assignedToast: name.trim(),
         refreshKey: Date.now(),

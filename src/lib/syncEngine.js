@@ -268,6 +268,14 @@ async function buildPlanPayload(pid) {
      WHERE pe.plan_id = ? ORDER BY pe.position`,
     [pid]
   );
+  // configured swap alternatives ride along per exercise — without them a
+  // backup restore loses the user's configured substitution options
+  for (const ex of exs) {
+    ex.alternatives = await db.getAllAsync(
+      'SELECT alternative_exercise_name FROM plan_exercise_alternatives WHERE plan_exercise_id = ? ORDER BY order_index',
+      [String(ex.id)]
+    );
+  }
   return {
     local_plan_id: String(p.id),
     name: p.name,
@@ -280,6 +288,7 @@ async function buildPlanPayload(pid) {
       rest_seconds: ex.rest_seconds,
       order_index: ex.position ?? i,
       group_id: ex.group_id,
+      alternatives: (ex.alternatives || []).map((a) => a.alternative_exercise_name),
     })),
     created_at: p.created_at ? new Date(p.created_at).toISOString() : new Date().toISOString(),
     updated_at: new Date().toISOString(),

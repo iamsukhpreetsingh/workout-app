@@ -12,27 +12,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
 import DishPickerModal from '../components/DishPickerModal';
-import MealItemAlternativesEditor from '../components/MealItemAlternativesEditor';
-import { listRecipes, createRecipe } from '../db/recipes';
-import { createDietPlan, updateDietPlan, getDietPlan, isLocalDietPlanId } from '../db/dietPlans';
+import { listRecipes, createRecipe, createDietPlan, updateDietPlan, getDietPlan, isLocalDietPlanId } from '../services/dietService';
 import { getAllergenConflicts } from '../lib/allergens';
+import DietDayCard from '../features/diet/components/DietDayCard';
+import { nid } from '../features/diet/utils/dietPlanUtils';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
-const MEAL_TYPES = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Pre-Workout', 'Post-Workout'];
 
-let uid = 0;
-const nid = () => `x${Date.now()}_${++uid}`;
-
-const scaled = (v, mult) => (v == null ? null : Math.round(Number(v) * mult));
-const macroLine = (it) => {
-  const m = it.quantity_multiplier || 1;
-  const parts = [];
-  if (it.calories != null) parts.push(`${scaled(it.calories, m)} cal`);
-  if (it.protein_g != null) parts.push(`${scaled(it.protein_g, m)}P`);
-  if (it.carbs_g != null) parts.push(`${scaled(it.carbs_g, m)}C`);
-  if (it.fat_g != null) parts.push(`${scaled(it.fat_g, m)}F`);
-  return parts.join(' · ') || 'macros not set';
-};
 
 
 
@@ -228,11 +214,6 @@ const planConflicts = (() => {
           : d
       )
     );
-
-  const findMeal = (mealKey) => {
-    for (const d of days) for (const m of d.meals) if (m.key === mealKey) return m;
-    return null;
-  };
 
   const addItemToMeal = (mealKey, item) =>
     mutateDays((ds) =>
@@ -504,89 +485,29 @@ const planConflicts = (() => {
       </View>
 
       {/* days */}
-      {days.map((d, di) => {
-        const isCollapsed = collapsed.has(d.key);
-        return (
-          <View key={d.key} style={styles.dayCard}>
-            <View style={styles.dayHeader}>
-              <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 6 }} onPress={() => toggleCollapse(d.key)}>
-                <Ionicons name={isCollapsed ? 'chevron-forward' : 'chevron-down'} size={15} color={colors.textDim} />
-                <TextInput
-                  style={styles.dayLabel}
-                  value={d.day_label}
-                  onChangeText={(v) => renameDay(d.key, v)}
-                />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => removeDay(d.key)} style={{ padding: 4 }}>
-                <Ionicons name="close" size={16} color={colors.red} />
-              </TouchableOpacity>
-            </View>
-
-            {!isCollapsed && (
-              <View>
-                {d.meals.map((m) => (
-                  <View key={m.key} style={styles.mealSlot}>
-                    <Text style={styles.mealType}>{String(m.meal_type).toUpperCase()}</Text>
-                    <TouchableOpacity
-                      style={styles.addItemMini}
-                      onPress={() => setPicker({ mealKey: m.key, mealType: m.meal_type })}
-                    >
-                      <Ionicons name="add" size={13} color={colors.primary} />
-                      <Text style={styles.addItemMiniText}>Item</Text>
-                    </TouchableOpacity>
-                    {m.items.map((i) => (
-                      <View key={i.key} style={styles.itemCard}>
-                        <View style={styles.itemHeader}>
-                          <Text style={styles.itemName} numberOfLines={1}>
-                            {i.name}
-                            {i.catalog_item_id ? ' ★' : ''}
-                          </Text>
-                          <View style={styles.multStepper}>
-                            <TouchableOpacity onPress={() => adjustMultiplier(m.key, i.key, -0.5)}>
-                              <Ionicons name="remove" size={13} color={colors.text} />
-                            </TouchableOpacity>
-                            <Text style={[styles.multText, NUMS]}>{i.quantity_multiplier || 1}x</Text>
-                            <TouchableOpacity onPress={() => adjustMultiplier(m.key, i.key, 0.5)}>
-                              <Ionicons name="add" size={13} color={colors.text} />
-                            </TouchableOpacity>
-                          </View>
-                          <TouchableOpacity onPress={() => removeItem(m.key, i.key)} style={{ padding: 3 }}>
-                            <Ionicons name="close" size={14} color={colors.textDim} />
-                          </TouchableOpacity>
-                        </View>
-                        <Text style={[styles.itemMacro, NUMS]}>{macroLine(i)}</Text>
-                        {/* configured dish alternatives — same component in
-                            BOTH builder contexts (self-authored + assign) */}
-                        <MealItemAlternativesEditor
-                          primaryName={i.name}
-                          alternatives={i.alternatives || []}
-                          onChange={(next) => setItemAlternatives(m.key, i.key, next)}
-                          excludeNames={m.items
-                            .filter((x) => x.key !== i.key)
-                            .map((x) => x.name)}
-                          self={self}
-                          catalog={catalog}
-                          refreshCatalog={refreshCatalog}
-                          clientProfile={clientProfile}
-                          clientName={clientName}
-                        />
-                        <TextInput
-                          style={styles.itemNote}
-                          value={i.client_note}
-                          onChangeText={(v) => setItemNote(m.key, i.key, v)}
-                          placeholder={`Note for ${clientName || 'client'} on this item (optional)`}
-                          placeholderTextColor={colors.textDim}
-                        />
-                      </View>
-                    ))}
-                  </View>
-                ))}
-                <AddMealSlot onPick={(type) => addMealSlot(d.key, type)} styles={styles} colors={colors} />
-              </View>
-            )}
-          </View>
-        );
-      })}
+      {days.map((d) => (
+        <DietDayCard
+          key={d.key}
+          day={d}
+          isCollapsed={collapsed.has(d.key)}
+          styles={styles}
+          colors={colors}
+          clientName={clientName}
+          self={self}
+          catalog={catalog}
+          refreshCatalog={refreshCatalog}
+          clientProfile={clientProfile}
+          onToggleCollapse={toggleCollapse}
+          onRename={renameDay}
+          onRemove={removeDay}
+          onAddMealSlot={(type) => addMealSlot(d.key, type)}
+          onOpenPicker={(mealKey, mealType) => setPicker({ mealKey, mealType })}
+          onAdjustMultiplier={adjustMultiplier}
+          onRemoveItem={removeItem}
+          onSetItemNote={setItemNote}
+          onSetItemAlternatives={setItemAlternatives}
+        />
+      ))}
 
       <TouchableOpacity style={styles.addDayBtn} onPress={addDay}>
         <Ionicons name="add" size={17} color={colors.primary} />
@@ -613,19 +534,6 @@ const planConflicts = (() => {
         onPickCustom={pickCustom}
       />
     </ScrollView>
-  );
-}
-
-function AddMealSlot({ onPick, styles, colors }) {
-  return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-      {MEAL_TYPES.map((t) => (
-        <TouchableOpacity key={t} style={styles.mealChip} onPress={() => onPick(t)}>
-          <Ionicons name="add" size={11} color={colors.primary} />
-          <Text style={styles.mealChipText}>{t}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
   );
 }
 

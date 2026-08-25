@@ -1,12 +1,15 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Alert, StyleSheet } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { getPlan, deletePlan } from '../db/queries';
+import { getPlan, deletePlan } from '../services/routineService';
 import { useWorkout, groupLabels } from '../store/WorkoutContext';
 import { Ionicons } from '@expo/vector-icons';
 import { shareRoutine } from '../lib/share';
 import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
-import { useColors, fmtDate } from '../theme';
+import { useColors } from '../theme';
+import { fmtDate } from '../shared/utils/format';
+import LoadError from '../shared/components/LoadError';
+import { ACTIVE_WORKOUT, PLAN_EDITOR } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -14,15 +17,27 @@ export default function PlanDetailScreen({ route, navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [plan, setPlan] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
   const [detailEx, setDetailEx] = useState(null);
   const { workout, dispatch } = useWorkout();
 
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
-      getPlan(route.params.planId).then((p) => { if (mounted) setPlan(p); });
+      getPlan(route.params.planId)
+        .then((p) => {
+          if (mounted) {
+            setPlan(p);
+            setLoadError(false);
+          }
+        })
+        .catch((e) => {
+          console.warn('[PlanDetailScreen] load failed:', e?.message || e);
+          if (mounted) setLoadError(true);
+        });
       return () => { mounted = false; };
-    }, [route.params.planId])
+    }, [route.params.planId, retryTick])
   );
 
   // Share action in the routine header (same treatment as Session Detail)
@@ -31,7 +46,7 @@ export default function PlanDetailScreen({ route, navigation }) {
       headerRight: () => (
         <View style={{ flexDirection: 'row' }}>
           <TouchableOpacity
-            onPress={() => navigation.navigate('PlanEditor', { planId: plan?.id })}
+            onPress={() => navigation.navigate(PLAN_EDITOR, { planId: plan?.id })}
             style={{ paddingHorizontal: 8 }}
           >
             <Ionicons name="create-outline" size={21} color={colors.text} />
@@ -53,8 +68,12 @@ export default function PlanDetailScreen({ route, navigation }) {
     }
     dispatch({ type: 'START_WORKOUT', name: p.name, planId: p.id, planExercises: p.exercises });
     // Expands the mini-bar's full logging view (there is no Workout tab)
-    navigation.navigate('ActiveWorkout');
+    navigation.navigate(ACTIVE_WORKOUT);
   };
+
+  if (loadError && !plan) {
+    return <LoadError onRetry={() => setRetryTick((t) => t + 1)} />;
+  }
 
   if (!plan) {
     return <View style={styles.container}><Text style={styles.dim}>Loading…</Text></View>;

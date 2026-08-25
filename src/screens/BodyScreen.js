@@ -15,12 +15,13 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
-import { getBodyWeightHistory, logBodyMetric, BODY_METRIC_TYPES, getTodayBodyMetric, getAllBodyMetricsForDate } from '../db/body';
-import { addProgressPhoto, getProgressPhotos, deleteProgressPhoto, getPhotoFilePath } from '../db/photos';
-import { getSettings } from '../db/settings';
+import { getBodyWeightHistory, logBodyMetric, BODY_METRIC_TYPES, getTodayBodyMetric, getAllBodyMetricsForDate, addProgressPhoto, getProgressPhotos, deleteProgressPhoto, getPhotoFilePath } from '../services/bodyService';
+import { getSettings } from '../services/settingsService';
 import { syncPendingMeasurements } from '../lib/syncService';
 import LineChart from '../components/LineChart';
 import { useColors } from '../theme';
+import LoadError from '../shared/components/LoadError';
+import { kgToLb, lbToKg } from '../shared/utils/units';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -33,6 +34,8 @@ export default function BodyScreen({ navigation }) {
   const [chartData, setChartData] = useState([]);
   const [photos, setPhotos] = useState([]);
   const [settings, setSettings] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
   const [lastWeightPrompt, setLastWeightPrompt] = useState(null);
   const [viewPhoto, setViewPhoto] = useState(null);
   const [compareMode, setCompareMode] = useState(false);
@@ -110,22 +113,28 @@ export default function BodyScreen({ navigation }) {
   };
 
   const loadData = useCallback(async () => {
-    const s = await getSettings();
-    setSettings(s);
-    setWeight(String(s.unit === 'lb' ? Math.round(s.bar_weight * 2.205) : s.bar_weight));
+    try {
+      const s = await getSettings();
+      setSettings(s);
+      setWeight(String(s.unit === 'lb' ? Math.round(kgToLb(s.bar_weight)) : s.bar_weight));
 
-    const history = await getBodyWeightHistory();
-    const unit = s.unit || 'kg';
-    setChartData(history.map(h => ({
-      x: new Date(h.date).getTime(),
-      y: unit === 'lb' ? h.value * 2.205 : h.value,
-    })));
+      const history = await getBodyWeightHistory();
+      const unit = s.unit || 'kg';
+      setChartData(history.map(h => ({
+        x: new Date(h.date).getTime(),
+        y: unit === 'lb' ? kgToLb(h.value) : h.value,
+      })));
 
-    const today = await getTodayBodyMetric('weight');
-    setLastWeightPrompt(today ? null : new Date().toDateString());
+      const today = await getTodayBodyMetric('weight');
+      setLastWeightPrompt(today ? null : new Date().toDateString());
 
-    const p = await getProgressPhotos();
-    setPhotos(p);
+      const p = await getProgressPhotos();
+      setPhotos(p);
+      setLoadError(false);
+    } catch (e) {
+      console.warn('[BodyScreen] load failed:', e?.message || e);
+      setLoadError(true);
+    }
   }, []);
 
   useFocusEffect(
@@ -133,7 +142,7 @@ export default function BodyScreen({ navigation }) {
       let mounted = true;
       loadData();
       return () => { mounted = false; };
-    }, [loadData])
+    }, [loadData, retryTick])
   );
 
   const handleLogWeight = async () => {
@@ -143,7 +152,7 @@ export default function BodyScreen({ navigation }) {
       return;
     }
     const unit = settings?.unit || 'kg';
-    const dbValue = unit === 'lb' ? val / 2.205 : val;
+    const dbValue = unit === 'lb' ? lbToKg(val) : val;
     const today = new Date().toISOString().split('T')[0];
     await logBodyMetric(today, 'weight', dbValue, unit);
     syncPendingMeasurements(); // background, non-blocking
@@ -217,6 +226,10 @@ export default function BodyScreen({ navigation }) {
 
   const unit = settings?.unit || 'kg';
   const chartUnit = unit;
+
+  if (loadError && !settings) {
+    return <LoadError onRetry={() => setRetryTick((t) => t + 1)} />;
+  }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>

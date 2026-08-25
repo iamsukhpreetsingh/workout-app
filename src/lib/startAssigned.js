@@ -4,6 +4,7 @@
 // feeds the standard live-session machinery.
 import { listExercises, createExercise, getLastSessionSetsByPosition } from '../db/queries';
 import { getSettings } from '../db/settings';
+import { ACTIVE_WORKOUT } from '../shared/constants/routes';
 
 function guessMuscleGroup(name) {
   const n = name.toLowerCase();
@@ -66,5 +67,5 @@ export async function startAssignedPlan(plan, { dispatch, navigation }) {
     defaultRest: settings.default_rest_seconds,
     sourceAssignedPlanId: plan.id, // marks the session trainer-assigned
   });
-  navigation.navigate('ActiveWorkout');
+  navigation.navigate(ACTIVE_WORKOUT);
 }

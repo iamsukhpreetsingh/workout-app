@@ -12,6 +12,7 @@ import { getSyncSettings } from '../lib/sync';
 import { getCachedProgressionSetting, fetchAndCacheProgressionSetting } from '../lib/progression';
 import { getFormula } from '../progressionFormulas';
 import ProgressionStrategyEditor from '../components/ProgressionStrategyEditor';
+import { INTAKE_FORM, SYNC_SETTINGS } from '../shared/constants/routes';
 
 export default function SettingsScreen({ onSwitchView }) {
   const { themeMode, setThemeMode } = useApp();
@@ -297,7 +298,7 @@ export default function SettingsScreen({ onSwitchView }) {
 
       <TouchableOpacity 
         style={[styles.card, { backgroundColor: colors.card, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
-        onPress={() => navigation.navigate('SyncSettings')}
+        onPress={() => navigation.navigate(SYNC_SETTINGS)}
       >
         <View>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Data & Sync</Text>
@@ -356,7 +357,7 @@ export default function SettingsScreen({ onSwitchView }) {
 
         <TouchableOpacity 
           style={[styles.card, { backgroundColor: colors.card, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
-          onPress={() => navigation.navigate('IntakeForm')}
+          onPress={() => navigation.navigate(INTAKE_FORM)}
         >
           <View style={{ flex: 1, paddingRight: 8 }}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>Health Profile</Text>

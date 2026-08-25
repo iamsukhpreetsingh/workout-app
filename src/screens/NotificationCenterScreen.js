@@ -18,6 +18,7 @@ import {
   dismissNotification,
   markAllNotificationsRead,
 } from '../lib/notificationApi';
+import { CLIENT_ASSIGNED_DETAIL, CLIENT_DETAIL, CLIENT_DIET_PLAN_DETAIL, COACHING_PLAN_DETAIL } from '../shared/constants/routes';
 
 function formatRelativeTime(dateStr) {
   const date = new Date(dateStr);
@@ -147,32 +148,32 @@ export default function NotificationCenterScreen() {
     switch (type) {
       case 'workout_assigned':
         if (deep_link_ref) {
-          navigation.navigate('ClientAssignedDetail', { planId: deep_link_ref });
+          navigation.navigate(CLIENT_ASSIGNED_DETAIL, { planId: deep_link_ref });
         }
         break;
       case 'diet_assigned':
         if (deep_link_ref) {
-          navigation.navigate('ClientDietPlanDetail', { planId: deep_link_ref });
+          navigation.navigate(CLIENT_DIET_PLAN_DETAIL, { planId: deep_link_ref });
         }
         break;
       case 'supplement_assigned':
         if (deep_link_ref) {
-          navigation.navigate('CoachingPlanDetail', { planId: deep_link_ref });
+          navigation.navigate(COACHING_PLAN_DETAIL, { planId: deep_link_ref });
         }
         break;
       case 'workout_completed':
         if (related_client_id && deep_link_ref) {
-          navigation.navigate('ClientDetail', { clientId: related_client_id });
+          navigation.navigate(CLIENT_DETAIL, { clientId: related_client_id });
         }
         break;
       case 'diet_checkin':
         if (related_client_id && deep_link_ref) {
-          navigation.navigate('ClientDetail', { clientId: related_client_id, tab: 'diet' });
+          navigation.navigate(CLIENT_DETAIL, { clientId: related_client_id, tab: 'diet' });
         }
         break;
       case 'supplement_checkin':
         if (related_client_id && deep_link_ref) {
-          navigation.navigate('ClientDetail', { clientId: related_client_id, tab: 'supplements' });
+          navigation.navigate(CLIENT_DETAIL, { clientId: related_client_id, tab: 'supplements' });
         }
         break;
       default:

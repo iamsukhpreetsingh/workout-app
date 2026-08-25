@@ -9,14 +9,15 @@ import {
   StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { createPlan, getPlan, updatePlan } from '../db/queries';
-import { getSettings } from '../db/settings';
+import { createPlan, getPlan, updatePlan } from '../services/routineService';
+import { getSettings } from '../services/settingsService';
 import ExercisePicker from '../components/ExercisePicker';
 import AlternativesEditor from '../components/AlternativesEditor';
 import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import RestEditorModal from '../components/RestEditorModal';
 import ClientTagSelector from '../components/ClientTagSelector';
 import { groupLabels } from '../store/WorkoutContext';
+import ExerciseEditRow from '../features/routines/components/ExerciseEditRow';
 import { useColors } from '../theme';
 
 let groupCounter = 0;
@@ -208,112 +209,33 @@ export default function PlanEditorScreen({ navigation, route }) {
       {exercises.map((ex, idx) => {
         const firstInGroup = ex.groupId && exercises[idx - 1]?.groupId !== ex.groupId;
         return (
-          <View
+          <ExerciseEditRow
             key={ex.id}
-            style={[
-              styles.exRow,
-              ex.groupId && styles.groupedRow,
-              selectMode && selected.includes(idx) && styles.selectedRow,
-            ]}
-          >
-            {firstInGroup && (
-              <Text style={styles.groupLabel}>Superset {labels[ex.groupId]}</Text>
-            )}
-            <View style={styles.exMain}>
-              {selectMode ? (
-                <TouchableOpacity style={styles.selectCheck} onPress={() => toggleSelect(idx)}>
-                  <Ionicons
-                    name={selected.includes(idx) ? 'checkbox' : 'square-outline'}
-                    size={22}
-                    color={colors.primary}
-                  />
-                  <Text style={styles.exName}>{ex.name}</Text>
-                </TouchableOpacity>
-              ) : (
-                <View style={styles.idxBadge}>
-                  <Text style={[styles.idxText, NUMS]}>{idx + 1}</Text>
-                </View>
-              )}
-              {!selectMode && (
-                // <View style={{ flex: 1 }}>
-                //   <Text style={styles.exName}>{ex.name}</Text>
-                //   <Text style={styles.exGroup}>{ex.muscle_group}</Text>
-                // </View>
-
-                  <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Text style={styles.exName}>{ex.name}</Text>
-                    <TouchableOpacity
-                      onPress={() => setDetailEx(ex)}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    >
-                      <Ionicons name="information-circle-outline" size={18} color={colors.primary} />
-                    </TouchableOpacity>
-                  </View>
-                  <Text style={styles.exGroup}>{ex.muscle_group}</Text>
-                </View>
-              )}
-
-
-            </View>
-            {!selectMode && (
-              <View style={styles.controls}>
-                <TouchableOpacity
-                  style={styles.stepper}
-                  onPress={() =>
-                    setExercises((prev) =>
-                      prev.map((e, i) => (i === idx ? { ...e, targetSets: Math.max(1, e.targetSets - 1) } : e))
-                    )
-                  }
-                >
-                  <Ionicons name="remove" size={16} color={colors.text} />
-                </TouchableOpacity>
-                <Text style={[styles.setCount, NUMS]}>{ex.targetSets}</Text>
-                <TouchableOpacity
-                  style={styles.stepper}
-                  onPress={() =>
-                    setExercises((prev) =>
-                      prev.map((e, i) => (i === idx ? { ...e, targetSets: Math.min(10, e.targetSets + 1) } : e))
-                    )
-                  }
-                >
-                  <Ionicons name="add" size={16} color={colors.text} />
-                </TouchableOpacity>
-                <Text style={styles.setsUnit}>sets</Text>
-                <TouchableOpacity style={styles.restBtn} onPress={() => setRestEditIdx(idx)}>
-                  <Ionicons name="time-outline" size={13} color={colors.textDim} />
-                  <Text style={[styles.restText, NUMS]}>{ex.restSeconds}s</Text>
-                </TouchableOpacity>
-                {ex.groupId && (
-                  <TouchableOpacity
-                    style={styles.unlinkBtn}
-                    onPress={() =>
-                      setExercises((prev) =>
-                        prev.map((e, i) => (i === idx ? { ...e, groupId: null } : e))
-                      )
-                    }
-                  >
-                    <Ionicons name="unlink" size={15} color={colors.textDim} />
-                  </TouchableOpacity>
-                )}
-                <TouchableOpacity style={styles.removeBtn} onPress={() => removeAt(idx)}>
-                  <Ionicons name="close" size={16} color={colors.textDim} />
-                </TouchableOpacity>
-              </View>
-            )}
-            {!selectMode && (
-              <AlternativesEditor
-                primaryName={ex.name}
-                alternatives={ex.alternatives || []}
-                excludeNames={exercises.filter((_, j) => j !== idx).map((e) => e.name)}
-                onChange={(alternatives) =>
-                  setExercises((prev) =>
-                    prev.map((e, i) => (i === idx ? { ...e, alternatives } : e))
-                  )
-                }
-              />
-            )}
-          </View>
+            ex={ex}
+            idx={idx}
+            firstInGroup={!!firstInGroup}
+            groupLabel={ex.groupId ? `Superset ${labels[ex.groupId]}` : null}
+            selectMode={selectMode}
+            selected={selected.includes(idx)}
+            excludeNames={exercises.filter((_, j) => j !== idx).map((e) => e.name)}
+            styles={styles}
+            colors={colors}
+            onToggleSelect={toggleSelect}
+            onShowDetail={setDetailEx}
+            onAdjustSets={(i, delta) =>
+              setExercises((prev) =>
+                prev.map((e, j) => (j === i ? { ...e, targetSets: Math.max(1, Math.min(10, e.targetSets + delta)) } : e))
+              )
+            }
+            onRestEdit={setRestEditIdx}
+            onUnlink={(i) =>
+              setExercises((prev) => prev.map((e, j) => (j === i ? { ...e, groupId: null } : e)))
+            }
+            onRemove={removeAt}
+            onAlternativesChange={(i, alternatives) =>
+              setExercises((prev) => prev.map((e, j) => (j === i ? { ...e, alternatives } : e)))
+            }
+          />
         );
       })}
 

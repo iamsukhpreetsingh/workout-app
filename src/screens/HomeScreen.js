@@ -10,10 +10,13 @@ import { useColors } from '../theme';
 import { useHeaderActions } from '../components/HeaderActions';
 import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
+import { fetchAndCacheTrainerContent } from '../lib/trainerCache';
 import { listPins, removePin, removeStalePins, MAX_PINNED_ROUTINES } from '../db/pins';
 import { startAssignedPlan } from '../lib/startAssigned';
 import { NotificationBell } from '../components/NotificationBell';
+import { fmtVolume } from '../shared/utils/format';
 import { getSyncStatus, addSyncListener, initConnectivityListener, syncPending, getSyncSettings } from '../lib/sync';
+import { ACTIVE_WORKOUT, MAIN_TABS, NOTIFICATION_CENTER, PLAN_DETAIL, PROFILE, SESSION_DETAIL, SETTINGS, TAB_HISTORY } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -61,10 +64,6 @@ function PinnedGridCard({ item, styles, colors, onStart, onUnpin }) {
   );
 }
 
-function fmtK(v) {
-  return v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v));
-}
-
 export default function HomeScreen({ navigation }) {
   const { workout, dispatch } = useWorkout();
   const colors = useColors();
@@ -109,11 +108,11 @@ export default function HomeScreen({ navigation }) {
       title: greeting(),
       headerRight: () => (
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <NotificationBell onPress={() => navigation.navigate('NotificationCenter')} />
-          <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={{ padding: 8 }}>
+          <NotificationBell onPress={() => navigation.navigate(NOTIFICATION_CENTER)} />
+          <TouchableOpacity onPress={() => navigation.navigate(SETTINGS)} style={{ padding: 8 }}>
             <Ionicons name="settings-outline" size={22} color={colors.text} />
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => navigation.navigate('Profile')} style={{ padding: 8 }}>
+          <TouchableOpacity onPress={() => navigation.navigate(PROFILE)} style={{ padding: 8 }}>
             <Ionicons name="person-circle-outline" size={22} color={colors.text} />
           </TouchableOpacity>
         </View>
@@ -154,8 +153,10 @@ export default function HomeScreen({ navigation }) {
         return;
       }
       let mounted = true;
-      api('/client/assigned-plans')
-        .then((plans) => { if (mounted) setAssignedPlans(plans); })
+      // fetch-through cache: server first, cached copy when offline — same
+      // fallback PlansScreen uses, so pinned workouts survive offline
+      fetchAndCacheTrainerContent('trainer:assigned-workouts', () => api('/client/assigned-plans'))
+        .then((plans) => { if (mounted) setAssignedPlans(plans || []); })
         .catch((e) => {
           if (mounted) setAssignedPlans([]);
           console.warn('assigned-plans fetch failed:', e.message || e);
@@ -173,7 +174,10 @@ export default function HomeScreen({ navigation }) {
         const [pins, myPlans, assigned] = await Promise.all([
           listPins(),
           listPlans(),
-          isClient ? api('/client/assigned-plans').catch(() => []) : Promise.resolve([]),
+          // cached fallback keeps pinned assigned workouts resolvable offline
+          isClient
+            ? fetchAndCacheTrainerContent('trainer:assigned-workouts', () => api('/client/assigned-plans')).catch(() => [])
+            : Promise.resolve([]),
         ]);
         if (!mounted) return;
         await removeStalePins(myPlans.map((p) => p.id), assigned.map((a) => a.id));
@@ -205,7 +209,7 @@ export default function HomeScreen({ navigation }) {
   // Pinned cards start DIRECTLY — no detail-screen step
   const startPinned = async (item) => {
     if (workout) {
-      navigation.navigate('ActiveWorkout');
+      navigation.navigate(ACTIVE_WORKOUT);
       return;
     }
     try {
@@ -236,7 +240,7 @@ export default function HomeScreen({ navigation }) {
   const beginWorkout = (name, planId, planExercises) => {
     dispatch({ type: 'START_WORKOUT', name, planId, planExercises, defaultRest });
     // first launch of a new session opens straight into the logging UI
-    navigation.navigate('ActiveWorkout');
+    navigation.navigate(ACTIVE_WORKOUT);
   };
 
   const startEmpty = () =>
@@ -244,7 +248,7 @@ export default function HomeScreen({ navigation }) {
 
   const onStartPress = () => {
     if (workout) {
-      navigation.navigate('ActiveWorkout');
+      navigation.navigate(ACTIVE_WORKOUT);
       return;
     }
     // Choice, not an immediate empty start
@@ -339,7 +343,7 @@ export default function HomeScreen({ navigation }) {
                 <View style={styles.sectionHeaderRow}>
                   <Text style={styles.sectionHeader}>Recent Workouts</Text>
                   <TouchableOpacity
-                    onPress={() => navigation.navigate('Main', { screen: 'History' })}
+                    onPress={() => navigation.navigate(MAIN_TABS, { screen: TAB_HISTORY })}
                   >
                     <Text style={styles.seeAll}>see all</Text>
                   </TouchableOpacity>
@@ -350,7 +354,7 @@ export default function HomeScreen({ navigation }) {
                   <TouchableOpacity
                     key={s.id}
                     style={[styles.recentRow, fromTrainer && styles.recentRowTrainer]}
-                    onPress={() => navigation.navigate('SessionDetail', { sessionId: s.id })}
+                    onPress={() => navigation.navigate(SESSION_DETAIL, { sessionId: s.id })}
                   >
                     {fromTrainer && <View style={styles.trainerStripe} />}
                     <View style={styles.dateBlock}>
@@ -372,7 +376,7 @@ export default function HomeScreen({ navigation }) {
                         </View>
                       ) : null}
                       <Text style={[styles.recentMeta, NUMS]}>
-                        {s.exerciseCount} ex · {s.totalSets || 0} sets · {fmtK(s.totalVolume || 0)} vol
+                        {s.exerciseCount} ex · {s.totalSets || 0} sets · {fmtVolume(s.totalVolume)} vol
                       </Text>
                     </View>
                     <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
@@ -445,7 +449,7 @@ function RoutineCard({ item, styles, colors, navigation, horizontal }) {
     <TouchableOpacity
       style={[styles.routineCard, horizontal && styles.routineCardWide]}
       activeOpacity={0.8}
-      onPress={() => navigation.navigate('PlanDetail', { planId: item.id })}
+      onPress={() => navigation.navigate(PLAN_DETAIL, { planId: item.id })}
     >
       <View style={styles.routineAccent} />
       <View style={{ flex: 1 }}>

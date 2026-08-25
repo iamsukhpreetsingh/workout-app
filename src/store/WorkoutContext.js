@@ -517,29 +517,6 @@ export function useWorkout() {
   return ctx;
 }
 
-// Elapsed active-logging seconds, excluding paused intervals
-export function elapsedSeconds(workout, now = Date.now()) {
-  if (!workout) return 0;
-  const end = workout.pausedAt ?? now;
-  return Math.max(0, Math.floor((end - workout.startTime - (workout.pausedMs || 0)) / 1000));
-}
-
-export function formatDuration(sec) {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  const pad = (n) => String(n).padStart(2, '0');
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-}
-
-// Assign labels A, B, C… to group ids by first appearance in the list
-export function groupLabels(exercises) {
-  const labels = {};
-  let n = 0;
-  for (const e of exercises) {
-    if (e.groupId && !(e.groupId in labels)) {
-      labels[e.groupId] = String.fromCharCode(65 + n++);
-    }
-  }
-  return labels;
-}
+// Duration/grouping helpers live in features/workouts/utils/workoutUtils;
+// re-exported here for backwards compatibility with existing importers.
+export { elapsedSeconds, formatDuration, groupLabels } from '../features/workouts/utils/workoutUtils';

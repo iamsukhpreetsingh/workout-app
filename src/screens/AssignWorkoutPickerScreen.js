@@ -5,6 +5,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../lib/api';
 import CatalogSearch from '../components/CatalogSearch';
 import { useColors } from '../theme';
+import { ASSIGN_WORKOUT } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -62,7 +63,7 @@ export default function AssignWorkoutPickerScreen({ route, navigation }) {
   const editCopy = async (tpl) => {
     try {
       const full = await api(`/trainer/workout-templates/${tpl.id}`);
-      navigation.navigate('AssignWorkout', {
+      navigation.navigate(ASSIGN_WORKOUT, {
         clientId,
         clientName,
         prefill: {
@@ -102,7 +103,7 @@ export default function AssignWorkoutPickerScreen({ route, navigation }) {
         <TouchableOpacity
           style={styles.buildCard}
           activeOpacity={0.85}
-          onPress={() => navigation.replace('AssignWorkout', { clientId, clientName })}
+          onPress={() => navigation.replace(ASSIGN_WORKOUT, { clientId, clientName })}
         >
           <Ionicons name="barbell-outline" size={22} color={colors.primary} />
           <View style={{ flex: 1 }}>

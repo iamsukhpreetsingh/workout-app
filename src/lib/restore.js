@@ -148,6 +148,9 @@ export async function performRestore(onProgress = () => {}) {
          p.created_at ? new Date(p.created_at).getTime() : Date.now(),
          userId, JSON.stringify(p.tags || []), p.id]);
       await db.runAsync('DELETE FROM plan_exercises WHERE plan_id = ?', [planId]);
+      await db.runAsync(
+        `DELETE FROM plan_exercise_alternatives WHERE plan_exercise_id IN (
+           SELECT CAST(id AS TEXT) FROM plan_exercises WHERE plan_id = ?)`, [planId]);
       for (let i = 0; i < (exercises || []).length; i++) {
         const ex = exercises[i] || {};
         let exerciseId = null;
@@ -157,10 +160,21 @@ export async function performRestore(onProgress = () => {}) {
           if (row) exerciseId = row.id;
         }
         if (exerciseId == null) continue;
-        await db.runAsync(
+        const pe = await db.runAsync(
           `INSERT INTO plan_exercises (plan_id, exercise_id, position, target_sets, rest_seconds, group_id)
            VALUES (?,?,?,?,?,?)`,
           [planId, exerciseId, ex.order_index ?? i, ex.target_sets ?? 3, ex.rest_seconds ?? 90, ex.group_id ?? null]);
+        // configured swap alternatives — restored so routines keep their
+        // substitution options after a device wipe/reinstall
+        const alts = Array.isArray(ex.alternatives) ? ex.alternatives : [];
+        for (let ai = 0; ai < Math.min(alts.length, 3); ai++) {
+          const name = String(typeof alts[ai] === 'string' ? alts[ai] : alts[ai]?.alternative_exercise_name || '').trim();
+          if (!name) continue;
+          await db.runAsync(
+            `INSERT INTO plan_exercise_alternatives (plan_exercise_id, alternative_exercise_name, order_index)
+             VALUES (?,?,?)`,
+            [String(pe.lastInsertRowId), name, ai]);
+        }
       }
     }
   });
