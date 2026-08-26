@@ -1,17 +1,17 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { listSessions } from '../db/queries';
+import { listSessions } from '../services/workoutService';
 import { useColors } from '../theme';
 import { useHeaderActions } from '../components/HeaderActions';
+import LoadError from '../shared/components/LoadError';
+import useAsyncData from '../shared/hooks/useAsyncData';
 import { formatDuration } from '../store/WorkoutContext';
+import { fmtVolume } from '../shared/utils/format';
+import { SESSION_DETAIL, TAB_HOME } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
-
-function fmtK(v) {
-  return v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v));
-}
 
 function localDay(ts) {
   const d = new Date(ts);
@@ -48,19 +48,25 @@ function groupSessions(sessions) {
 export default function HistoryScreen({ navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
-  const [sessions, setSessions] = useState([]);
+  // immediate:false — the first fetch is driven by useFocusEffect below
+  const { data: sessions, error: loadError, reload } = useAsyncData(listSessions, [], {
+    immediate: false,
+  });
+  const list = sessions || [];
 
   useHeaderActions(navigation);
 
   useFocusEffect(
     useCallback(() => {
-      let mounted = true;
-      listSessions().then((s) => { if (mounted) setSessions(s); });
-      return () => { mounted = false; };
-    }, [])
+      reload();
+    }, [reload])
   );
 
-  if (sessions.length === 0) {
+  if (loadError && list.length === 0) {
+    return <LoadError onRetry={reload} />;
+  }
+
+  if (list.length === 0) {
     return (
       <View style={styles.emptyWrap}>
         <Ionicons name="calendar-clear-outline" size={40} color={colors.textDim} />
@@ -68,7 +74,7 @@ export default function HistoryScreen({ navigation }) {
         <Text style={styles.emptySub}>
           Your finished workouts will show up here — go start one.
         </Text>
-        <TouchableOpacity style={styles.emptyBtn} onPress={() => navigation.navigate('Home')}>
+        <TouchableOpacity style={styles.emptyBtn} onPress={() => navigation.navigate(TAB_HOME)}>
           <Ionicons name="barbell-outline" size={18} color={colors.primary} />
           <Text style={styles.emptyBtnText}>Start a Workout</Text>
         </TouchableOpacity>
@@ -76,7 +82,7 @@ export default function HistoryScreen({ navigation }) {
     );
   }
 
-  const groups = groupSessions(sessions);
+  const groups = groupSessions(list);
 
   return (
     <FlatList
@@ -95,7 +101,7 @@ export default function HistoryScreen({ navigation }) {
                 key={s.id}
                 style={[styles.card, fromTrainer && styles.cardTrainer]}
                 activeOpacity={0.8}
-                onPress={() => navigation.navigate('SessionDetail', { sessionId: s.id })}
+                onPress={() => navigation.navigate(SESSION_DETAIL, { sessionId: s.id })}
               >
                 <View style={styles.dateBlock}>
                   <Text style={[styles.dateDay, NUMS]}>{new Date(s.start_time).getDate()}</Text>
@@ -114,7 +120,7 @@ export default function HistoryScreen({ navigation }) {
                     </View>
                   ) : null}
                   <View style={styles.metaRow}>
-                    <Text style={[styles.vol, NUMS]}>{fmtK(s.totalVolume || 0)}</Text>
+                    <Text style={[styles.vol, NUMS]}>{fmtVolume(s.totalVolume)}</Text>
                     <Text style={styles.volUnit}>vol</Text>
                   </View>
                   <Text style={[styles.meta, NUMS]}>

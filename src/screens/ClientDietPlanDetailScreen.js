@@ -10,17 +10,44 @@ import {
   Linking,
   RefreshControl,
   Image,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../lib/api';
 import { getDietPlan, checkInDiet, deleteDietPlan, listDietCheckins, isLocalDietPlanId } from '../db/dietPlans';
 import { getSupplementPlan, checkInSupplement, deleteSupplementPlan, listSupplementCheckins, isLocalSupplementPlanId } from '../db/supplementPlans';
+import { getSwapsForDate, swapDietItem, undoDietSwap } from '../db/dietSwaps';
+import DishPickerModal from '../components/DishPickerModal';
+import { listRecipes } from '../db/recipes';
+import { todayLocalISO, isFutureDate, buildCheckinMap } from '../lib/checkinDates';
 import { useColors } from '../theme';
+import { COACHING_PLAN_BUILDER, DIET_PLAN_BUILDER } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
 const scaled = (v, mult) => (v == null ? null : Number(v) * (mult || 1));
+
+// Local calendar date — NEVER new Date().toISOString(), which is UTC-based
+// and mislabels "today" near midnight in non-UTC timezones (an explicit
+// acceptance criterion for the check-in feature).
+const todayStr = () => todayLocalISO();
+
+const shiftDateStr = (date, days) => {
+  const d = new Date(`${date}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+
+const formatDateLabel = (date) => {
+  const d = new Date(`${date}T12:00:00`);
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+};
+
+// normalize an alternative row (shape varies by source: server rows use
+// alternative_name/alternative_*, local rows and backup JSONB use name/*)
+const altName = (a) => a?.name ?? a?.alternative_name;
+const altMacro = (a, k) => a?.[k] ?? a?.[`alternative_${k}`];
 
 const macroLine = (i) => {
   const m = i.quantity_multiplier || 1;
@@ -52,8 +79,107 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
   const [error, setError] = useState(null);
   const [activeDay, setActiveDay] = useState(0);
   const [checkBusy, setCheckBusy] = useState(false);
-  const [checkedToday, setCheckedToday] = useState(null);
+  // Check-in state keyed PER EXACT DATE ('YYYY-MM-DD' -> true/false).
+  // Missing key = unanswered. Never a single plan-wide value: that original
+  // shape made one date's answer bleed into every other date's display.
+  const [checkinsByDate, setCheckinsByDate] = useState({});
   const [expandedItem, setExpandedItem] = useState(null); // diet_plan_meal_item id
+
+  // ── date-scoped swap state (diet only) ────────────────────────────────
+  // A diet plan is followed day after day, so a swap is keyed to the exact
+  // calendar date being viewed — never a permanent plan edit. viewDate
+  // defaults to real today; stepping dates shows that date's swaps.
+  const [viewDate, setViewDate] = useState(todayStr());
+  const [swapsByItem, setSwapsByItem] = useState({}); // itemRef -> swap row
+  const [swapSheetItem, setSwapSheetItem] = useState(null); // item being swapped
+  const [fallbackPicker, setFallbackPicker] = useState(false); // ad-hoc dish picker
+  const [fallbackItem, setFallbackItem] = useState(null); // item for the ad-hoc picker
+  const [pickerCatalog, setPickerCatalog] = useState(null);
+
+  // reload this date's swaps whenever the viewed date or plan changes
+  useEffect(() => {
+    if (isSupplement) return;
+    let mounted = true;
+    getSwapsForDate(planId, viewDate)
+      .then((map) => {
+        if (!mounted) return;
+        const obj = {};
+        for (const [k, v] of map) obj[k] = v;
+        setSwapsByItem(obj);
+      })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, [planId, viewDate, isSupplement]);
+
+  const reloadSwaps = async () => {
+    try {
+      const map = await getSwapsForDate(planId, viewDate);
+      const obj = {};
+      for (const [k, v] of map) obj[k] = v;
+      setSwapsByItem(obj);
+    } catch {}
+  };
+
+  // effective display values for one item on the viewed date
+  const resolveItem = (i) => {
+    const swap = swapsByItem[String(i.id)];
+    if (!swap) return { ...i, activeSwap: null };
+    return {
+      ...i,
+      name: swap.swapped_name,
+      calories: swap.swapped_calories,
+      protein_g: swap.swapped_protein_g,
+      carbs_g: swap.swapped_carbs_g,
+      fat_g: swap.swapped_fat_g,
+      serving_size: null,
+      activeSwap: swap,
+    };
+  };
+
+  const doSwap = async (item, alt) => {
+    try {
+      await swapDietItem({
+        planRef: planId,
+        itemRef: String(item.id),
+        originalName: item.name,
+        date: viewDate,
+        swapped: {
+          name: altName(alt),
+          calories: altMacro(alt, 'calories'),
+          protein_g: altMacro(alt, 'protein_g'),
+          carbs_g: altMacro(alt, 'carbs_g'),
+          fat_g: altMacro(alt, 'fat_g'),
+        },
+      });
+      await reloadSwaps();
+      setSwapSheetItem(null);
+      setFallbackPicker(false);
+    } catch (e) {
+      Alert.alert('Could not swap', e.message || 'Please try again.');
+    }
+  };
+
+  const doUndoSwap = async (item) => {
+    try {
+      await undoDietSwap(String(item.id), viewDate);
+      await reloadSwaps();
+    } catch (e) {
+      Alert.alert('Could not undo swap', e.message || 'Please try again.');
+    }
+  };
+
+  // "Choose a different dish" fallback source: personal My Dishes for
+  // self-authored plans; the coach's Meal Catalog (read-only) for assigned
+  // ones. Custom Item entry is always available inside the same modal.
+  const openFallbackPicker = async () => {
+    setPickerCatalog(null);
+    setFallbackPicker(true);
+    const source =
+      self && isLocalDietPlanId(planId) && !isSupplement
+        ? listRecipes()
+        : api('/client/coach-dishes');
+    source.then(setPickerCatalog).catch(() => setPickerCatalog([]));
+  };
 
   // union of allergens across the WHOLE plan (all days) — shown once at top
   const planAllergens = React.useMemo(() => {
@@ -151,11 +277,10 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
     fetchCheckins
       .then((rows) => {
         if (!mounted) return;
-        const today = new Date().toISOString().slice(0, 10);
-        const todays = (rows || []).find((c) => String(c.date).slice(0, 10) === today);
-        if (todays) {
-          setCheckedToday(isSupplement ? todays.taken : todays.followed);
-        }
+        // per-date map — each date reads ONLY its own row (the backend
+        // already stores one row per date via UNIQUE(plan, date); the old
+        // code collapsed everything into a single plan-wide value)
+        setCheckinsByDate(buildCheckinMap(rows, isSupplement ? 'taken' : 'followed'));
       })
       .catch(() => {});
     return () => { mounted = false; };
@@ -168,7 +293,10 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
   const totals = useMemo(() => {
     const t = { cal: 0, pro: 0, car: 0, fat: 0 };
     for (const m of day?.meals || []) {
-      for (const i of m.items || []) {
+      for (const raw of m.items || []) {
+        // a swap in effect for THIS viewed date feeds its own macros into
+        // the running total — only for this exact calendar date
+        const i = isSupplement ? raw : resolveItem(raw);
         t.cal += scaled(i.calories, i.quantity_multiplier) || 0;
         t.pro += scaled(i.protein_g, i.quantity_multiplier) || 0;
         t.car += scaled(i.carbs_g, i.quantity_multiplier) || 0;
@@ -176,7 +304,8 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
       }
     }
     return t;
-  }, [day]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [day, swapsByItem]);
 
   if (loading && !plan) {
     return (
@@ -224,22 +353,30 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
     const checkIn = async (followed) => {
     if (checkBusy) return;
     setCheckBusy(true);
-    const today = new Date().toISOString().slice(0, 10);
+    // the check-in belongs to the VIEWED date (backfilling a past day is
+    // allowed; future dates are blocked in the UI and re-guarded here)
+    const date = isSupplement ? todayStr() : viewDate;
+    if (isFutureDate(date)) {
+      setCheckBusy(false);
+      Alert.alert('Not yet', 'You can check in once this date arrives.');
+      return;
+    }
     try {
       if (isSupplement) {
         if (self && isLocalSupplementPlanId(planId)) {
-          await checkInSupplement(planId, today, followed); // local-first
+          await checkInSupplement(planId, date, followed); // local-first
         } else {
-          await api(`/client/supplement-plans/${planId}/checkins`, { method: 'POST', body: { date: today, taken: followed } });
+          await api(`/client/supplement-plans/${planId}/checkins`, { method: 'POST', body: { date, taken: followed } });
         }
       } else {
         if (self && isLocalDietPlanId(planId)) {
-          await checkInDiet(planId, today, followed); // local-first
+          await checkInDiet(planId, date, followed); // local-first
         } else {
-          await api(`/client/diet-plans/${planId}/checkins`, { method: 'POST', body: { date: today, followed } });
+          await api(`/client/diet-plans/${planId}/checkins`, { method: 'POST', body: { date, followed } });
         }
       }
-      setCheckedToday(followed);
+      // update ONLY this date's key — every other date's answer untouched
+      setCheckinsByDate((prev) => ({ ...prev, [date]: followed }));
     } catch (e) {
       Alert.alert('Check-in failed', e.message || 'Please try again.');
     } finally {
@@ -386,16 +523,41 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
             </ScrollView>
           )}
 
+          {/* date navigator — swaps are DATE-scoped ("on Aug 24 I ate X
+              instead"), so the viewer must say which calendar date you're
+              looking at. Defaults to today; stepping shows that date's
+              swaps only — nothing carries forward across dates. */}
+          {!isSupplement && (
+            <View style={styles.dateNav}>
+              <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} onPress={() => setViewDate(shiftDateStr(viewDate, -1))}>
+                <Ionicons name="chevron-back" size={17} color={colors.text} />
+              </TouchableOpacity>
+              <TouchableOpacity hitSlop={{ top: 8, bottom: 8 }} onPress={() => setViewDate(todayStr())}>
+                <Text style={styles.dateNavText}>
+                  {formatDateLabel(viewDate)}
+                  {viewDate === todayStr() ? ' · Today' : ''}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} onPress={() => setViewDate(shiftDateStr(viewDate, 1))}>
+                <Ionicons name="chevron-forward" size={17} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* meal sections for the selected day */}
           {day && (day.meals || []).length > 0 ? (
         (day.meals || []).map((m, mi) => (
           <View key={m.id || mi} style={{ marginTop: 16 }}>
             <Text style={styles.mealHeader}>{String(m.meal_type).toUpperCase()}</Text>
             {m.slot_note ? <Text style={styles.slotNote}>{m.slot_note}</Text> : null}
-            {(m.items || []).map((i, ii) => {
+            {(m.items || []).map((raw, ii) => {
+              // resolve any swap in effect for the VIEWED date — the plan's
+              // stored definition itself is never changed by a swap
+              const i = isSupplement ? raw : resolveItem(raw);
               const itemKey = i.id || `i${ii}`;
               const isOpen = expandedItem === itemKey;
               const altServings = Array.isArray(i.alternate_servings) ? i.alternate_servings : [];
+              const configuredAlts = Array.isArray(raw.alternatives) ? raw.alternatives : [];
               const metaBits = [
                 i.prep_time_minutes != null ? `${i.prep_time_minutes} min prep` : null,
                 i.cook_time_minutes != null
@@ -438,8 +600,16 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
                         ) : null}
                       </View>
                       <Text style={[styles.itemMacro, NUMS]}>{macroLine(i)}</Text>
+                      {i.activeSwap ? (
+                        <View style={styles.swapBadge}>
+                          <Ionicons name="arrow-undo" size={10} color={colors.blue} />
+                          <Text style={styles.swapBadgeText}>
+                            Swapped from {i.activeSwap.original_name}
+                          </Text>
+                        </View>
+                      ) : null}
                       {/* allergens are a safety matter — visible WITHOUT expanding */}
-                      {(i.allergens || []).length > 0 ? (
+                      {(i.allergens || []).length > 0 && !i.activeSwap ? (
                         <View style={styles.allergenBadge}>
                           <Ionicons name="warning" size={10} color={colors.red} />
                           <Text style={styles.allergenBadgeText}>
@@ -449,6 +619,31 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
                       ) : null}
                     </View>
                   </View>
+                  {/* swap actions — apply ONLY to viewDate; Undo deletes the
+                      (item, date) swap row and reverts the display */}
+                  {!isSupplement && (
+                    <View style={styles.swapActionsRow}>
+                      {i.activeSwap ? (
+                        <TouchableOpacity
+                          style={styles.undoSwapBtn}
+                          hitSlop={{ top: 6, bottom: 6 }}
+                          onPress={() => doUndoSwap(raw)}
+                        >
+                          <Ionicons name="arrow-undo" size={12} color={colors.blue} />
+                          <Text style={styles.undoSwapText}>Undo Swap</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={styles.swapBtn}
+                          hitSlop={{ top: 6, bottom: 6 }}
+                          onPress={() => setSwapSheetItem(raw)}
+                        >
+                          <Ionicons name="swap-horizontal" size={12} color={colors.primary} />
+                          <Text style={styles.swapBtnText}>Swap</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  )}
                   {isOpen ? (
                     <View style={styles.expandedWrap}>
                       {(i.ingredients || []).length > 0 && (
@@ -521,54 +716,96 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
         </>
       )}
 
-      {/* check-in — clearer phrasing: one clear statement + explicit
-          outcome buttons, with today's recorded state shown up front */}
-      <View style={styles.checkinCard}>
-        <Text style={styles.checkinTitle}>
-          {isSupplement ? "Today's supplements check-in" : "Today's check-in"}
-        </Text>
-        {checkedToday == null ? (
-          <Text style={styles.checkinSub}>
-            {isSupplement ? 'Did you take your supplements today?' : 'How did today go with this plan?'}
-          </Text>
-        ) : (
-          <View style={styles.checkinStateRow}>
-            <Ionicons
-              name={checkedToday ? 'checkmark-circle' : 'close-circle'}
-              size={15}
-              color={checkedToday ? colors.green : colors.red}
-            />
-            <Text style={styles.checkinStateText}>
-              {isSupplement 
-                ? (checkedToday ? 'You took your supplements today' : "You didn't take your supplements today")
-                : (checkedToday ? 'You followed this plan today' : "You didn't follow this plan today")
-              }
+      {/* check-in — PER-DATE and never answerable for a future date.
+          The control targets the VIEWED date (diet) / real today
+          (supplement); each date's answer is stored and displayed
+          independently of every other date's. */}
+      {(() => {
+        const effectiveDate = isSupplement ? todayStr() : viewDate;
+        const isViewingToday = effectiveDate === todayStr();
+        const isFuture = isFutureDate(effectiveDate);
+        const answered = checkinsByDate[effectiveDate];
+        const dateLabel = formatDateLabel(effectiveDate);
+        return (
+          <View style={[styles.checkinCard, isFuture && styles.checkinCardFuture]}>
+            <Text style={styles.checkinTitle}>
+              {isSupplement
+                ? "Today's supplements check-in"
+                : isViewingToday
+                  ? "Today's check-in"
+                  : `Check-in — ${dateLabel}`}
             </Text>
+            {isFuture ? (
+              // future dates are NEVER answerable — visible but disabled
+              <>
+                <Text style={styles.checkinSub}>
+                  You can check in starting {dateLabel}.
+                </Text>
+                <View style={[styles.checkinRow, { opacity: 0.4 }]} pointerEvents="none">
+                  <TouchableOpacity style={styles.checkBtn} disabled>
+                    <Ionicons name="close" size={15} color={colors.red} />
+                    <Text style={styles.checkBtnLabel}>{isSupplement ? "Didn't take" : 'Not today'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.checkBtn, styles.yesBtn]} disabled>
+                    <Ionicons name="checkmark" size={15} color={colors.green} />
+                    <Text style={styles.checkBtnLabel}>{isSupplement ? 'Took them' : 'Followed it'}</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
+                {answered == null ? (
+                  <Text style={styles.checkinSub}>
+                    {isSupplement
+                      ? 'Did you take your supplements today?'
+                      : isViewingToday
+                        ? 'How did today go with this plan?'
+                        : `How did ${dateLabel} go with this plan?`}
+                  </Text>
+                ) : (
+                  <View style={styles.checkinStateRow}>
+                    <Ionicons
+                      name={answered ? 'checkmark-circle' : 'close-circle'}
+                      size={15}
+                      color={answered ? colors.green : colors.red}
+                    />
+                    <Text style={styles.checkinStateText}>
+                      {isSupplement
+                        ? (answered ? 'You took your supplements today' : "You didn't take your supplements today")
+                        : (isViewingToday
+                            ? (answered ? 'You followed this plan today' : "You didn't follow this plan today")
+                            : (answered ? `You followed this plan on ${dateLabel}` : `You didn't follow this plan on ${dateLabel}`))
+                      }
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.checkinRow}>
+                  <TouchableOpacity
+                    style={[styles.checkBtn, answered === false && styles.noBtnOn]}
+                    disabled={checkBusy}
+                    onPress={() => checkIn(false)}
+                  >
+                    <Ionicons name="close" size={15} color={answered === false ? '#fff' : colors.red} />
+                    <Text style={[styles.checkBtnLabel, answered === false && { color: '#fff' }]}>
+                      {isSupplement ? "Didn't take" : 'Not today'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.checkBtn, styles.yesBtn, answered === true && styles.yesBtnOn]}
+                    disabled={checkBusy}
+                    onPress={() => checkIn(true)}
+                  >
+                    <Ionicons name="checkmark" size={15} color={answered === true ? '#fff' : colors.green} />
+                    <Text style={[styles.checkBtnLabel, answered === true && { color: '#fff' }]}>
+                      {isSupplement ? 'Took them' : 'Followed it'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
           </View>
-        )}
-        <View style={styles.checkinRow}>
-          <TouchableOpacity
-            style={[styles.checkBtn, checkedToday === false && styles.noBtnOn]}
-            disabled={checkBusy}
-            onPress={() => checkIn(false)}
-          >
-            <Ionicons name="close" size={15} color={checkedToday === false ? '#fff' : colors.red} />
-            <Text style={[styles.checkBtnLabel, checkedToday === false && { color: '#fff' }]}>
-              {isSupplement ? "Didn't take" : "Not today"}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.checkBtn, styles.yesBtn, checkedToday === true && styles.yesBtnOn]}
-            disabled={checkBusy}
-            onPress={() => checkIn(true)}
-          >
-            <Ionicons name="checkmark" size={15} color={checkedToday === true ? '#fff' : colors.green} />
-            <Text style={[styles.checkBtnLabel, checkedToday === true && { color: '#fff' }]}>
-              {isSupplement ? 'Took them' : 'Followed it'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+        );
+      })()}
 
       {/* own-plan management (self-authored only) */}
       {self && (
@@ -577,9 +814,9 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
             style={styles.editBtn}
             onPress={() => {
               if (isSupplement) {
-                navigation.navigate('CoachingPlanBuilder', { kind: 'supplement', self: true, editPlanId: planId });
+                navigation.navigate(COACHING_PLAN_BUILDER, { kind: 'supplement', self: true, editPlanId: planId });
               } else {
-                navigation.navigate('DietPlanBuilder', { self: true, editPlanId: planId });
+                navigation.navigate(DIET_PLAN_BUILDER, { self: true, editPlanId: planId });
               }
             }}
           >
@@ -592,8 +829,68 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
       )}
+
+      {/* Swap sheet: configured alternatives first (one tap each), then the
+          "Choose a different dish" fallback into the SAME catalog/custom
+          search modal used everywhere else. Applies to viewDate only. */}
+      <Modal
+        visible={!!swapSheetItem}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSwapSheetItem(null)}
+      >
+        <View style={styles.swapSheetWrap}>
+          <View style={styles.swapSheet}>
+            <Text style={styles.swapSheetTitle}>
+              Swap {swapSheetItem?.name || ''} for {viewDate === todayStr() ? 'today' : formatDateLabel(viewDate)}
+            </Text>
+            {configuredAltsOf(swapSheetItem).length === 0 && (
+              <Text style={styles.swapSheetEmpty}>No pre-configured alternatives for this dish.</Text>
+            )}
+            {configuredAltsOf(swapSheetItem).map((a, k) => (
+              <TouchableOpacity
+                key={k}
+                style={styles.swapOptionRow}
+                onPress={() => doSwap(swapSheetItem, a)}
+              >
+                <Text style={styles.swapOptionName} numberOfLines={1}>{altName(a)}</Text>
+                <Text style={[styles.swapOptionMacro, NUMS]}>
+                  {altMacro(a, 'calories') != null ? `${altMacro(a, 'calories')} cal` : ''}
+                </Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.swapOtherBtn} onPress={() => { setFallbackItem(swapSheetItem); setSwapSheetItem(null); openFallbackPicker(); }}>
+              <Text style={styles.swapOtherText}>Choose a different dish →</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.cancelBtn} onPress={() => setSwapSheetItem(null)}>
+              <Text style={styles.cancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ad-hoc fallback dish picker (same component as every other dish
+          search; source = My Dishes or coach catalog per plan origin) */}
+      <DishPickerModal
+        visible={fallbackPicker}
+        onClose={() => { setFallbackPicker(false); setFallbackItem(null); }}
+        title={`Swap ${fallbackItem?.name || 'dish'} for ${formatDateLabel(viewDate)}`}
+        self={self}
+        catalog={pickerCatalog}
+        refreshCatalog={openFallbackPicker}
+        slotHint=""
+        excludeNames={(day?.meals || []).flatMap((mm) => (mm.items || []).map((x) => x.name))}
+        onPickCatalog={(c) => (fallbackItem || swapSheetItem) && doSwap(fallbackItem || swapSheetItem, c)}
+        onPickCustom={(it) => (fallbackItem || swapSheetItem) && doSwap(fallbackItem || swapSheetItem, it)}
+      />
     </ScrollView>
   );
+}
+
+// configured alternatives of the item currently in the swap sheet
+function configuredAltsOf(item) {
+  if (!item || !Array.isArray(item.alternatives)) return [];
+  return item.alternatives;
 }
 
 const makeStyles = (colors) =>
@@ -626,6 +923,52 @@ const makeStyles = (colors) =>
     },
     dayTabOn: { backgroundColor: colors.primary },
     dayTabText: { color: colors.textDim, fontWeight: '700', fontSize: 12 },
+
+    // date navigator (swap scoping)
+    dateNav: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 18,
+      backgroundColor: colors.cardLight, borderRadius: 12,
+      paddingVertical: 8, paddingHorizontal: 14, marginTop: 12, alignSelf: 'center',
+    },
+    dateNavText: { color: colors.text, fontSize: 13, fontWeight: '800' },
+
+    swapBadge: {
+      flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4,
+      alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.blue,
+      borderRadius: 7, paddingHorizontal: 6, paddingVertical: 2,
+    },
+    swapBadgeText: { color: colors.blue, fontSize: 10, fontWeight: '700' },
+    swapActionsRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 },
+    swapBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      borderWidth: 1.2, borderColor: colors.border, borderRadius: 9,
+      paddingHorizontal: 11, paddingVertical: 5,
+    },
+    swapBtnText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
+    undoSwapBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      borderWidth: 1.2, borderColor: colors.blue, borderRadius: 9,
+      paddingHorizontal: 11, paddingVertical: 5,
+    },
+    undoSwapText: { color: colors.blue, fontSize: 11, fontWeight: '700' },
+
+    swapSheetWrap: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+    swapSheet: {
+      backgroundColor: colors.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+      padding: 18,
+    },
+    swapSheetTitle: { color: colors.text, fontSize: 16, fontWeight: '800', marginBottom: 12 },
+    swapSheetEmpty: { color: colors.textDim, fontSize: 12, marginBottom: 8 },
+    swapOptionRow: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      backgroundColor: colors.card, borderRadius: 12, padding: 13, marginBottom: 7,
+    },
+    swapOptionName: { color: colors.text, fontSize: 14, fontWeight: '700', flex: 1 },
+    swapOptionMacro: { color: colors.textDim, fontSize: 12, marginLeft: 8 },
+    swapOtherBtn: { alignItems: 'center', paddingVertical: 12, marginTop: 4 },
+    swapOtherText: { color: colors.primary, fontSize: 13, fontWeight: '700' },
+    cancelBtn: { alignItems: 'center', paddingVertical: 10 },
+    cancelText: { color: colors.textDim, fontWeight: '700' },
 
     mealHeader: {
       color: colors.textDim, fontSize: 11, fontWeight: '800',
@@ -676,14 +1019,6 @@ const makeStyles = (colors) =>
 
 
     checkedLabel: { color: colors.textDim, fontSize: 11, textAlign: 'center', marginTop: 4 },
-    checkinRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
-    checkBtn: {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
-      borderRadius: 12, paddingVertical: 12, paddingHorizontal: 28,
-      backgroundColor: colors.cardLight, borderWidth: 1.5, borderColor: 'transparent',
-    },
-    yesBtnOn: { backgroundColor: colors.green, borderColor: colors.green },
-    noBtnOn: { borderColor: colors.red },
     yesText: { color: '#fff', fontWeight: '800' },
     noText: { color: colors.red, fontWeight: '800' },
     checkinCard: {
@@ -691,6 +1026,7 @@ const makeStyles = (colors) =>
       shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
       shadowOpacity: 0.12, shadowRadius: 8, elevation: 2,
     },
+    checkinCardFuture: { opacity: 0.6 },
     checkinTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
     checkinSub: { color: colors.textDim, fontSize: 13, marginTop: 3 },
     checkinStateRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 5 },

@@ -10,8 +10,10 @@ const mealCatalog = require('../data/mealCatalog');
 const workoutTemplates = require('../data/workoutTemplates');
 const notifications = require('../data/notifications');
 const intakeProfiles = require('../data/intakeProfiles');
+const backup = require('../data/backup');
 const { query } = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { registerRoute } = require('../admin/registry');
 
 const router = express.Router();
 const INVITE_TTL_DAYS = 7;
@@ -22,7 +24,14 @@ function httpError(res, e, fallback = 500) {
 }
 
 // POST /trainer/invite-code — trainer-only
-router.post('/invite-code', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'POST',
+  path: '/invite-code',
+  description: 'Generates a new invite code for the authenticated trainer that expires after seven days.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Relationships',
+}, async (req, res) => {
   try {
     const code = crypto.randomBytes(4).toString('hex').toUpperCase(); // 8 chars
     const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 86400 * 1000);
@@ -31,12 +40,19 @@ router.post('/invite-code', requireAuth, requireRole('trainer'), async (req, res
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // GET /trainer/invite-code/latest — the trainer's most recent still-valid
 // code (null if none), so Settings can show the existing code instead of
 // silently minting a new one on every open.
-router.get('/invite-code/latest', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/invite-code/latest',
+  description: "Returns the trainer's most recent still-valid invite code, or null when none exists.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Relationships',
+}, async (req, res) => {
   try {
     const { rows } = await query(
       `SELECT id, code, expires_at FROM trainer_invite_codes
@@ -48,20 +64,34 @@ router.get('/invite-code/latest', requireAuth, requireRole('trainer'), async (re
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // GET /trainer/associations?status=pending — trainer-only
-router.get('/associations', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/associations',
+  description: 'Lists the trainer client associations, optionally filtered by status query parameter.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Relationships',
+}, async (req, res) => {
   try {
     const rows = await trainerClients.listAssociations(req.user.id, req.query.status);
     res.json(rows);
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // POST /trainer/associations/:id/accept — trainer-only
-router.post('/associations/:id/accept', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'POST',
+  path: '/associations/:id/accept',
+  description: 'Accepts a pending client association request on behalf of the trainer.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Relationships',
+}, async (req, res) => {
   try {
     const { final_decision } = req.body || {};
     const row = await trainerClients.respondToAssociation(req.user.id, req.params.id, 'accept', final_decision || null);
@@ -69,10 +99,17 @@ router.post('/associations/:id/accept', requireAuth, requireRole('trainer'), asy
   } catch (e) {
     httpError(res, e, 400);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // POST /trainer/associations/:id/reject — trainer-only (reject or later revoke)
-router.post('/associations/:id/reject', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'POST',
+  path: '/associations/:id/reject',
+  description: 'Rejects a pending association request or revokes an existing association for the trainer.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Relationships',
+}, async (req, res) => {
   try {
     // reactivations revert to 'archived' internally; new requests revoke
     const row = await trainerClients.respondToAssociation(req.user.id, req.params.id, 'reject');
@@ -80,25 +117,35 @@ router.post('/associations/:id/reject', requireAuth, requireRole('trainer'), asy
   } catch (e) {
     httpError(res, e, 400);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // GET /trainer/clients — trainer-only, active clients with activity
 // aggregates (adherence_pct + last_active_at) computed in one query.
-router.get('/clients', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients',
+  description: 'Returns the active client roster with adherence and last-active aggregates.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Relationships',
+}, async (req, res) => {
   try {
     res.json(await sessionSummaries.rosterWithArchive(req.user.id));
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // GET /trainer/clients/:clientId/session-summaries — trainer-only, requires
 // an active association with that client; paginated by performed_at DESC.
-router.get(
-  '/clients/:clientId/session-summaries',
-  requireAuth,
-  requireRole('trainer'),
-  async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/session-summaries',
+  description: 'Returns paginated workout session summaries for a client when an active association exists.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
     try {
       const { rows } = await query(
         `SELECT 1 FROM trainer_clients
@@ -121,13 +168,19 @@ router.get(
     } catch (e) {
       httpError(res, e);
     }
-  }
-);
+  }, [requireAuth, requireRole('trainer')]);
 
 // ---- Assigned plans (trainer → client) ----
 
 // POST /trainer/plans — trainer-only; requires active association
-router.post('/plans', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'POST',
+  path: '/plans',
+  description: 'Creates a new assigned workout plan for a client from the request body.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     const { clientId, name, notes, exercises } = req.body || {};
     if (!clientId || !name || !Array.isArray(exercises) || !exercises.length) {
@@ -144,21 +197,35 @@ router.post('/plans', requireAuth, requireRole('trainer'), async (req, res) => {
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // GET /trainer/plans?clientId=... — trainer-only
-router.get('/plans', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/plans',
+  description: "Lists the trainer's assigned plans, optionally filtered by clientId query parameter.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     res.json(await assignedPlans.listAssignedPlans({ trainerId: req.user.id, clientId: req.query.clientId }));
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // ---- Client-scoped assigned plans ----
 
 // POST /trainer/clients/:clientId/assigned-plans — create for an ACTIVE client
-router.post('/clients/:clientId/assigned-plans', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'POST',
+  path: '/clients/:clientId/assigned-plans',
+  description: 'Creates an assigned workout plan for a specific client and notifies them of the assignment.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     const { clientId } = req.params;
     const { name, notes, exercises, tags } = req.body || {};
@@ -183,19 +250,33 @@ router.post('/clients/:clientId/assigned-plans', requireAuth, requireRole('train
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // GET /trainer/clients/:clientId/assigned-plans — active plans (association-checked)
-router.get('/clients/:clientId/assigned-plans', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/assigned-plans',
+  description: "Lists the trainer's active assigned plans for a specific client.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     res.json(await assignedPlans.listActiveForClient(req.user.id, req.params.clientId));
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // PUT /trainer/clients/:clientId/assigned-plans/:planId — update an assigned plan
-router.put('/clients/:clientId/assigned-plans/:planId', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'PUT',
+  path: '/clients/:clientId/assigned-plans/:planId',
+  description: 'Updates the name, notes and exercises of an assigned plan for a specific client.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     const { clientId, planId } = req.params;
     const { name, notes, exercises } = req.body || {};
@@ -207,11 +288,18 @@ router.put('/clients/:clientId/assigned-plans/:planId', requireAuth, requireRole
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // PATCH /trainer/clients/:clientId/assigned-plans/:planId — status-only update
 // (archive). Verifies the plan belongs to this trainer+client pair.
-router.patch('/clients/:clientId/assigned-plans/:planId', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/clients/:clientId/assigned-plans/:planId',
+  description: 'Archives an assigned plan owned by this trainer-client pair via a status-only update.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     const { status } = req.body || {};
     if (status !== 'archived') {
@@ -221,7 +309,7 @@ router.patch('/clients/:clientId/assigned-plans/:planId', requireAuth, requireRo
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // ---- Measurement + drill-down (trainer → client) ----
 
@@ -253,7 +341,14 @@ async function requireReadableAssociation(req, res, clientId) {
 }
 
 // GET /trainer/clients/:clientId/measurements?metric_type=&from=&to=
-router.get('/clients/:clientId/measurements', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/measurements',
+  description: "Lists a client's body measurements filtered by metric type and date range.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Measurements',
+}, async (req, res) => {
   try {
     if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
     res.json(
@@ -266,45 +361,68 @@ router.get('/clients/:clientId/measurements', requireAuth, requireRole('trainer'
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // GET /trainer/clients/:clientId/measurement-types
-router.get('/clients/:clientId/measurement-types', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/measurement-types',
+  description: 'Lists the distinct measurement metric types recorded for a client.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Measurements',
+}, async (req, res) => {
   try {
     if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
     res.json(await measurements.listMeasurementTypes(req.params.clientId));
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // GET /trainer/clients/:clientId/sessions/:sessionSummaryId/details
-router.get(
-  '/clients/:clientId/sessions/:sessionSummaryId/details',
-  requireAuth,
-  requireRole('trainer'),
-  async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/sessions/:sessionSummaryId/details',
+  description: "Returns the full exercise details of one of a client's workout session summaries.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
     try {
       if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
       res.json(await sessionDetails.getDetailsForSummary(req.params.sessionSummaryId));
     } catch (e) {
       httpError(res, e);
     }
-  }
-);
+  }, [requireAuth, requireRole('trainer')]);
 
 // GET /trainer/clients/:clientId/exercises — distinct logged exercises
-router.get('/clients/:clientId/exercises', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/exercises',
+  description: 'Lists the distinct exercises a client has logged in their workout sessions.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
     res.json(await sessionDetails.listClientExercises(req.params.clientId));
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // GET /trainer/clients/:clientId/strength?exercise=&from=&to= — e1RM trend
-router.get('/clients/:clientId/strength', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/strength',
+  description: "Returns a client's estimated one-rep-max strength trend for a given exercise over a date range.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
     if (!req.query.exercise) {
@@ -321,13 +439,20 @@ router.get('/clients/:clientId/strength', requireAuth, requireRole('trainer'), a
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // ---- Diet + supplement plans (trainer → client) ----
 for (const kind of ['diet', 'supplement']) {
   const seg = kind === 'diet' ? 'diet-plans' : 'supplement-plans';
 
-  router.post(`/clients/:clientId/${seg}`, requireAuth, requireRole('trainer'), async (req, res) => {
+  registerRoute(router, {
+    method: 'POST',
+    path: `/clients/:clientId/${seg}`,
+    description: `Creates an assigned ${kind} plan for a specific client and notifies them of the assignment.`,
+    requiresAuth: true,
+    allowedRoles: ['trainer'],
+    category: 'Nutrition',
+  }, async (req, res) => {
     try {
       const { name, notes, items, days } = req.body || {};
       const targets = kind === 'diet'
@@ -362,17 +487,33 @@ for (const kind of ['diet', 'supplement']) {
     } catch (e) {
       httpError(res, e);
     }
-  });
+  }, [requireAuth, requireRole('trainer')]);
 
-  router.get(`/clients/:clientId/${seg}`, requireAuth, requireRole('trainer'), async (req, res) => {
+  registerRoute(router, {
+    method: 'GET',
+    path: `/clients/:clientId/${seg}`,
+    description: `Lists the trainer's active assigned ${kind} plans for a specific client.`,
+    requiresAuth: true,
+    allowedRoles: ['trainer'],
+    category: 'Nutrition',
+  }, async (req, res) => {
     try {
       res.json(await coaching.listActiveForClient(kind, req.user.id, req.params.clientId));
     } catch (e) {
       httpError(res, e);
     }
-  });
+  }, [requireAuth, requireRole('trainer')]);
 
-  router.patch(`/clients/:clientId/${seg}/:planId`, requireAuth, requireRole('trainer'), async (req, res) => {
+  registerRoute(router, {
+    method: 'PATCH',
+    path: `/clients/:clientId/${seg}/:planId`,
+    description: kind === 'diet'
+      ? 'Archives an assigned diet plan for a specific client.'
+      : 'Archives an assigned supplement plan or updates its tags for a specific client.',
+    requiresAuth: true,
+    allowedRoles: ['trainer'],
+    category: 'Nutrition',
+  }, async (req, res) => {
     try {
       if ((req.body || {}).status === 'archived') {
         return res.json(await coaching.archivePlan(kind, req.user.id, req.params.clientId, req.params.planId));
@@ -387,9 +528,16 @@ for (const kind of ['diet', 'supplement']) {
     } catch (e) {
       httpError(res, e);
     }
-  });
+  }, [requireAuth, requireRole('trainer')]);
 
-  router.get(`/clients/:clientId/${seg}/:planId/checkins`, requireAuth, requireRole('trainer'), async (req, res) => {
+  registerRoute(router, {
+    method: 'GET',
+    path: `/clients/:clientId/${seg}/:planId/checkins`,
+    description: `Lists a client's check-ins for an assigned ${kind} plan within an optional date range.`,
+    requiresAuth: true,
+    allowedRoles: ['trainer'],
+    category: 'Nutrition',
+  }, async (req, res) => {
     try {
       res.json(
         await coaching.listCheckins(kind, req.user.id, req.params.clientId, req.params.planId, req.query.from, req.query.to)
@@ -397,24 +545,37 @@ for (const kind of ['diet', 'supplement']) {
     } catch (e) {
       httpError(res, e);
     }
-  });
+  }, [requireAuth, requireRole('trainer')]);
 
   // plan detail with items (trainer-owned)
-  router.get(`/clients/:clientId/${seg}/:planId`, requireAuth, requireRole('trainer'), async (req, res) => {
+  registerRoute(router, {
+    method: 'GET',
+    path: `/clients/:clientId/${seg}/:planId`,
+    description: kind === 'diet'
+      ? "Returns an assigned diet plan with its items plus the client's recent dish substitutions."
+      : 'Returns an assigned supplement plan with its items.',
+    requiresAuth: true,
+    allowedRoles: ['trainer'],
+    category: 'Nutrition',
+  }, async (req, res) => {
     try {
       if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
       const plan = await coaching.getPlanWithItems(kind, req.params.planId);
       if (!plan || plan.trainer_id !== req.user.id) return res.status(404).json({ error: 'Plan not found' });
+      if (kind === 'diet') {
+        // recent date-scoped dish substitutions the client made while
+        // following this assigned plan (empty for self-authored swaps —
+        // those carry plan_server_id IS NULL and can never match)
+        plan.recent_swaps = await backup.listAssignedPlanSwaps(
+          req.user.id, req.params.clientId, req.params.planId
+        );
+      }
       res.json(plan);
     } catch (e) {
       httpError(res, e);
     }
-  });
+  }, [requireAuth, requireRole('trainer')]);
 }
-
-
-
-
 
 
 
@@ -426,16 +587,21 @@ for (const kind of ['diet', 'supplement']) {
 // Returns the client's completed intake profile (goals, injuries,
 // medical_conditions, allergens) or null when none exists. The app
 // skips ALL allergen warnings when this is null — no error, no blocking.
-router.get('/clients/:clientId/intake-profile', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/intake-profile',
+  description: "Returns a client's completed intake profile, or null when none exists.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Relationships',
+}, async (req, res) => {
   try {
     if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
     res.json(await intakeProfiles.getProfileForClient(req.params.clientId));
   } catch (e) {
     httpError(res, e);
   }
-});
-
-
+}, [requireAuth, requireRole('trainer')]);
 
 
 
@@ -445,72 +611,123 @@ router.get('/clients/:clientId/intake-profile', requireAuth, requireRole('traine
 
 
 // GET /trainer/clients/:clientId/volume-by-muscle-group?from=&to=
-router.get(
-  '/clients/:clientId/volume-by-muscle-group',
-  requireAuth,
-  requireRole('trainer'),
-  async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/volume-by-muscle-group',
+  description: "Returns a client's training volume aggregated by muscle group over a date range.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
     try {
       if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
       res.json(await sessionDetails.volumeByMuscleGroup(req.params.clientId, req.query.from, req.query.to));
     } catch (e) {
       httpError(res, e);
     }
-  }
-);
+  }, [requireAuth, requireRole('trainer')]);
 
 // ---- Meal catalog (trainer-owned dish library) ----
-router.post('/meal-catalog', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'POST',
+  path: '/meal-catalog',
+  description: 'Creates a new dish in the meal catalog owned by the authenticated trainer.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
   try {
     res.status(201).json(await mealCatalog.create(req.user.id, req.body || {}));
   } catch (e) {
     httpError(res, e, 400);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
-router.get('/meal-catalog', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/meal-catalog',
+  description: "Lists the dishes in the meal catalog owned by the authenticated trainer.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
   try {
     res.json(await mealCatalog.list(req.user.id));
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
-router.patch('/meal-catalog/:id', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/meal-catalog/:id',
+  description: 'Updates a meal catalog dish owned by the authenticated trainer.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
   try {
     res.json(await mealCatalog.update(req.user.id, req.params.id, req.body || {}));
   } catch (e) {
     httpError(res, e, 400);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
-router.delete('/meal-catalog/:id', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'DELETE',
+  path: '/meal-catalog/:id',
+  description: 'Removes a meal catalog dish owned by the authenticated trainer.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
   try {
     await mealCatalog.remove(req.user.id, req.params.id);
     res.json({ ok: true });
   } catch (e) {
     httpError(res, e, 404);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // ---- Workout templates (trainer-owned reusable library) ----
-router.post('/workout-templates', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'POST',
+  path: '/workout-templates',
+  description: 'Creates a new workout template in the library owned by the authenticated trainer.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     res.status(201).json(await workoutTemplates.createTemplate(req.user.id, req.body || {}));
   } catch (e) {
     httpError(res, e, 400);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
-router.get('/workout-templates', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/workout-templates',
+  description: 'Lists the workout templates in the library owned by the authenticated trainer.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     res.json(await workoutTemplates.listTemplates(req.user.id));
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
-router.get('/workout-templates/:id', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/workout-templates/:id',
+  description: 'Returns a single workout template owned by the authenticated trainer.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     const tpl = await workoutTemplates.getTemplate(req.user.id, req.params.id);
     if (!tpl) return res.status(404).json({ error: 'Template not found' });
@@ -518,31 +735,48 @@ router.get('/workout-templates/:id', requireAuth, requireRole('trainer'), async 
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
-router.patch('/workout-templates/:id', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/workout-templates/:id',
+  description: 'Updates a workout template owned by the authenticated trainer.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     res.json(await workoutTemplates.updateTemplate(req.user.id, req.params.id, req.body || {}));
   } catch (e) {
     httpError(res, e, 400);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
-router.delete('/workout-templates/:id', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'DELETE',
+  path: '/workout-templates/:id',
+  description: 'Deletes a workout template owned by the authenticated trainer.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     await workoutTemplates.deleteTemplate(req.user.id, req.params.id);
     res.json({ ok: true });
   } catch (e) {
     httpError(res, e, 404);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // Assign a snapshot copy of a template to an active client
-router.post(
-  '/clients/:clientId/assigned-plans/from-template/:templateId',
-  requireAuth,
-  requireRole('trainer'),
-  async (req, res) => {
+registerRoute(router, {
+  method: 'POST',
+  path: '/clients/:clientId/assigned-plans/from-template/:templateId',
+  description: 'Assigns a snapshot copy of a workout template to a client and notifies them of the assignment.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
     try {
       const plan = await workoutTemplates.assignFromTemplate(
         req.user.id,
@@ -566,12 +800,18 @@ router.post(
     } catch (e) {
       httpError(res, e);
     }
-  }
-);
+  }, [requireAuth, requireRole('trainer')]);
 
 // POST /trainer/clients/:clientId/unlink — archive the relationship
 // (either party); trainer keeps read-only access for 30 days.
-router.post('/clients/:clientId/unlink', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'POST',
+  path: '/clients/:clientId/unlink',
+  description: 'Archives the trainer-client relationship and schedules data purge after a 30-day read-only window.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Relationships',
+}, async (req, res) => {
   try {
     const { rows } = await query(
       `UPDATE trainer_clients SET
@@ -588,10 +828,17 @@ router.post('/clients/:clientId/unlink', requireAuth, requireRole('trainer'), as
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // GET /trainer/plans/:id — trainer-only
-router.get('/plans/:id', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'GET',
+  path: '/plans/:id',
+  description: "Returns a single assigned plan when it belongs to the authenticated trainer.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     const plan = await assignedPlans.getAssignedPlan(req.params.id);
     if (!plan || plan.trainer_id !== req.user.id) {
@@ -601,10 +848,17 @@ router.get('/plans/:id', requireAuth, requireRole('trainer'), async (req, res) =
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // DELETE /trainer/plans/:id — trainer-only
-router.delete('/plans/:id', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'DELETE',
+  path: '/plans/:id',
+  description: 'Deletes an assigned plan when it belongs to the authenticated trainer.',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Workouts',
+}, async (req, res) => {
   try {
     const plan = await assignedPlans.getAssignedPlan(req.params.id);
     if (!plan || plan.trainer_id !== req.user.id) {
@@ -615,10 +869,17 @@ router.delete('/plans/:id', requireAuth, requireRole('trainer'), async (req, res
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 // PATCH /trainer/clients/:clientId/notification-preference — trainer-only
-router.patch('/clients/:clientId/notification-preference', requireAuth, requireRole('trainer'), async (req, res) => {
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/clients/:clientId/notification-preference',
+  description: "Enables or disables the trainer's notifications for a specific client.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Notifications',
+}, async (req, res) => {
   try {
     const { enabled } = req.body || {};
     if (typeof enabled !== 'boolean') {
@@ -633,6 +894,6 @@ router.patch('/clients/:clientId/notification-preference', requireAuth, requireR
   } catch (e) {
     httpError(res, e);
   }
-});
+}, [requireAuth, requireRole('trainer')]);
 
 module.exports = router;

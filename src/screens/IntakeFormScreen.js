@@ -25,10 +25,14 @@ const COMMON_GOALS = ['Weight Loss', 'Muscle Gain', 'Strength', 'Endurance', 'Ge
 // allergens + goals are explicit tag chips; injuries / medical are free
 // text. ONLY allergens are ever auto-matched anywhere in the app (diet
 // plan conflict warnings) — goals/injuries/medical are display-only.
-export default function IntakeFormScreen({ route, navigation }) {
+// Rendered both as a normal stack screen (route/navigation from React
+// Navigation) and as a full-screen gate overlay above the navigator
+// (App.js passes explicit `gate`/`onClose` props instead).
+export default function IntakeFormScreen({ route, navigation, gate: gateProp, onClose }) {
   const colors = useColors();
   const styles = makeStyles(colors);
-  const isGate = !!(route.params || {}).gate;
+  // Overlay mode: `gate` prop decides; screen mode: route params decide.
+  const isGate = gateProp != null ? !!gateProp : !!(route?.params || {}).gate;
 
   const [allergens, setAllergens] = useState([]);
   const [goals, setGoals] = useState([]);
@@ -40,6 +44,7 @@ export default function IntakeFormScreen({ route, navigation }) {
   const [busy, setBusy] = useState(false);
 
   React.useLayoutEffect(() => {
+    if (!navigation?.setOptions) return; // overlay mode — no header to configure
     navigation.setOptions({
       title: isGate ? 'Health Profile Setup' : 'My Health Profile',
       ...(isGate ? { headerLeft: () => null, gestureEnabled: false } : {}),
@@ -97,7 +102,8 @@ export default function IntakeFormScreen({ route, navigation }) {
           medical_conditions: medical.trim() || null,
         },
       });
-      navigation.goBack();
+      if (onClose) onClose();
+      else navigation.goBack();
     } catch (e) {
       Alert.alert('Could not save', e.message || 'Please check your connection and try again.');
     } finally {

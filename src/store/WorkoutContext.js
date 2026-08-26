@@ -85,6 +85,12 @@ function reducer(state, action) {
             restSeconds: ex.rest_seconds ?? ex.restSeconds ?? defaultRest ?? 90,
             groupId: ex.group_id ?? ex.groupId ?? null,
             notes: '',
+            // configured alternatives for the live-swap picker (0-3)
+            alternatives: (ex.alternatives || []).map((a) =>
+              typeof a === 'string' ? a : a.name
+            ),
+            // populated only when a mid-session swap occurred
+            originalExerciseName: null,
             sets,
           };
         }),
@@ -122,6 +128,53 @@ function reducer(state, action) {
             sets,
           },
         ],
+      };
+    }
+    // Mid-session swap. Session-local ONLY — the source routine/template/
+    // assigned plan is never touched.
+    //  - No logged sets yet: rename this entry in place (position, superset
+    //    group_id, rest seconds, notes and target sets all carry over).
+    //  - Sets already logged: SPLIT — logged sets stay attributed to the
+    //    original exercise; a new session_exercises entry for the swap
+    //    target takes over the remaining (unlogged) sets, inserted at the
+    //    same position so order/superset structure is preserved.
+    case 'SWAP_EXERCISE': {
+      const { exerciseKey, exercise } = action;
+      const hasValues = (s) =>
+        s.completed || parseFloat(s.weight) > 0 || parseInt(s.reps, 10) > 0;
+      return {
+        ...state,
+        exercises: state.exercises.flatMap((e) => {
+          if (e.key !== exerciseKey) return [e];
+          const originalName = e.originalExerciseName || e.name;
+          const logged = e.sets.filter(hasValues);
+          if (logged.length === 0) {
+            return [
+              {
+                ...e,
+                name: exercise.name,
+                exerciseId: exercise.id,
+                muscleGroup: exercise.muscle_group ?? exercise.muscleGroup ?? null,
+                originalExerciseName: originalName,
+              },
+            ];
+          }
+          const remaining = e.sets.filter((s) => !hasValues(s));
+          const swappedEntry = {
+            key: nextKey(),
+            exerciseId: exercise.id,
+            name: exercise.name,
+            muscleGroup: exercise.muscle_group ?? exercise.muscleGroup ?? null,
+            restSeconds: e.restSeconds,
+            groupId: e.groupId,
+            notes: e.notes,
+            trainerNote: e.trainerNote,
+            alternatives: [],
+            originalExerciseName: originalName,
+            sets: remaining.length ? remaining : [emptySet()],
+          };
+          return [{ ...e, sets: logged }, swappedEntry];
+        }),
       };
     }
     case 'REMOVE_EXERCISE': {
@@ -295,6 +348,16 @@ function reducer(state, action) {
           e.key === action.exerciseKey ? { ...e, notes: action.notes } : e
         ),
       };
+    // "Share with Trainer" note — deliberately SEPARATE from the private
+    // personal note: this is the only exercise-level text that ever reaches
+    // the trainer (via the session detail payload's shared_note).
+    case 'SET_EXERCISE_TRAINER_NOTE':
+      return {
+        ...state,
+        exercises: state.exercises.map((e) =>
+          e.key === action.exerciseKey ? { ...e, trainerNote: action.note } : e
+        ),
+      };
     case 'LINK_SUPERSET': {
       const keys = new Set(action.exerciseKeys);
       const groupId = nextGroupId();
@@ -454,29 +517,6 @@ export function useWorkout() {
   return ctx;
 }
 
-// Elapsed active-logging seconds, excluding paused intervals
-export function elapsedSeconds(workout, now = Date.now()) {
-  if (!workout) return 0;
-  const end = workout.pausedAt ?? now;
-  return Math.max(0, Math.floor((end - workout.startTime - (workout.pausedMs || 0)) / 1000));
-}
-
-export function formatDuration(sec) {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  const pad = (n) => String(n).padStart(2, '0');
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-}
-
-// Assign labels A, B, C… to group ids by first appearance in the list
-export function groupLabels(exercises) {
-  const labels = {};
-  let n = 0;
-  for (const e of exercises) {
-    if (e.groupId && !(e.groupId in labels)) {
-      labels[e.groupId] = String.fromCharCode(65 + n++);
-    }
-  }
-  return labels;
-}
+// Duration/grouping helpers live in features/workouts/utils/workoutUtils;
+// re-exported here for backwards compatibility with existing importers.
+export { elapsedSeconds, formatDuration, groupLabels } from '../features/workouts/utils/workoutUtils';

@@ -2,11 +2,12 @@ import React, { useCallback, useState } from 'react';
 import { View, Text, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import LoadError from '../shared/components/LoadError';
 import { getExerciseProgress, getPersonalRecords, getExerciseHistory, getRecentSets } from '../db/queries';
 import { getPRSetIdsForExercise } from '../db/pr';
 import LineChart from '../components/LineChart';
 import { useColors } from '../theme';
-import { fmtDate } from '../theme';
+import { fmtDate } from '../shared/utils/format';
 import { avgRpe, rpeInsight } from '../lib/stats';
 
 export default function ExerciseProgressScreen({ route, navigation }) {
@@ -20,6 +21,8 @@ export default function ExerciseProgressScreen({ route, navigation }) {
   const [history, setHistory] = useState([]);
   const [insight, setInsight] = useState(null);
   const [prSetIds, setPrSetIds] = useState(new Set());
+  const [loadError, setLoadError] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
 
   const styles = {
     container: { flex: 1, backgroundColor: colors.bg },
@@ -51,26 +54,32 @@ export default function ExerciseProgressScreen({ route, navigation }) {
     useCallback(() => {
       let mounted = true;
       async function load() {
-        const [prog, prData, hist, prsData] = await Promise.all([
-          getExerciseProgress(exerciseId),
-          getPersonalRecords(exerciseId),
-          getExerciseHistory(exerciseId, 30),
-          getPRSetIdsForExercise(exerciseId),
-        ]);
-        if (mounted) {
-          setProgress(prog);
-          setPrs(prData);
-          setHistory(hist);
-          setPrSetIds(prsData);
-        }
-        const rows = await getRecentSets(exerciseId, 10);
-        if (mounted) {
-          setInsight(rpeInsight(rows.slice().reverse()));
+        try {
+          const [prog, prData, hist, prsData] = await Promise.all([
+            getExerciseProgress(exerciseId),
+            getPersonalRecords(exerciseId),
+            getExerciseHistory(exerciseId, 30),
+            getPRSetIdsForExercise(exerciseId),
+          ]);
+          if (mounted) {
+            setProgress(prog);
+            setPrs(prData);
+            setHistory(hist);
+            setPrSetIds(prsData);
+          }
+          const rows = await getRecentSets(exerciseId, 10);
+          if (mounted) {
+            setInsight(rpeInsight(rows.slice().reverse()));
+            setLoadError(false);
+          }
+        } catch (e) {
+          console.warn('[ExerciseProgressScreen] load failed:', e?.message || e);
+          if (mounted) setLoadError(true);
         }
       }
       load();
       return () => { mounted = false; };
-    }, [exerciseId])
+    }, [exerciseId, retryTick])
   );
 
   const e1rmData = progress.map((p) => ({ x: p.start_time, y: p.best_e1rm }));
@@ -87,6 +96,10 @@ export default function ExerciseProgressScreen({ route, navigation }) {
       bySession.push(current);
     }
     current.sets.push({ weight: row.weight, reps: row.reps, isPR: prSetIds.has(row.set_id) });
+  }
+
+  if (loadError && progress.length === 0) {
+    return <LoadError onRetry={() => setRetryTick((t) => t + 1)} />;
   }
 
   return (

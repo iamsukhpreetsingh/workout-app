@@ -12,6 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../lib/api';
 import ExercisePicker from '../components/ExercisePicker';
+import AlternativesEditor from '../components/AlternativesEditor';
 import { getExerciseByName } from '../db/queries';
 import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import RestEditorModal from '../components/RestEditorModal';
@@ -93,6 +94,7 @@ export default function WorkoutTemplateEditorScreen({ route, navigation }) {
             targetSets: ex.target_sets,
             restSeconds: ex.rest_seconds || 90,
             groupId: ex.group_id || null,
+            alternatives: (ex.alternatives || []).map((a) => a.alternative_exercise_name ?? a),
           }))
         );
       })
@@ -152,6 +154,7 @@ export default function WorkoutTemplateEditorScreen({ route, navigation }) {
       rest_seconds: e.restSeconds,
       notes: null,
       group_id: e.groupId || null,
+      alternatives: e.alternatives || [],
     })),
   });
 
@@ -340,6 +343,18 @@ export default function WorkoutTemplateEditorScreen({ route, navigation }) {
                   <Ionicons name="close" size={16} color={colors.textDim} />
                 </TouchableOpacity>
               </View>
+            )}
+            {!selectMode && (
+              <AlternativesEditor
+                primaryName={ex.name}
+                alternatives={ex.alternatives || []}
+                excludeNames={exercises.filter((_, j) => j !== idx).map((e) => e.name)}
+                onChange={(alternatives) =>
+                  setExercises((prev) =>
+                    prev.map((e, i) => (i === idx ? { ...e, alternatives } : e))
+                  )
+                }
+              />
             )}
           </View>
         );

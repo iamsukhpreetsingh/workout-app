@@ -1,5 +1,6 @@
 // Data access for client_workout_plans — user-created workout plans synced to cloud.
 const { query } = require('../db/pool');
+const { normalizeAlternatives } = require('./alternatives');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -18,6 +19,15 @@ async function upsertTemplates(clientId, templates) {
     if (!t || !t.local_plan_id) {
       throw new HttpError(400, 'Each template requires local_plan_id');
     }
+    // configured swap alternatives ride INSIDE each exercise object —
+    // same rules as everywhere else: max 3, no duplicates (case-
+    // insensitive), rejected with 400, never silently truncated
+    const exercises = (t.exercises || []).map((ex) => ({
+      ...ex,
+      alternatives: normalizeAlternatives(ex?.exercise_name, ex?.alternatives).map(
+        (a) => a.alternative_exercise_name
+      ),
+    }));
     const { rows: r } = await query(
       `INSERT INTO client_workout_plans
          (client_id, local_plan_id, name, notes, exercises, tags, created_at, updated_at)
@@ -35,7 +45,7 @@ async function upsertTemplates(clientId, templates) {
         String(t.local_plan_id),
         t.name || 'Untitled',
         t.notes || null,
-        JSON.stringify(t.exercises || []),
+        JSON.stringify(exercises),
         JSON.stringify(t.tags || []),
         t.created_at || new Date().toISOString(),
         t.updated_at || new Date().toISOString(),

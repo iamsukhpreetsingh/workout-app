@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingVi
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../store/AuthContext';
 import { useColors } from '../theme';
+import { SIGNUP, FORGOT_PASSWORD } from '../shared/constants/routes';
 
 export default function LoginScreen({ navigation }) {
   const colors = useColors();
@@ -61,7 +62,11 @@ export default function LoginScreen({ navigation }) {
         {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Log In</Text>}
       </TouchableOpacity>
 
-      <TouchableOpacity onPress={() => navigation.navigate('Signup')}>
+      <TouchableOpacity onPress={() => navigation.navigate(FORGOT_PASSWORD)}>
+        <Text style={styles.link}>Forgot password?</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity onPress={() => navigation.navigate(SIGNUP)}>
         <Text style={styles.link}>
           Don't have an account? <Text style={styles.linkBold}>Sign up</Text>
         </Text>

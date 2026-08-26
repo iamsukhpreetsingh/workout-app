@@ -11,11 +11,13 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../lib/api';
 import ExercisePicker from '../components/ExercisePicker';
+import AlternativesEditor from '../components/AlternativesEditor';
 import { getExerciseByName } from '../db/queries';
 import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import RestEditorModal from '../components/RestEditorModal';
 import { groupLabels } from '../store/WorkoutContext';
 import { useColors } from '../theme';
+import { CLIENT_DETAIL } from '../shared/constants/routes';
 
 let groupCounter = 0;
 const nextGroupId = () => `a${Date.now()}_${++groupCounter}`;
@@ -68,6 +70,7 @@ export default function AssignWorkoutScreen({ route, navigation }) {
                 targetSets: e.target_sets,
                 restSeconds: e.rest_seconds || 90,
                 groupId: e.group_id,
+                alternatives: (e.alternatives || []).map((a) => a.alternative_exercise_name ?? a),
               }))
             );
           }
@@ -89,6 +92,7 @@ export default function AssignWorkoutScreen({ route, navigation }) {
         targetSets: ex.targetSets || 3,
         restSeconds: ex.restSeconds || 90,
         groupId: ex.groupId || null,
+        alternatives: ex.alternatives || [],
       }))
     );
   }, [prefill]);
@@ -135,6 +139,9 @@ export default function AssignWorkoutScreen({ route, navigation }) {
         rest_seconds: e.restSeconds,
         notes: null,
         group_id: e.groupId || null,
+        alternatives: (e.alternatives || []).map((a) =>
+          typeof a === 'string' ? a : a.alternative_exercise_name ?? a.name
+        ),
       }));
 
       if (isEditing) {
@@ -172,12 +179,15 @@ export default function AssignWorkoutScreen({ route, navigation }) {
               rest_seconds: e.restSeconds,
               notes: null,
               group_id: e.groupId || null,
+              alternatives: (e.alternatives || []).map((a) =>
+                typeof a === 'string' ? a : a.alternative_exercise_name ?? a.name
+              ),
             })),
           },
         });
       }
       }
-      navigation.navigate('ClientDetail', {
+      navigation.navigate(CLIENT_DETAIL, {
         ...route.params,
         assignedToast: name.trim(),
         refreshKey: Date.now(),
@@ -338,6 +348,18 @@ export default function AssignWorkoutScreen({ route, navigation }) {
                   <Ionicons name="close" size={16} color={colors.textDim} />
                 </TouchableOpacity>
               </View>
+            )}
+            {!selectMode && (
+              <AlternativesEditor
+                primaryName={ex.name}
+                alternatives={ex.alternatives || []}
+                excludeNames={exercises.filter((_, j) => j !== idx).map((e) => e.name)}
+                onChange={(alternatives) =>
+                  setExercises((prev) =>
+                    prev.map((e, i) => (i === idx ? { ...e, alternatives } : e))
+                  )
+                }
+              />
             )}
           </View>
         );

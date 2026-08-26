@@ -1,12 +1,15 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Alert, StyleSheet } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { getPlan, deletePlan } from '../db/queries';
+import { getPlan, deletePlan } from '../services/routineService';
 import { useWorkout, groupLabels } from '../store/WorkoutContext';
 import { Ionicons } from '@expo/vector-icons';
 import { shareRoutine } from '../lib/share';
 import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
-import { useColors, fmtDate } from '../theme';
+import { useColors } from '../theme';
+import { fmtDate } from '../shared/utils/format';
+import LoadError from '../shared/components/LoadError';
+import { ACTIVE_WORKOUT, PLAN_EDITOR } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -14,15 +17,27 @@ export default function PlanDetailScreen({ route, navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [plan, setPlan] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
   const [detailEx, setDetailEx] = useState(null);
   const { workout, dispatch } = useWorkout();
 
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
-      getPlan(route.params.planId).then((p) => { if (mounted) setPlan(p); });
+      getPlan(route.params.planId)
+        .then((p) => {
+          if (mounted) {
+            setPlan(p);
+            setLoadError(false);
+          }
+        })
+        .catch((e) => {
+          console.warn('[PlanDetailScreen] load failed:', e?.message || e);
+          if (mounted) setLoadError(true);
+        });
       return () => { mounted = false; };
-    }, [route.params.planId])
+    }, [route.params.planId, retryTick])
   );
 
   // Share action in the routine header (same treatment as Session Detail)
@@ -31,7 +46,7 @@ export default function PlanDetailScreen({ route, navigation }) {
       headerRight: () => (
         <View style={{ flexDirection: 'row' }}>
           <TouchableOpacity
-            onPress={() => navigation.navigate('PlanEditor', { planId: plan?.id })}
+            onPress={() => navigation.navigate(PLAN_EDITOR, { planId: plan?.id })}
             style={{ paddingHorizontal: 8 }}
           >
             <Ionicons name="create-outline" size={21} color={colors.text} />
@@ -53,8 +68,12 @@ export default function PlanDetailScreen({ route, navigation }) {
     }
     dispatch({ type: 'START_WORKOUT', name: p.name, planId: p.id, planExercises: p.exercises });
     // Expands the mini-bar's full logging view (there is no Workout tab)
-    navigation.navigate('ActiveWorkout');
+    navigation.navigate(ACTIVE_WORKOUT);
   };
+
+  if (loadError && !plan) {
+    return <LoadError onRetry={() => setRetryTick((t) => t + 1)} />;
+  }
 
   if (!plan) {
     return <View style={styles.container}><Text style={styles.dim}>Loading…</Text></View>;
@@ -125,6 +144,18 @@ export default function PlanDetailScreen({ route, navigation }) {
                   <Text style={styles.exSetsUnit}>sets</Text>
                   <Text style={styles.exGroup}>{ex.muscle_group}</Text>
                 </View>
+                {(ex.alternatives || []).length > 0 && (
+                  <View style={styles.altWrap}>
+                    {ex.alternatives.map((alt, j) => (
+                      <View key={j} style={styles.altChip}>
+                        <Ionicons name="swap-horizontal" size={10} color={colors.blue} />
+                        <Text style={styles.altText}>
+                          {typeof alt === 'string' ? alt : alt.name}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
               </View>
               <View style={styles.restChip}>
 
@@ -200,6 +231,17 @@ const makeStyles = (colors) =>
     idxText: { color: colors.primary, fontWeight: '800', fontSize: 13 },
     exName: { color: colors.text, fontWeight: '700', fontSize: 15 },
     exMetaRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4, marginTop: 2 },
+    altWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 },
+    altChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      backgroundColor: colors.cardLight,
+      borderRadius: 7,
+      paddingHorizontal: 7,
+      paddingVertical: 3,
+    },
+    altText: { color: colors.blue, fontSize: 11, fontWeight: '600' },
     exSets: { color: colors.text, fontSize: 13, fontWeight: '800' },
     exSetsUnit: { color: colors.textDim, fontSize: 11, marginRight: 8 },
     exGroup: { color: colors.textDim, fontSize: 12 },

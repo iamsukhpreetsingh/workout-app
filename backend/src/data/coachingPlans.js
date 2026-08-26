@@ -3,6 +3,7 @@
 // internal constants, never caller-supplied).
 const { query, transaction } = require('../db/pool');
 const { assertActiveAssociation } = require('./assignedPlans');
+const dietAlternatives = require('./dietAlternatives');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -118,6 +119,10 @@ async function createDietTree({ trainerId, clientId, name, notes, days, createdB
       for (const m of d.meals || []) {
         for (const it of m.items || []) {
           if (it.catalog_item_id) catalogIds.push(it.catalog_item_id);
+          // configured alternatives sourced from the catalog resolve here too
+          for (const alt of it.alternatives || []) {
+            if (alt?.catalog_item_id) catalogIds.push(alt.catalog_item_id);
+          }
         }
       }
     }
@@ -160,13 +165,14 @@ async function createDietTree({ trainerId, clientId, name, notes, days, createdB
           const snap = cat || it; // custom items carry their own fields
           const snapStrArr = (v) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
           const snapInt = (v) => (v != null && v !== '' ? Math.max(0, Math.round(Number(v))) : null);
-          await client.query(
+          const { rows: itemRows } = await client.query(
             `INSERT INTO diet_plan_meal_items
                (diet_plan_meal_id, catalog_item_id, name, calories, protein_g, carbs_g, fat_g,
                 serving_size, recipe_url, quantity_multiplier, client_note, order_index,
                 photo_path, ingredients, allergens, prep_time_minutes, cook_time_minutes,
                 difficulty, alternate_servings, tags)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+             RETURNING id`,
             [
               mealId,
               cat ? cat.id : null,
@@ -191,6 +197,41 @@ async function createDietTree({ trainerId, clientId, name, notes, days, createdB
               snapStrArr(snap.tags), // recipe tags snapshot (migration 021)
             ]
           );
+          // configured dish alternatives — snapshot macros at assign time
+          // (catalog-sourced ones snapshot from the catalog row, exactly
+          // like the primary item; custom ones carry client-provided values)
+          const alts = dietAlternatives.normalizeDietItemAlternatives(snap.name, it.alternatives);
+          for (let ai = 0; ai < alts.length; ai++) {
+            let alt = alts[ai];
+            const altCat = alt.alternative_catalog_item_id
+              ? catalogMap.get(alt.alternative_catalog_item_id)
+              : null;
+            if (alt.alternative_catalog_item_id && !altCat) {
+              if (createdBy === 'trainer') {
+                throw new HttpError(400, 'Catalog item not found for this owner');
+              }
+              // client-authored plans reference PERSONAL recipe local ids —
+              // not resolvable catalog uuids. Keep the macro snapshot, drop
+              // the unresolvable reference (the FK only covers real rows).
+              alt = { ...alt, alternative_catalog_item_id: null };
+            }
+            await dietAlternatives.insertForMealItem(client, itemRows[0].id, [{
+              ...alt,
+              alternative_calories: altCat
+                ? (altCat.calories != null ? Math.round(Number(altCat.calories)) : null)
+                : alt.alternative_calories,
+              alternative_protein_g: altCat
+                ? (altCat.protein_g != null ? Number(altCat.protein_g) : null)
+                : alt.alternative_protein_g,
+              alternative_carbs_g: altCat
+                ? (altCat.carbs_g != null ? Number(altCat.carbs_g) : null)
+                : alt.alternative_carbs_g,
+              alternative_fat_g: altCat
+                ? (altCat.fat_g != null ? Number(altCat.fat_g) : null)
+                : alt.alternative_fat_g,
+              order_index: ai,
+            }]);
+          }
         }
       }
     }
@@ -260,13 +301,14 @@ async function updateOwnDietPlan(clientId, planId, payload) {
           const it = m.items[ii] || {};
           const eStrArr = (v) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
           const eInt = (v) => (v != null && v !== '' ? Math.max(0, Math.round(Number(v))) : null);
-          await client.query(
+          const { rows: ownItemRows } = await client.query(
             `INSERT INTO diet_plan_meal_items
                (diet_plan_meal_id, name, calories, protein_g, carbs_g, fat_g,
                 serving_size, recipe_url, quantity_multiplier, client_note, order_index,
                 photo_path, tags, ingredients, allergens, prep_time_minutes, cook_time_minutes,
                 difficulty, alternate_servings)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+             RETURNING id`,
             [
               mealRows[0].id,
               String(it.name || '').trim(),
@@ -289,6 +331,12 @@ async function updateOwnDietPlan(clientId, planId, payload) {
               JSON.stringify(Array.isArray(it.alternate_servings) ? it.alternate_servings : []),
             ]
           );
+          // client-authored edit: alternative refs are personal recipe local
+          // ids, not resolvable catalog uuids — snapshot macros, drop refs
+          const alts = dietAlternatives
+            .normalizeDietItemAlternatives(it.name, it.alternatives)
+            .map((a) => ({ ...a, alternative_catalog_item_id: null }));
+          await dietAlternatives.insertForMealItem(client, ownItemRows[0].id, alts);
         }
       }
     }
@@ -427,6 +475,7 @@ async function getPlanWithItems(kind, planId) {
   if (!rows.length) return null;
   if (kind === 'diet') {
     // nested days -> meals -> snapshot items (the flat table is deprecated)
+    const allItemIds = [];
     const days = await query(
       'SELECT * FROM diet_plan_days WHERE diet_plan_id = $1 ORDER BY order_index',
       [planId]
@@ -442,8 +491,16 @@ async function getPlanWithItems(kind, planId) {
           [m.id]
         );
         m.items = items.rows;
+        for (const it of m.items) allItemIds.push(it.id);
       }
       d.meals = meals.rows;
+    }
+    // configured dish alternatives ride along on every item read
+    const altMap = await dietAlternatives.fetchByMealItemIds(allItemIds);
+    for (const d of days.rows) {
+      for (const m of d.meals) {
+        for (const it of m.items) it.alternatives = altMap[it.id] || [];
+      }
     }
     rows[0].days = days.rows;
     return rows[0];

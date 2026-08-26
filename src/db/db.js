@@ -1,6 +1,4 @@
 import * as SQLite from 'expo-sqlite';
-import { SEED_EXERCISES } from '../seed/exercises';
-import FULL_EXERCISES from '../seed/exercises_full.json';
 
 let dbInstance = null;
 let dbInitPromise = null;
@@ -144,28 +142,6 @@ async function ensureBaseTables(db) {
     sync_enabled INTEGER NOT NULL DEFAULT 1
   );`);
   await db.runAsync('INSERT OR IGNORE INTO sync_settings (id) VALUES (1)');
-  // const count = await db.getFirstAsync('SELECT COUNT(*) AS c FROM exercises');
-  // if (count.c === 0) {
-  //   for (const ex of SEED_EXERCISES) {
-  //     await db.runAsync(
-  //       'INSERT OR IGNORE INTO exercises (name, muscle_group) VALUES (?, ?)',
-  //       [ex.name, ex.muscle]
-  //     );
-  //   }
-  // }
-    // Seed the exercise library. Runs UNCONDITIONALLY on every launch:
-  // INSERT OR IGNORE makes it a no-op for rows that already exist, and
-  // unconditional execution HEALS devices whose seed silently failed.
-  // BUGFIX: this used to bind `ex.muscle`, but the seed data's key is
-  // `muscle_group` — every insert put NULL into a NOT NULL column and
-  // INSERT OR IGNORE silently skipped ALL 39 rows, leaving fresh installs
-  // with an empty exercise library.
-  for (const ex of SEED_EXERCISES) {
-    await db.runAsync(
-      'INSERT OR IGNORE INTO exercises (name, muscle_group) VALUES (?, ?)',
-      [ex.name, ex.muscle_group]
-    );
-  }
 }
 
 // Ensure critical columns exist (runs after migrations)
@@ -186,8 +162,12 @@ async function ensureSchema(db) {
   await addColumnSafe(db, 'user_settings', 'streak_tolerance', 'INTEGER NOT NULL DEFAULT 1');
   await addColumnSafe(db, 'workout_plans', 'user_id', 'TEXT');
   await addColumnSafe(db, 'workout_plans', 'tags', 'TEXT');
-  // Delete legacy plans without user_id
-  await db.runAsync('DELETE FROM workout_plans WHERE user_id IS NULL OR user_id = ""');
+  // NOTE: this used to DELETE legacy plans with a NULL/empty user_id on every
+  // launch. All writers now stamp user_id (createPlan throws without it) and
+  // every reader filters by user_id, so such rows are simply invisible —
+  // deleting them here silently destroyed data if anything ever wrote a
+  // NULL user_id (e.g. a restore race). The one-time v20/v21 migrations keep
+  // their historical cleanup for devices that predate them.
   await addColumnSafe(db, 'user_settings', 'theme_mode', "TEXT NOT NULL DEFAULT 'system'");
   await addColumnSafe(db, 'user_settings', 'length_unit', "TEXT NOT NULL DEFAULT 'cm'");
   await addColumnSafe(db, 'exercises', 'user_id', 'TEXT');
@@ -199,6 +179,9 @@ async function ensureSchema(db) {
   await addColumnSafe(db, 'exercises', 'training_max', 'REAL');
   await addColumnSafe(db, 'sets', 'suggested_weight', 'REAL');
   await addColumnSafe(db, 'sets', 'suggested_reps', 'INTEGER');
+  // v31 self-heal: guarantees the trainer-shared note column exists even on
+  // a DB whose user_version is already past the migration that adds it
+  await addColumnSafe(db, 'session_exercises', 'trainer_note', 'TEXT NULL');
   await addColumnSafe(db, 'exercises', 'body_part', 'TEXT');
   await addColumnSafe(db, 'exercises', 'equipment', 'TEXT');
   await addColumnSafe(db, 'exercises', 'target', 'TEXT');
@@ -283,15 +266,8 @@ const MIGRATIONS = [
       weight REAL NOT NULL DEFAULT 0, reps INTEGER NOT NULL DEFAULT 0,
       is_warmup INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL
     );`);
-    const count = await db.getFirstAsync('SELECT COUNT(*) AS c FROM exercises');
-    if (count.c === 0) {
-      for (const ex of SEED_EXERCISES) {
-        await db.runAsync(
-          'INSERT OR IGNORE INTO exercises (name, muscle_group) VALUES (?, ?)',
-          [ex.name, ex.muscle_group]
-        );
-      }
-    }
+    // exercise library seeding RETIRED — content syncs from the server
+    // catalog at login (src/lib/exerciseCatalog.js)
   },
   // v2: rest timer defaults + user settings
   async (db) => {
@@ -465,7 +441,14 @@ const MIGRATIONS = [
       last_error TEXT,
       status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SYNCING', 'COMPLETED', 'FAILED'))
     );`);
-    await db.execAsync(`CREATE TABLE IF NOT EXISTS sync_settings (
+  await db.execAsync(`CREATE TABLE IF NOT EXISTS plan_exercise_alternatives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_exercise_id TEXT NOT NULL,
+    alternative_exercise_name TEXT NOT NULL,
+    alternative_exercise_id_local TEXT NULL,
+    order_index INTEGER NOT NULL
+  );`);
+  await db.execAsync(`CREATE TABLE IF NOT EXISTS sync_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       sync_mode TEXT NOT NULL DEFAULT 'auto' CHECK (sync_mode IN ('auto', 'manual', 'local')),
       last_synced_at INTEGER,
@@ -694,13 +677,11 @@ const MIGRATIONS = [
   async (db) => {
     await addColumnSafe(db, 'exercises', 'user_id', 'TEXT');
   },
-    // v27: enriched exercise library — one-time import of the full dataset
-  // from src/seed/exercises_full.json (multilingual instructions + steps,
-  // equipment, body-part taxonomy, media refs). Rows matching an existing
-  // seed exercise (case-insensitive name) are ENRICHED in place; new names
-  // are inserted. Custom exercises are never touched. Enrichment fields are
-  // device-local by design (identical JSON on every device) — only custom
-  // exercises carry equipment/instructions through backup/sync.
+    // v27: enriched exercise library schema. The full dataset import that
+    // lived here was RETIRED — library content is now server-authoritative
+    // (GET /exercises/catalog, synced by src/lib/exerciseCatalog.js at
+    // login). Existing devices keep their cached rows; fresh installs get
+    // the library on first login sync.
   async (db) => {
     await addColumnSafe(db, 'exercises', 'body_part', 'TEXT');
     await addColumnSafe(db, 'exercises', 'equipment', 'TEXT');
@@ -709,53 +690,8 @@ const MIGRATIONS = [
     await addColumnSafe(db, 'exercises', 'instruction_steps', 'TEXT');
     await addColumnSafe(db, 'exercises', 'media_id', 'TEXT');
     await addColumnSafe(db, 'exercises', 'gif_url', 'TEXT');
-    await addColumnSafe(db, 'exercises', 'attribution', 'TEXT');
-
-    const CAT_TO_GROUP = {
-      chest: 'Chest', back: 'Back', shoulders: 'Shoulders',
-      'upper arms': 'Arms', 'lower arms': 'Arms', arms: 'Arms',
-      'upper legs': 'Legs', 'lower legs': 'Legs', legs: 'Legs',
-      waist: 'Core', cardio: 'Cardio', neck: 'Shoulders',
-    };
-    const existing = await db.getAllAsync('SELECT id, name, is_custom FROM exercises');
-    const byLower = new Map(existing.map((r) => [String(r.name).toLowerCase(), r]));
-
-    for (const ex of FULL_EXERCISES) {
-      if (!ex?.name) continue;
-      const group = CAT_TO_GROUP[String(ex.category || '').toLowerCase()] || 'Other';
-      const vals = [
-        group,
-        ex.body_part || ex.category || null,
-        ex.equipment || null,
-        ex.target || null,
-        JSON.stringify(ex.secondary_muscles || []),
-        JSON.stringify(ex.instructions || {}),
-        JSON.stringify(ex.instruction_steps || {}),
-        ex.media_id || null,
-        ex.gif_url || null,
-        ex.attribution || null,
-      ];
-      const match = byLower.get(String(ex.name).toLowerCase());
-      if (match) {
-        if (match.is_custom) continue; // never overwrite user-created exercises
-        await db.runAsync(
-          `UPDATE exercises SET muscle_group = ?, body_part = ?, equipment = ?, target = ?,
-             secondary_muscles = ?, instructions = ?, instruction_steps = ?,
-             media_id = ?, gif_url = ?, attribution = ?
-           WHERE id = ?`,
-          [...vals, match.id]
-        );
-      } else {
-        await db.runAsync(
-          `INSERT OR IGNORE INTO exercises
-             (name, muscle_group, is_custom, body_part, equipment, target, secondary_muscles,
-              instructions, instruction_steps, media_id, gif_url, attribution, synced)
-           VALUES (?,?,0,?,?,?,?,?,?,?,?,?,1)`,
-          [ex.name, ...vals, 1]
-        );
-      }
-    }
-    console.log('[DB] enriched exercise library imported:', FULL_EXERCISES.length, 'entries');
+  await addColumnSafe(db, 'exercises', 'attribution', 'TEXT');
+  await addColumnSafe(db, 'session_exercises', 'original_exercise_name', 'TEXT NULL');
   },
     // v28: auto-progression engine foundation — cached resolved formula
   // setting (from /client/progression-resolved; makes suggestions work
@@ -771,6 +707,108 @@ const MIGRATIONS = [
     await addColumnSafe(db, 'exercises', 'training_max', 'REAL');
     await addColumnSafe(db, 'sets', 'suggested_weight', 'REAL');
     await addColumnSafe(db, 'sets', 'suggested_reps', 'INTEGER');
+  },
+  // v29: equipment-aware exercise substitution — configured alternatives per
+  // plan exercise entry, and the swap marker on session exercises
+  // (original_exercise_name is populated only when a mid-session swap
+  // happened; NULL means the exercise was performed as planned).
+  async (db) => {
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS plan_exercise_alternatives (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      plan_exercise_id TEXT NOT NULL,
+      alternative_exercise_name TEXT NOT NULL,
+      alternative_exercise_id_local TEXT NULL,
+      order_index INTEGER NOT NULL
+    );`);
+    await addColumnSafe(db, 'session_exercises', 'original_exercise_name', 'TEXT NULL');
+  },
+  // v30: diet dish alternatives + date-scoped item swaps.
+  //
+  // local_diet_plan_meal_item_alternatives — configured alternatives on a
+  // self-authored meal item (mirrors plan_exercise_alternatives). Macros are
+  // SNAPSHOTS taken at add time; alternative_recipe_local_id is a kept
+  // reference only and is never joined for display.
+  //
+  // local_diet_item_swaps — "on DATE I actually ate X instead of Y". Unlike
+  // a workout swap (session-scoped, logged once), a diet swap MUST be
+  // date-scoped because a diet plan is followed repeatedly day after day:
+  // UNIQUE(diet_plan_meal_item_ref, swap_date) guarantees swapping today
+  // never bleeds into tomorrow. diet_plan_meal_item_ref holds the LOCAL id
+  // for self-authored plans or the SERVER uuid for trainer-assigned plans;
+  // original_name is snapshotted so history survives later plan edits or
+  // deletion of the original item.
+  async (db) => {
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS local_diet_plan_meal_item_alternatives (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      local_diet_plan_meal_item_id TEXT NOT NULL,
+      alternative_name TEXT NOT NULL,
+      alternative_calories INTEGER NULL,
+      alternative_protein_g NUMERIC NULL,
+      alternative_carbs_g NUMERIC NULL,
+      alternative_fat_g NUMERIC NULL,
+      alternative_recipe_local_id TEXT NULL,
+      order_index INTEGER NOT NULL
+    );`);
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS local_diet_item_swaps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      diet_plan_meal_item_ref TEXT NOT NULL,
+      plan_ref TEXT NOT NULL,
+      swap_date TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      swapped_name TEXT NOT NULL,
+      swapped_calories INTEGER NULL,
+      swapped_protein_g NUMERIC NULL,
+      swapped_carbs_g NUMERIC NULL,
+      swapped_fat_g NUMERIC NULL,
+      from_alternative_id INTEGER NULL,
+      synced BOOLEAN NOT NULL DEFAULT 0,
+      server_id TEXT NULL,
+      UNIQUE(diet_plan_meal_item_ref, swap_date)
+    );`);
+    // NOTE: trainer_note was BRIEFLY added here, but v30 had already shipped
+    // to devices — editing an applied migration never runs for them. It now
+    // lives in v31 below. Do not re-add it here.
+  },
+  // v31: "Share with Trainer" per-exercise note. Deliberate exception to
+  // the notes-free trainer sync: ONLY this field travels to the trainer as
+  // session_exercise_details.shared_note; the personal `notes` column
+  // remains private forever.
+  async (db) => {
+    await addColumnSafe(db, 'session_exercises', 'trainer_note', 'TEXT NULL');
+  },
+  // v32: ONE-TIME re-upload sweep for workout routines. Exercise-alternative
+  // swap options were previously NOT included in the backup payload, so
+  // every already-synced routine sits on the server without them (and a
+  // wipe/reinstall loses them). Re-queueing each local plan forces a fresh
+  // payload (which now carries alternatives) to overwrite the server copy.
+  // Idempotent upsert server-side; rows for other accounts on this device
+  // are skipped cleanly at push time by their handler.
+  async (db) => {
+    const plans = await db.getAllAsync('SELECT id FROM workout_plans');
+    const now = Date.now();
+    for (const p of plans) {
+      await db.runAsync(
+        `INSERT INTO sync_queue
+           (operation_id, entity_type, entity_id, operation, payload,
+            created_at, updated_at, status)
+         SELECT ?, 'workout_plan', ?, 'CREATE', NULL, ?, ?, 'PENDING'
+         WHERE NOT EXISTS (
+           SELECT 1 FROM sync_queue
+           WHERE entity_type = 'workout_plan' AND entity_id = ?
+             AND status IN ('PENDING','SYNCING','FAILED')
+         )`,
+        [`v32-resync-${p.id}`, String(p.id), now, now, String(p.id)]
+      );
+    }
+  },
+  // v33: server-authoritative exercise catalog. The library's CONTENT is now
+  // owned by the backend (GET /exercises/catalog) and synced at login via
+  // src/lib/exerciseCatalog.js — bundled seed JSON is no longer imported.
+  // is_archived hides globals archived/removed server-side without deleting
+  // rows (plans/sessions reference exercise ids).
+  async (db) => {
+    await addColumnSafe(db, 'exercises', 'is_archived', 'INTEGER NOT NULL DEFAULT 0');
   },
 ];
 
@@ -818,86 +856,11 @@ async function backfillPRs(db) {
       SELECT exercise_id, record_type, COALESCE(secondary_value, -9999) AS sv, MAX(value) AS maxv
       FROM personal_records
       GROUP BY exercise_id, record_type, COALESCE(secondary_value, -9999)
-    ) best ON pr.exercise_id = best.exercise_id AND pr.record_type = best.record_type 
+    ) best ON pr.exercise_id = best.exercise_id AND pr.record_type = best.record_type
       AND COALESCE(pr.secondary_value, -9999) = best.sv AND pr.value = best.maxv
   )`);
 }
 
-// async function initDb() {
-//   const db = await SQLite.openDatabaseAsync('workout.db');
-//   await db.execAsync('PRAGMA journal_mode = WAL;');
-//   let { version } = await getFirstUserVersion(db);
-//   try {
-//     for (let v = version; v < MIGRATIONS.length; v++) {
-//       await MIGRATIONS[v](db);
-//       await db.runAsync(`PRAGMA user_version = ${v + 1}`);
-//     }
-//   } catch (e) {
-//     // A failed migration must not wedge getDb() forever — ensureSchema
-//     // self-heals missing tables/columns, and the failed migration will be
-//     // retried on next launch (user_version only advances on success).
-//     console.warn('migration skipped:', e.message || e);
-//   }
-//   await ensureSchema(db);
-//   dbInstance = db;
-//   return db;
-// }
-
-// async function getFirstUserVersion(db) {
-//   try {
-//     return await db.getFirstAsync('PRAGMA user_version');
-//   } catch {
-//     return { version: 0 };
-//   }
-// }
-
-
-
-
-// async function initDb() {
-//   const db = await SQLite.openDatabaseAsync('workout.db');
-//   await db.execAsync('PRAGMA journal_mode = WAL;');
-
-//   // NOTE: the migration runner had a silent bug since the app was first
-//   // built — it destructured the wrong key from PRAGMA user_version, so
-//   // versioned migrations NEVER ran; every schema change actually came from
-//   // ensureSchema()'s self-healing. Fixed here: read the correct key, and
-//   // detect existing installs (tables present, counter at 0) so we skip the
-//   // historical v1–v22 (their schema already exists via self-heal) and go
-//   // straight to v23.
-//   const row = await getFirstUserVersion(db);
-//   let version = Number(row?.user_version ?? row?.version ?? 0) || 0;
-//   console.log('[DB] user_version at launch:', version);
-
-//   if (version < 23) {
-//     let existing = [];
-//     try {
-//       existing = await db.getAllAsync(
-//         "SELECT name FROM sqlite_master WHERE type='table' AND name='workout_sessions'"
-//       );
-//     } catch {}
-//     if (existing.length) {
-//       version = 22; // pre-v23 schema is guaranteed present via self-heal
-//       console.log('[DB] existing install detected — starting at v23');
-//     }
-//   }
-
-//   try {
-//     for (let v = version; v < MIGRATIONS.length; v++) {
-//       await MIGRATIONS[v](db);
-//       await db.runAsync(`PRAGMA user_version = ${v + 1}`);
-//       console.log('[DB] applied migration v' + (v + 1));
-//     }
-//   } catch (e) {
-//     // A failed migration must not wedge getDb() forever — ensureSchema
-//     // self-heals missing tables/columns, and the failed migration will be
-//     // retried on next launch (user_version only advances on success).
-//     console.warn('migration skipped:', e.message || e);
-//   }
-//   await ensureSchema(db);
-//   dbInstance = db;
-//   return db;
-// }
 
 
 

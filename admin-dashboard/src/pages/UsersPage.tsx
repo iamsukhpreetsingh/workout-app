@@ -1,13 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Table, Input, Select, Button, Drawer, Descriptions, Tag, Space, Switch, message, Typography, List } from 'antd';
-import { api } from '../api';
+import { Card, Table, Input, Select, Button, Drawer, Descriptions, Tag, Space, Switch, message, Typography, List, Alert, Modal, Popconfirm } from 'antd';
+import { api, getProfile, resetUserPassword, impersonateUser } from '../api';
+import { useImpersonation } from '../impersonation';
 
 export default function UsersPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [q, setQ] = useState('');
   const [role, setRole] = useState<string | undefined>();
   const [detail, setDetail] = useState<any>(null);
+  const [tempPassword, setTempPassword] = useState<{ email: string; password: string } | null>(null);
   const [msg, contextHolder] = message.useMessage();
+  const imp = useImpersonation();
+  const myRole = getProfile()?.role;
+  const isSupportPlus = myRole === 'support' || myRole === 'super_admin';
 
   const load = async () => {
     const qs = new URLSearchParams();
@@ -32,10 +37,58 @@ export default function UsersPage() {
     msg.success(`Revoked ${r.revoked} refresh token(s)`);
   };
 
+  // One-time temp password: shown in a copyable Alert, never retrievable again.
+  const doPasswordReset = (user: any) => {
+    Modal.confirm({
+      title: `Reset ${user.name}'s password?`,
+      content: 'A temporary password is generated, set on the account, and ALL their sessions are revoked. The password is returned exactly once — relay it to the user manually and securely.',
+      okText: 'Reset password',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          const r = await resetUserPassword(user.id);
+          setTempPassword({ email: r.user.email, password: r.tempPassword });
+          msg.success(`Password reset (${r.revokedRefreshTokens} session(s) revoked)`);
+        } catch (e: any) { msg.error(e.message); }
+      },
+    });
+  };
+
+  const doImpersonate = async (user: any) => {
+    try {
+      const r = await impersonateUser(user.id);
+      imp.start({ token: r.token, user: r.user, expiresInSeconds: r.expiresInSeconds });
+      msg.success(`Now viewing as ${r.user.name} — read-only, 15 min`);
+    } catch (e: any) { msg.error(e.message); }
+  };
+
   return (
     <div>
       {contextHolder}
       <Typography.Title level={4}>Users & Trainers</Typography.Title>
+      {tempPassword && (
+        <Alert
+          type="success"
+          closable
+          onClose={() => setTempPassword(null)}
+          style={{ marginBottom: 16 }}
+          message={`Temporary password for ${tempPassword.email} — shown ONCE`}
+          description={
+            <Space direction="vertical">
+              <Input.Search
+                readOnly
+                value={tempPassword.password}
+                enterButton="Copy"
+                onSearch={() => navigator.clipboard?.writeText(tempPassword.password).then(() => msg.success('Copied')).catch(() => {})}
+                style={{ maxWidth: 420 }}
+              />
+              <Typography.Text type="secondary">
+                Relay it to the user manually over a secure channel. It cannot be retrieved again, and all their previous sessions were revoked.
+              </Typography.Text>
+            </Space>
+          }
+        />
+      )}
       <Space style={{ marginBottom: 16 }}>
         <Input.Search placeholder="Search name / email" value={q} onChange={(e) => setQ(e.target.value)} onSearch={load} style={{ width: 280 }} />
         <Select allowClear placeholder="Role" value={role} onChange={setRole} style={{ width: 120 }} options={[
@@ -80,6 +133,19 @@ export default function UsersPage() {
                 <span>Suspend / reactivate</span>
               </Space>
               <Button danger onClick={() => forceLogout(detail.id)}>Force logout (all devices)</Button>
+              {isSupportPlus && (
+                <>
+                  <Popconfirm
+                    title={`View the app as ${detail.name}?`}
+                    description="Opens a short-lived read-only session scoped to this user's role. Audited."
+                    okText="Start"
+                    onConfirm={() => doImpersonate(detail)}
+                  >
+                    <Button type="primary" ghost>View as this user</Button>
+                  </Popconfirm>
+                  <Button danger ghost onClick={() => doPasswordReset(detail)}>Reset password</Button>
+                </>
+              )}
             </Space>
             {detail.role === 'trainer' && (
               <Card size="small" title="Client roster" style={{ marginTop: 16 }}>

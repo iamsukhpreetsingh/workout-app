@@ -14,6 +14,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
 import { NotificationBell } from '../components/NotificationBell';
+import { CLIENT_DETAIL, NOTIFICATION_CENTER } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -83,7 +84,7 @@ export default function TrainerClientsScreen({ navigation }) {
     navigation.setOptions({
       headerRight: () => (
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <NotificationBell onPress={() => navigation.navigate('NotificationCenter')} />
+          <NotificationBell onPress={() => navigation.navigate(NOTIFICATION_CENTER)} />
         </View>
       ),
     });
@@ -240,7 +241,7 @@ export default function TrainerClientsScreen({ navigation }) {
                   key={c.id}
                   style={[styles.card, styles.archivedRow]}
                   onPress={() =>
-                    navigation.navigate('ClientDetail', {
+                    navigation.navigate(CLIENT_DETAIL, {
                       clientId: c.id,
                       clientName: c.name,
                       adherence: c.adherence_pct,
@@ -301,7 +302,7 @@ export default function TrainerClientsScreen({ navigation }) {
           <TouchableOpacity
             style={styles.card}
             activeOpacity={0.8}
-            onPress={() => navigation.navigate('ClientDetail', { clientId: item.id, clientName: item.name, adherence: item.adherence_pct, lastActive: item.last_active_at, associatedAt: item.associated_at })}
+            onPress={() => navigation.navigate(CLIENT_DETAIL, { clientId: item.id, clientName: item.name, adherence: item.adherence_pct, lastActive: item.last_active_at, associatedAt: item.associated_at })}
           >
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>{initialsOf(item.name)}</Text>

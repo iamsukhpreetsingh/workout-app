@@ -330,17 +330,263 @@ Frontend lives in `../admin-dashboard/` (Vite + React + TS + Ant Design).
    token columns), a non-default role, or navigation to a custom module.
    Sensitive columns are masked in every generic response — never returned.
 2. **Adding an endpoint?** Use `registerRoute()` from
-   `src/admin/registry.js` — NEVER raw `router.get/post/...` for admin
-   routes. Pass `enforce: ['role', …]` to mount the role guard
-   server-side; `allowedRoles` is display text for the API Explorer.
-   Every endpoint registered this way appears in the dashboard's API
-   Explorer automatically. (App-side routes may migrate to the same
-   wrapper incrementally.)
+   `src/admin/registry.js` — NEVER raw `router.get/post/...`. This applies
+   to the ENTIRE backend (mobile API and admin API alike). The wrapper
+   mounts the route on Express AND records its metadata so it appears in
+   the dashboard's API Explorer automatically. Pass the auth/role
+   middleware as the 4th argument (single function or array) — it is
+   mounted BEFORE your handler; `allowedRoles` is display text for the
+   explorer. Run `npm run check-routes` (or `-- --strict` in CI) to flag
+   any raw registration that bypasses the wrapper; `npm run dev` prints
+   the report on every start.
 3. **Every admin write must call `writeAudit()`** — the audit log is the
-   platform's accountability guarantee for user/health data.
+   platform's accountability guarantee for user/health data. Viewing
+   extra-sensitive data (client intake profiles) must call `readAudit()`.
+
+### Admin module layout
+
+Purpose-built modules live in `src/admin/`, one file per domain, each
+exporting `{ router }` and mounted under `/admin` in `server.js`:
+`modules.js` (users/content/analytics/broadcast/flags/impersonation/audit),
+`relationships.js` (Phase 5 lifecycle + purge controls), `intakeProfiles.js`
+(Phase 8, read-audited), `progressionAdmin.js` (Phase 9),
+`workoutContent.js` (Phase 6), `nutritionAdmin.js` (Phase 7 incl. allergen
+consistency check), `syncHealth.js` (Phases 10-11), `analyticsExtra.js`
+(Phase 12 + password reset / per-user sync overview).
+
+### Tests
+
+`npm test` runs `node --test test/` against the real database: auto-discovery
+(a throwaway table appears in `/admin/schema`; a throwaway registerRoute()
+appears in `/admin/api-registry`), sensitive-column masking, table-name
+rejection before query, and one RBAC boundary per role (analyst/read_only
+writes → 403; super_admin control case → 200).
+
+### Admin Management section (migration 035) — testing area
+
+Isolated new dashboard tab (`/admin/mgmt/*`, frontend "Admin Management"):
+
+- **Global progression defaults**: `progression_formula_globals` stores one
+  admin-set param row per formula key. `progression.js` merges it OVER schema
+  defaults and UNDER any explicit trainer/user params — so edits reach every
+  user without personal overrides, and historical calculations are never
+  rewritten. Params are validated against each formula's `paramSchema`
+  (structured numbers/booleans only — no expressions can be injected).
+- **Global exercise library**: admin-only create/edit; DELETE is always a
+  SOFT archive (`is_archived`), never a hard delete — exercise references are
+  name-based across templates/plans/history, so archiving preserves
+  everything. Duplicate names rejected case/whitespace-insensitively.
+- **Unified user management**: `/admin/mgmt/users/:id/overview|workouts|
+  custom-exercises|diets|dishes|recipes|supplements|nutrition|progression|
+  analytics` — every query hard-scoped by user/client id (cross-user leakage
+  is covered by tests). Reads: support+; ALL writes: super_admin only;
+  writes audited.
+
+### Server-authoritative exercise catalog
+
+The mobile app renders its exercise library from THIS backend, not a bundled
+seed: `GET /exercises/catalog` (auth required) serves every non-archived
+global exercise with the same muscle-group mapping the app expects, and
+`GET /exercises/catalog/meta` returns a cheap version string so devices only
+re-download when the library changes. The app syncs at login into its local
+SQLite cache (`src/lib/exerciseCatalog.js`) — offline usage keeps working off
+that cache. Admin-created/archived exercises in the Admin Management section
+flow to all devices on their next sync.
+
+### Forgot / reset password (migration 034)
+
+Self-service flow, fully independent of admin tooling:
+
+- `POST /auth/forgot-password` `{email}` → ALWAYS returns
+  `"If an account exists for this email, a password reset link has been sent."`
+  (account enumeration is impossible from the response; SMTP failures are
+  logged server-side and do not change the response).
+- `POST /auth/reset-password` `{token, password}` → consumes a single-use
+  256-bit token (only its SHA-256 hash is stored in
+  `password_reset_tokens`), expires per
+  `PASSWORD_RESET_TOKEN_EXPIRY_MINUTES` (default 30), revokes all of the
+  user's refresh tokens inside the same transaction as the password update.
+- Email transport is abstracted (`src/email/provider.js`); Gmail SMTP is
+  just the current provider (`src/email/smtpProvider.js`, Nodemailer,
+  STARTTLS). Swap providers by registering a new one — business logic never
+  changes. Requires a Gmail **App Password** (2-Step Verification), set via
+  `SMTP_USER` / `SMTP_PASSWORD` / `EMAIL_FROM` in root `.env`.
+- Reset link: `${APP_SCHEME}://reset-password?token=…` deep link into the
+  mobile app (falls back to `FRONTEND_URL` when no scheme is set). The app's
+  AuthStack handles `ForgotPassword` and `ResetPassword` screens; the token
+  can also be pasted manually.
+- Abuse controls (`src/middleware/rateLimit.js`, in-memory fixed window):
+  forgot-password 10/hr per IP + 3/hr per email; reset-password 20/hr per IP.
+- Tests: `test/passwordReset.test.js` covers the full matrix (enumeration
+  equivalence, normalization, expiry, single-use, invalidation-of-older,
+  refresh-token revocation, rate limiting) with the mailer stubbed.
+
+### Sync/restore telemetry (migrations 032)
+
+The device sync engine posts throttled queue-health snapshots to
+`POST /sync/report` and restore flows open/close runs via
+`POST /sync/restore-run/start|finish` — all fire-and-forget from the app
+(`src/lib/adminTelemetry.js`); these tables feed the admin Sync & Restore
+dashboard and are never on an app critical path.
 
 Notables: generic table names are validated against the live schema before
 any query (no injection); suspended users are blocked at app login;
 impersonation tokens carry `impersonation: 'read_only'` and ALL mutating
 verbs made with them are rejected by the app's auth middleware;
 `GET /config/feature-flags` is public for the mobile app.
+
+## Exercise Alternatives (migration 028)
+
+Three mirrored tables, deliberately NOT unified into one polymorphic table
+(exercise entries live in three separate parent tables — local SQLite
+plan_exercises, workout_template_exercises, assigned_plan_exercises — and
+the codebase duplicates matching structures across local SQLite/Postgres by
+pattern):
+
+- `workout_template_exercise_alternatives` (template library)
+- `assigned_plan_exercise_alternatives` (specific client assignments)
+
+Validation lives in `src/data/alternatives.js`: max 3 alternatives per
+exercise entry and no duplicates (primary or siblings, case-insensitive).
+A 4th alternative or duplicate is REJECTED with 400 ("X is already added
+as an alternative") on any create/update endpoint accepting an
+`alternatives` array — never silently truncated.
+
+**Snapshot rule**: `assignFromTemplate` copies the template's CURRENT
+alternatives into assigned_plan rows. Editing the template afterward does
+not retroactively change existing assignments — same snapshot-only
+behavior as sets/reps/rest. Template delete stays safe: assignment
+snapshots are independent rows.
+
+**Swap mechanism** is session-local only on the mobile side; the backend's
+only involvement beyond the two tables above is
+`session_exercise_details.original_exercise_name` (migration 028) — set
+from the per-set detail sync payload when a client swapped an exercise
+mid-session, NULL when performed as planned, surfaced to trainers in the
+drill-down endpoint.
+
+Manual test notes live in the mobile README under "Exercise Alternatives +
+Mid-Session Swap".
+
+## Diet Dish Alternatives + Date-Scoped Swaps (migration 029)
+
+Mirrors migration 028 for diet plans. Meal items have only TWO structural
+homes (there is no reusable diet template library — the trainer's
+`meal_catalog_items` catalog is the reusable part, not whole plans):
+
+- `diet_plan_meal_item_alternatives` (trainer-assigned plans; FK to
+  `diet_plan_meal_items` ON DELETE CASCADE, optional reference-only
+  `alternative_catalog_item_id`)
+- local SQLite `local_diet_plan_meal_item_alternatives` on the device for
+  self-authored plans (see mobile README)
+
+plus an `alternatives JSONB` column on `backup_diet_plan_meal_items`
+(029) so self-authored plan backups/restores carry alternatives inside the
+item payload without a third relational table.
+
+Validation in `src/data/dietAlternatives.js`: max 3 per dish, no duplicates
+(primary or siblings, case-insensitive) → 400, never truncated. Wired into
+both `createDietTree`/`updateOwnDietPlan` (trainer assign / client edit)
+and `upsertDietPlan` (backup payload). **Snapshot rule**: alternative
+macros are copied at add time; editing a catalog dish later never changes
+an already-configured alternative — consistent with every other
+catalog-sourced value.
+
+### Date-scoped swaps — READ THIS BEFORE ASSUMING THEY WORK LIKE WORKOUT SWAPS
+
+A workout swap is SESSION-scoped: one session, logged once. A diet plan is
+followed repeatedly day after day, so `diet_item_swaps` keys each swap to
+an exact calendar date (`UNIQUE(user_id, diet_plan_meal_item_ref,
+swap_date)`): "on 2026-08-24 the client ate X instead of Y". The plan's own
+definition and every other day are untouched.
+
+Deliberate schema choices (do not "normalize" these away):
+
+- **No FK on `diet_plan_meal_item_ref`** and **`original_name` snapshotted**
+  — a swap is a historical record of what actually happened and must
+  survive the original item later being edited or removed from the plan.
+- `plan_server_id` is NULL for self-authored-plan swaps, set only for
+  trainer-assigned ones. All swaps sync privately via `/user/backup/
+  diet-swaps` (POST upsert / GET list / DELETE by item+date, idempotent).
+  Trainer visibility is a SEPARATE concern: `listAssignedPlanSwaps` joins
+  `diet_plans` on trainer+client ownership and can therefore never return a
+  self-authored swap. Surfaced as `recent_swaps` inside
+  `GET /trainer/clients/:id/diet-plans/:planId`.
+
+### Manual test sequence (curl)
+
+```bash
+# 1. Assign a plan with configured alternatives (trainer)
+curl -X POST $API/trainer/clients/$CLIENT_ID/diet-plans \
+  -H "$TRAINER_AUTH" -H 'Content-Type: application/json' \
+  -d '{"name":"Push Day Nutrition","days":[{"day_label":"Every Day",
+    "meals":[{"meal_type":"Breakfast","items":[{"catalog_item_id":"'$OATMEAL_UUID'",
+      "alternatives":[{"name":"Greek Yogurt Parfait","calories":280},
+                      {"catalog_item_id":"'$PANCAKES_UUID'"]}]}]}]}]}'
+# NEGATIVE: same call with 4 alternatives or a duplicate name → 400
+# ("Up to 3 alternatives per dish" / "already added")
+
+# 2. Plan detail carries alternatives + recent_swaps: []
+curl $API/trainer/clients/$CLIENT_ID/diet-plans/$PLAN_UUID -H "$TRAINER_AUTH"
+
+# 3. Client swaps Oatmeal → Greek Yogurt Parfait for today (sync queue does
+#    this automatically; shown here directly)
+curl -X POST $API/user/backup/diet-swaps -H "$CLIENT_AUTH" \
+  -H 'Content-Type: application/json' \
+  -d '[{"plan_ref":"'$PLAN_UUID'","plan_server_id":"'$PLAN_UUID'",
+        "diet_plan_meal_item_ref":"'$ITEM_UUID'","swap_date":"2026-08-24",
+        "original_name":"Oatmeal","swapped_name":"Greek Yogurt Parfait",
+        "swapped_calories":280}]'
+
+# 4. Trainer now sees history with correct date + before/after names:
+curl $API/trainer/clients/$CLIENT_ID/diet-plans/$PLAN_UUID -H "$TRAINER_AUTH"
+#    → recent_swaps: [{swap_date: 2026-08-24, original_name: Oatmeal, ...}]
+
+# 5. NEGATIVE — self-authored swap must NOT reach any trainer route:
+curl -X POST $API/user/backup/diet-swaps -H "$CLIENT_AUTH" \
+  -H 'Content-Type: application/json' \
+  -d '[{"plan_ref":"dp_local_123","diet_plan_meal_item_ref":"dp_local_x",
+        "swap_date":"2026-08-25","original_name":"Oatmeal",
+        "swapped_name":"Toast","plan_server_id":null}]'
+#    row exists privately (GET /user/backup/diet-swaps), but step 4's
+#    recent_swaps cannot include it (plan_server_id NULL → join misses).
+
+# 6. Undo = idempotent delete (never 404-loops):
+curl -X DELETE $API/user/backup/diet-swaps/$ITEM_UUID/2026-08-24 -H "$CLIENT_AUTH"
+```
+
+More scenarios (multi-item slots, repeated dish names across days,
+past-date undo, check-in independence, snapshot isolation, theme checks)
+live in the mobile README under "Diet Dish Alternatives + Date-Scoped
+Swap".
+
+## Trainer-Shared Exercise Notes (migration 030)
+
+DELIBERATE, DOCUMENTED EXCEPTION to the redacted trainer sync. The
+session-detail layer intentionally stores no subjective data ("RPE and
+notes never included") — that rule still holds for RPE and PERSONAL notes.
+Migration 030 adds exactly one client-authored field that does travel:
+
+- `session_exercise_details.shared_note` — the user's explicit
+  "Share with Trainer" text per exercise (client detail payload maps it
+  from `trainer_note` on the device; capped at 2000 chars, everything else
+  still stripped defensively in `upsertSessionDetails`)
+- `backup_session_exercises.trainer_note` — same field under its device
+  name, keeping the full-fidelity personal backup lossless
+
+Trainer surface: `getDetailsForSummary` returns `shared_note`; rendered as
+"Note from client" in the mobile Client Detail drill-down. Never map
+personal notes or RPE into this column.
+
+Manual test notes live in the mobile README under "Exercise Comment
+Tick-Save + Trainer-Shared Notes".
+
+## Workout Plan Backup Fidelity (alternatives)
+
+`client_workout_plans.exercises` JSONB elements may now carry an
+`alternatives: string[]` field (configured swap options per exercise).
+Validated in `upsertTemplates` via `normalizeAlternatives` — max 3,
+case-insensitive duplicates rejected with 400, never truncated. Returned
+verbatim by `listForClient`; device restore rebuilds
+`plan_exercise_alternatives` from it (mobile migration v32 force-resyncs
+pre-existing routines once). Mirrors the diet `alternatives` JSONB rule.

@@ -15,6 +15,7 @@
 const { query, transaction } = require('../db/pool');
 const templates = require('./workoutTemplatesSync');
 const measurementsData = require('./measurements');
+const dietAlternatives = require('./dietAlternatives');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -122,10 +123,11 @@ async function upsertSession(userId, p) {
       await client.query(
         `INSERT INTO backup_session_exercises
            (user_id, local_entity_id, session_local_id, exercise_name, muscle_group,
-            order_index, rest_seconds, group_id, notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+            order_index, rest_seconds, group_id, notes, trainer_note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
         [userId, exLocal, sid, String(ex.exercise_name || ''), ex.muscle_group ?? null,
-         ex.order_index ?? i, ex.rest_seconds ?? null, ex.group_id ?? null, ex.notes ?? null]
+         ex.order_index ?? i, ex.rest_seconds ?? null, ex.group_id ?? null, ex.notes ?? null,
+         ex.trainerNote ?? null]
       );
       for (let j = 0; j < (ex.sets || []).length; j++) {
         const s = ex.sets[j] || {};
@@ -213,13 +215,25 @@ async function upsertDietPlan(userId, p) {
         );
         for (let ii = 0; ii < (m.items || []).length; ii++) {
           const it = m.items[ii] || {};
+          // configured dish alternatives ride INSIDE the item payload
+          // (validated: max 3, no duplicates — never truncated)
+          const altList = dietAlternatives.normalizeDietItemAlternatives(it.name, it.alternatives)
+            .map((a) => ({
+              name: a.alternative_name,
+              calories: a.alternative_calories,
+              protein_g: a.alternative_protein_g,
+              carbs_g: a.alternative_carbs_g,
+              fat_g: a.alternative_fat_g,
+              recipe_local_id: a.alternative_catalog_item_id || null,
+            }));
           await client.query(
             `INSERT INTO backup_diet_plan_meal_items
                (user_id, local_entity_id, diet_meal_local_id, local_recipe_id, name, calories,
                 protein_g, carbs_g, fat_g, serving_size, recipe_url, quantity_multiplier,
                 client_note, order_index, photo_path, ingredients, allergens, prep_time_minutes,
-                cook_time_minutes, difficulty, alternate_servings, tags)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+                cook_time_minutes, difficulty, alternate_servings, tags, alternatives)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
+                     $23::jsonb)`,
             [userId, String(it.local_entity_id ?? `${mealLocal}:i${ii}`), mealLocal,
              it.local_recipe_id ? String(it.local_recipe_id) : null, String(it.name || 'Item'),
              it.calories ?? null, it.protein_g ?? null, it.carbs_g ?? null, it.fat_g ?? null,
@@ -227,7 +241,8 @@ async function upsertDietPlan(userId, p) {
              it.client_note ?? null, it.order_index ?? ii, it.photo_path ?? null,
              it.ingredients || [], it.allergens || [], it.prep_time_minutes ?? null,
              it.cook_time_minutes ?? null, it.difficulty ?? null,
-             JSON.stringify(it.alternate_servings || []), it.tags || []]
+             JSON.stringify(it.alternate_servings || []), it.tags || [],
+             JSON.stringify(altList)]
           );
         }
       }
@@ -298,6 +313,82 @@ async function listDietCheckins(userId, planLocalId) {
     `SELECT * FROM backup_diet_checkins WHERE user_id = $1
        AND ($2::text IS NULL OR diet_plan_local_id = $2) ORDER BY date ASC`,
     [userId, planLocalId || null]
+  );
+  return rows;
+}
+
+// ── Diet item swaps (date-scoped substitutions) ─────────────────────────
+// Every swap is privately backed up here regardless of plan type. Trainer
+// visibility is a SEPARATE concern handled by plan_server_id (set only for
+// trainer-assigned plans): self-authored swaps are stored but never
+// surfaced through any trainer route.
+async function upsertDietSwaps(userId, entries) {
+  if (!Array.isArray(entries) || !entries.length) {
+    throw new HttpError(400, 'Body must be a non-empty array');
+  }
+  const rows = [];
+  for (const e of entries) {
+    if (!e || !e.plan_ref || !e.diet_plan_meal_item_ref || !e.swap_date ||
+        !e.swapped_name || !e.original_name) {
+      throw new HttpError(
+        400,
+        'Each swap requires plan_ref, diet_plan_meal_item_ref, swap_date, original_name and swapped_name'
+      );
+    }
+    const { rows: r } = await query(
+      `INSERT INTO diet_item_swaps
+         (user_id, plan_ref, plan_server_id, diet_plan_meal_item_ref, swap_date,
+          original_name, swapped_name, swapped_calories, swapped_protein_g,
+          swapped_carbs_g, swapped_fat_g)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT (user_id, diet_plan_meal_item_ref, swap_date) DO UPDATE SET
+         plan_ref = EXCLUDED.plan_ref,
+         plan_server_id = EXCLUDED.plan_server_id,
+         original_name = EXCLUDED.original_name,
+         swapped_name = EXCLUDED.swapped_name,
+         swapped_calories = EXCLUDED.swapped_calories,
+         swapped_protein_g = EXCLUDED.swapped_protein_g,
+         swapped_carbs_g = EXCLUDED.swapped_carbs_g,
+         swapped_fat_g = EXCLUDED.swapped_fat_g,
+         updated_at = now()
+       RETURNING *`,
+      [userId, String(e.plan_ref), e.plan_server_id ? String(e.plan_server_id) : null,
+       String(e.diet_plan_meal_item_ref), e.swap_date, String(e.original_name),
+       String(e.swapped_name), e.swapped_calories ?? null, e.swapped_protein_g ?? null,
+       e.swapped_carbs_g ?? null, e.swapped_fat_g ?? null]
+    );
+    rows.push(r[0]);
+  }
+  return rows;
+}
+
+// Idempotent — an undo of a swap that never synced must not 404-loop.
+async function deleteDietSwap(userId, itemRef, date) {
+  await query(
+    'DELETE FROM diet_item_swaps WHERE user_id = $1 AND diet_plan_meal_item_ref = $2 AND swap_date = $3',
+    [userId, String(itemRef), date]
+  );
+  return { ok: true };
+}
+
+async function listDietSwaps(userId, since) {
+  const { rows } = await query(
+    `SELECT * FROM diet_item_swaps WHERE user_id = $1 ${sinceClause(since)} ORDER BY swap_date DESC`,
+    since ? [userId, since] : [userId]
+  );
+  return rows;
+}
+
+// Trainer-facing "Recent substitutions" for ONE assigned plan. Ownership is
+// enforced by joining diet_plans (trainer_id + client_id). Swaps on
+// SELF-AUTHORED plans have plan_server_id IS NULL and can never match.
+async function listAssignedPlanSwaps(trainerId, clientId, planId, limit = 30) {
+  const { rows } = await query(
+    `SELECT s.* FROM diet_item_swaps s
+     JOIN diet_plans p ON p.id = s.plan_server_id::uuid
+     WHERE p.id = $3::uuid AND p.trainer_id = $1 AND p.client_id = $2
+     ORDER BY s.swap_date DESC, s.created_at DESC LIMIT $4`,
+    [trainerId, clientId, String(planId), limit]
   );
   return rows;
 }
@@ -542,6 +633,7 @@ async function backupSummary(userId) {
     sessions: await one('SELECT COUNT(*) AS c FROM backup_sessions WHERE user_id = $1'),
     recipes: await one('SELECT COUNT(*) AS c FROM user_recipes WHERE user_id = $1'),
     diet_plans: await one('SELECT COUNT(*) AS c FROM backup_diet_plans WHERE user_id = $1'),
+    diet_item_swaps: await one('SELECT COUNT(*) AS c FROM diet_item_swaps WHERE user_id = $1'),
     supplement_plans: await one('SELECT COUNT(*) AS c FROM backup_supplement_plans WHERE user_id = $1'),
     measurements: await one('SELECT COUNT(*) AS c FROM measurement_entries WHERE client_id = $1'),
     personal_records: await one('SELECT COUNT(*) AS c FROM backup_personal_records WHERE user_id = $1'),
@@ -554,6 +646,7 @@ module.exports = {
   deleteWorkoutPlan,
   upsertSession, deleteSession, listSessions,
   upsertDietPlan, deleteDietPlan, listDietPlans, upsertDietCheckins, listDietCheckins,
+  upsertDietSwaps, deleteDietSwap, listDietSwaps, listAssignedPlanSwaps,
   upsertSupplementPlan, deleteSupplementPlan, listSupplementPlans, upsertSupplementCheckins, listSupplementCheckins,
   upsertPersonalRecords, deletePersonalRecord, listPersonalRecords,
   upsertRecipes, listRecipes, getRecipeById, updateRecipeById, deleteRecipeById, deleteRecipeByLocalId,

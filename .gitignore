@@ -44,3 +44,19 @@ coverage/
 # Temp
 *.tmp
 *.temp
+
+# Generated/temp files
+*.txt
+structure.txt
+
+# Command code (IDE-specific)
+.commandcode/
+.claude/
+# Metro
+.metro-health-check*
+
+# Watchman
+.watchmanconfig
+
+design/
+

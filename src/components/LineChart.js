@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text } from 'react-native';
 import Svg, { Polyline, Line, Circle, Text as SvgText } from 'react-native-svg';
 import { useColors } from '../theme';
-import { fmtShortDate } from '../theme';
+import { fmtShortDate } from '../shared/utils/format';
 
 // Simple line chart built on react-native-svg.
 // data: [{ x: timestamp, y: number }]

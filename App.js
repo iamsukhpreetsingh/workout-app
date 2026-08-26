@@ -1,8 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StatusBar, View, Text, ActivityIndicator, AppState, Alert, TouchableOpacity } from 'react-native';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { WorkoutProvider } from './src/store/WorkoutContext';
 import { AppProvider, useApp } from './src/store/AppContext';
@@ -14,219 +12,36 @@ import { getViewChoice, setViewChoice, clearViewChoice } from './src/lib/viewMod
 import { useColors } from './src/theme';
 import { api } from './src/lib/api';
 import * as SecureStore from 'expo-secure-store';
-import IntakeFormScreen from './src/screens/IntakeFormScreen';
-import LoginScreen from './src/screens/LoginScreen';
-import SignupScreen from './src/screens/SignupScreen';
-import ViewChoiceScreen from './src/screens/ViewChoiceScreen';
-import HomeScreen from './src/screens/HomeScreen';
-import WorkoutScreen from './src/screens/WorkoutScreen';
-import HistoryScreen from './src/screens/HistoryScreen';
-import SessionDetailScreen from './src/screens/SessionDetailScreen';
-import PlansScreen from './src/screens/PlansScreen';
-import PlanDetailScreen from './src/screens/PlanDetailScreen';
-import PlanEditorScreen from './src/screens/PlanEditorScreen';
-import ProgressScreen from './src/screens/ProgressScreen';
-import ExerciseProgressScreen from './src/screens/ExerciseProgressScreen';
-import SettingsScreen from './src/screens/SettingsScreen';
-import ProfileScreen from './src/screens/ProfileScreen';
-import BodyScreen from './src/screens/BodyScreen';
-import TrainerClientsScreen from './src/screens/TrainerClientsScreen';
-import TrainerSettingsScreen from './src/screens/TrainerSettingsScreen';
-import ClientDetailScreen from './src/screens/ClientDetailScreen';
-import AssignWorkoutScreen from './src/screens/AssignWorkoutScreen';
-import ClientAssignedDetailScreen from './src/screens/ClientAssignedDetailScreen';
-import CoachingPlanBuilderScreen from './src/screens/CoachingPlanBuilderScreen';
-import CoachingPlanDetailScreen from './src/screens/CoachingPlanDetailScreen';
-import AssignedPlanDetailScreen from './src/screens/AssignedPlanDetailScreen';
-import DietPlanBuilderScreen from './src/screens/DietPlanBuilderScreen';
-import ClientDietPlanDetailScreen from './src/screens/ClientDietPlanDetailScreen';
-import MyDishesScreen from './src/screens/MyDishesScreen';
-import MealCatalogScreen from './src/screens/MealCatalogScreen';
-import WorkoutTemplatesScreen from './src/screens/WorkoutTemplatesScreen';
-import WorkoutTemplateEditorScreen from './src/screens/WorkoutTemplateEditorScreen';
-import AssignWorkoutPickerScreen from './src/screens/AssignWorkoutPickerScreen';
-import ActiveWorkoutMiniBar from './src/components/ActiveWorkoutMiniBar';
-import NotificationCenterScreen from './src/screens/NotificationCenterScreen';
-import TagManagerScreen from './src/screens/TagManagerScreen';
-import SyncSettingsScreen from './src/screens/SyncSettingsScreen';
+import {
+  AuthStack,
+  MainStack,
+  TrainerStack,
+  ActiveWorkoutMiniBar,
+} from './src/navigation/navigators';
+import { RESET_PASSWORD } from './src/shared/constants/routes';
+
+// Deep linking — password-reset emails open the app directly on the Reset
+// Password screen via workouttracker://reset-password?token=...
+const linking = {
+  prefixes: ['workouttracker://'],
+  config: {
+    screens: {
+      Login: 'login',
+      ForgotPassword: 'forgot-password',
+      ResetPassword: 'reset-password',
+    },
+  },
+};
 import { initConnectivityListener } from './src/lib/sync';
-// import { initSyncEngine } from './src/lib/syncEngine';
-// import { initSyncEngine, resyncQueueForCurrentUser } from './src/lib/syncEngine';
 import { initSyncEngine, resyncQueueForCurrentUser, processQueue } from './src/lib/syncEngine';
 import { fetchAndCacheProgressionSetting } from './src/lib/progression';
 import { runBackfillIfNeeded } from './src/lib/backfill';
 import { isRestoreNeeded } from './src/lib/restore';
 import RestoreScreen from './src/screens/RestoreScreen';
+import ViewChoiceScreen from './src/screens/ViewChoiceScreen';
+import IntakeFormScreen from './src/screens/IntakeFormScreen';
 import { getLocalOnlyReminderState, markLocalOnlyReminderShown, hasUnsyncedBackupData } from './src/lib/localOnly';
 import { getSyncSettings, setSyncMode } from './src/lib/sync';
-
-const Tab = createBottomTabNavigator();
-const Stack = createNativeStackNavigator();
-
-const TAB_ICONS = {
-  Home: 'home',
-  History: 'calendar',
-  Plans: 'list',
-  Progress: 'trending-up',
-};
-
-// ── USER VIEW ───────────────────────────────────────────────────────────
-// The existing app shell. A trainer in User View uses it exactly like a
-// personal account — the Clients tab now lives only in Trainer View.
-function Tabs({ onSwitchView }) {
-  const { colors } = useApp();
-  const { user } = useAuth();
-  const isTrainer = user?.role === 'trainer';
-  return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown: true,
-        headerStyle: { backgroundColor: colors.bg },
-        headerTintColor: colors.text,
-        headerTitleStyle: { fontWeight: '800' },
-        headerShadowVisible: false,
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textDim,
-        tabBarStyle: { backgroundColor: colors.card, borderTopColor: colors.border },
-        tabBarIcon: ({ color, size }) => (
-          <Ionicons name={TAB_ICONS[route.name] || 'ellipse'} size={size || 22} color={color} />
-        ),
-        title: route.name === 'Plans' ? 'Routines' : route.name,
-      })}
-    >
-      <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Workout Tracker' }} />
-      <Tab.Screen name="History" component={HistoryScreen} />
-      <Tab.Screen name="Plans" component={PlansScreen} options={{ title: 'Routines' }} />
-      <Tab.Screen name="Progress" component={ProgressScreen} />
-    </Tab.Navigator>
-  );
-}
-
-function AuthStack() {
-  return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="Login" component={LoginScreen} />
-      <Stack.Screen name="Signup" component={SignupScreen} />
-    </Stack.Navigator>
-  );
-}
-
-function MainStack({ onSwitchView }) {
-  const { colors } = useApp();
-  const { user } = useAuth();
-  const isTrainer = user?.role === 'trainer';
-  return (
-    <Stack.Navigator
-      screenOptions={{
-        headerStyle: { backgroundColor: colors.bg },
-        headerTintColor: colors.text,
-        contentStyle: { backgroundColor: colors.bg },
-      }}
-    >
-      <Stack.Screen name="Main" options={{ headerShown: false }}>
-        {(props) => <Tabs {...props} onSwitchView={onSwitchView} />}
-      </Stack.Screen>
-      <Stack.Screen name="SessionDetail" component={SessionDetailScreen} options={{ title: 'Workout' }} />
-      <Stack.Screen name="PlanDetail" component={PlanDetailScreen} options={{ title: 'Routine' }} />
-      <Stack.Screen name="PlanEditor" component={PlanEditorScreen} options={{ title: 'New Routine' }} />
-      <Stack.Screen name="ExerciseProgress" component={ExerciseProgressScreen} options={{ title: 'Exercise' }} />
-      <Stack.Screen name="Settings">
-        {(props) => <SettingsScreen {...props} onSwitchView={isTrainer ? onSwitchView : undefined} />}
-      </Stack.Screen>
-      <Stack.Screen name="SyncSettings" component={SyncSettingsScreen} options={{ title: 'Data & Sync' }} />
-      <Stack.Screen name="IntakeForm" component={IntakeFormScreen} options={{ title: 'Health Profile' }} />
-      <Stack.Screen name="Profile" component={ProfileScreen} options={{ title: 'Profile' }} />
-      <Stack.Screen name="Body" component={BodyScreen} options={{ title: 'Body' }} />
-      <Stack.Screen name="ClientDetail" component={ClientDetailScreen} options={{ title: 'Client' }} />
-      <Stack.Screen name="AssignWorkout" component={AssignWorkoutScreen} options={{ title: 'Assign Workout' }} />
-      <Stack.Screen name="ClientAssignedDetail" component={ClientAssignedDetailScreen} options={{ title: 'From Your Trainer' }} />
-      <Stack.Screen name="NotificationCenter" component={NotificationCenterScreen} options={{ title: 'Notifications' }} />
-      <Stack.Screen name="DietPlanBuilder" component={DietPlanBuilderScreen} options={{ title: 'Diet Plan' }} />
-      <Stack.Screen name="ClientDietPlanDetail" component={ClientDietPlanDetailScreen} options={{ title: 'Diet Plan' }} />
-      <Stack.Screen name="MyDishes" component={MyDishesScreen} options={{ title: 'My Dishes' }} />
-      <Stack.Screen name="SupplementPlanBuilder" component={CoachingPlanBuilderScreen} options={{ title: 'Supplement Plan' }} />
-      <Stack.Screen name="CoachingPlanBuilder" component={CoachingPlanBuilderScreen} options={{ title: 'Plan' }} />
-      <Stack.Screen name="CoachingPlanDetail" component={CoachingPlanDetailScreen} options={{ title: 'Plan' }} />
-      <Stack.Screen name="AssignedPlanDetail" component={AssignedPlanDetailScreen} options={{ title: 'Assigned Plan' }} />
-      {/* Expanded logging view for the active workout (mini-bar expands here) */}
-      <Stack.Screen
-        name="ActiveWorkout"
-        component={WorkoutScreen}
-        options={{ title: 'Active Workout', presentation: 'fullScreenModal', headerShown: false }}
-      />
-    </Stack.Navigator>
-  );
-}
-
-// ── TRAINER VIEW ────────────────────────────────────────────────────────
-// Deliberately minimal: Clients + Settings. The trainer accent (blue) is
-// the active tab color, so the mode is distinguishable at a glance.
-function TrainerTabs({ onSwitchView }) {
-  const { colors } = useApp();
-  return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown: true,
-        headerStyle: { backgroundColor: colors.bg },
-        headerTintColor: colors.text,
-        headerTitleStyle: { fontWeight: '800' },
-        headerShadowVisible: false,
-        tabBarActiveTintColor: colors.blue,
-        tabBarInactiveTintColor: colors.textDim,
-        tabBarStyle: { backgroundColor: colors.card, borderTopColor: colors.border },
-        tabBarIcon: ({ color, size }) => (
-          <Ionicons
-            name={
-              route.name === 'Clients'
-                ? 'people'
-                : route.name === 'Workouts'
-                ? 'barbell-outline'
-                : route.name === 'Recipes'
-                ? 'restaurant-outline'
-                : 'settings-outline'
-            }
-            size={size || 22}
-            color={color}
-          />
-        ),
-      })}
-    >
-      <Tab.Screen name="Clients" component={TrainerClientsScreen} options={{ title: 'Clients' }} />
-      <Tab.Screen name="Workouts" component={WorkoutTemplatesScreen} options={{ title: 'Workouts' }} />
-      <Tab.Screen name="Recipes" component={MealCatalogScreen} options={{ title: 'Recipes' }} />
-      <Tab.Screen name="TrainerSettings">
-        {(props) => <TrainerSettingsScreen {...props} onSwitchView={onSwitchView} />}
-      </Tab.Screen>
-    </Tab.Navigator>
-  );
-}
-
-function TrainerStack({ onSwitchView }) {
-  const { colors } = useApp();
-  return (
-    <Stack.Navigator
-      screenOptions={{
-        headerStyle: { backgroundColor: colors.bg },
-        headerTintColor: colors.text,
-        contentStyle: { backgroundColor: colors.bg },
-      }}
-    >
-      <Stack.Screen name="TrainerMain" options={{ headerShown: false }}>
-        {(props) => <TrainerTabs {...props} onSwitchView={onSwitchView} />}
-      </Stack.Screen>
-      <Stack.Screen name="ClientDetail" component={ClientDetailScreen} options={{ title: 'Client' }} />
-      <Stack.Screen name="AssignWorkoutPicker" component={AssignWorkoutPickerScreen} options={{ title: 'Assign Workout' }} />
-      <Stack.Screen name="AssignWorkout" component={AssignWorkoutScreen} options={{ title: 'Assign Workout' }} />
-      <Stack.Screen name="WorkoutTemplateEditor" component={WorkoutTemplateEditorScreen} options={{ title: 'Template' }} />
-      <Stack.Screen name="DietPlanBuilder" component={DietPlanBuilderScreen} options={{ title: 'Diet Plan' }} />
-      <Stack.Screen name="SupplementPlanBuilder" component={CoachingPlanBuilderScreen} options={{ title: 'Supplement Plan' }} />
-      <Stack.Screen name="AssignedPlanDetail" component={AssignedPlanDetailScreen} options={{ title: 'Assigned Plan' }} />
-      <Stack.Screen name="CoachingPlanDetail" component={CoachingPlanDetailScreen} options={{ title: 'Plan' }} />
-      <Stack.Screen name="NotificationCenter" component={NotificationCenterScreen} options={{ title: 'Notifications' }} />
-      <Stack.Screen name="TagManager" component={TagManagerScreen} options={{ title: 'Manage Tags' }} />
-    </Stack.Navigator>
-  );
-}
 
 function Splash() {
   const colors = useColors();
@@ -372,24 +187,7 @@ function AppContent() {
     []
   );
 
-  // // Invisible sync catch-up on foreground while authenticated.
-  // useEffect(() => {
-  //   if (authStatus !== 'authenticated') return;
-  //   // Initialize connectivity listener for offline-first sync
-  //   initConnectivityListener();
-  //   syncPendingSessions();
-  //   syncPendingMeasurements();
-  //   const sub = AppState.addEventListener('change', (state) => {
-  //     if (state === 'active') {
-  //       syncPendingSessions();
-  //       syncPendingMeasurements();
-  //     }
-  //   });
-  //   return () => sub.remove();
-  // }, [authStatus]);
-
-
-    // Engine startup + trainer-facing pushes + restore gate + backfill.
+  // Engine startup + trainer-facing pushes + restore gate + backfill.
   useEffect(() => {
     if (authStatus !== 'authenticated') return;
     // unified engine: connectivity listener, crash reset, 10-min safety net
@@ -443,11 +241,7 @@ function AppContent() {
 
 
     const sub = AppState.addEventListener('change', (state) => {
-      // if (state === 'active') {
-      //   syncPendingSessions();
-      //   syncPendingMeasurements();
-      // }
-            if (state === 'active') {
+      if (state === 'active') {
         syncPendingSessions();
         syncPendingMeasurements();
         processQueue(); // unified engine — auto mode runs on foreground (spec)
@@ -478,7 +272,7 @@ function AppContent() {
   const showTrainerNav = authStatus === 'authenticated' && isTrainer && trainerView === 'trainer';
 
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer theme={navTheme} linking={linking}>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       {/* Hard auth gate: no unauthenticated path into the main app */}
       {authStatus === 'checking' && <Splash />}
@@ -505,13 +299,10 @@ function AppContent() {
             </View>
           )}
           <IntakeFormScreen
-            route={{ params: { gate: intakeGate === 'gate' } }}
-            navigation={{
-              goBack: () => {
-                if (intakeGate === 'gate') ackTrainer(gateTrainerRef.current);
-                setIntakeGate(null);
-              },
-              setOptions: () => {},
+            gate={intakeGate === 'gate'}
+            onClose={() => {
+              if (intakeGate === 'gate') ackTrainer(gateTrainerRef.current);
+              setIntakeGate(null);
             }}
           />
         </View>

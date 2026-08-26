@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../lib/api';
+import { fetchAndCacheTrainerContent } from '../lib/trainerCache';
 import { useWorkout, groupLabels } from '../store/WorkoutContext';
 import { startAssignedPlan } from '../lib/startAssigned';
 import { useColors } from '../theme';
@@ -20,7 +21,12 @@ export default function ClientAssignedDetailScreen({ route, navigation }) {
 
   const load = useCallback(async () => {
     try {
-      const plans = await api('/client/assigned-plans');
+      // fetch-through cache: opens offline from the cached assigned-plans
+      // copy (incl. swap alternatives) instead of erroring out
+      const plans = await fetchAndCacheTrainerContent(
+        'trainer:assigned-workouts',
+        () => api('/client/assigned-plans')
+      );
       setPlan(plans.find((p) => p.id === planId) || null);
     } catch (e) {
       Alert.alert('Could not load plan', e.message || 'Please try again.', [
@@ -95,6 +101,24 @@ export default function ClientAssignedDetailScreen({ route, navigation }) {
                   <Text style={styles.exHint}>{ex.target_weight_note}</Text>
                 ) : null}
                 {ex.notes ? <Text style={styles.exHint}>{ex.notes}</Text> : null}
+                {/* configured swap alternatives — same chip treatment as
+                    PlanDetailScreen (My Routines) so both plan views read
+                    identically; values come straight from the assigned-plan
+                    payload (server attaches alternatives per exercise) */}
+                {(ex.alternatives || []).length > 0 && (
+                  <View style={styles.altWrap}>
+                    {ex.alternatives.map((alt, j) => (
+                      <View key={j} style={styles.altChip}>
+                        <Ionicons name="swap-horizontal" size={10} color={colors.blue} />
+                        <Text style={styles.altText}>
+                          {typeof alt === 'string'
+                            ? alt
+                            : alt.alternative_exercise_name ?? alt.name}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
               </View>
               {ex.rest_seconds ? (
                 <View style={styles.restChip}>
@@ -150,6 +174,19 @@ const makeStyles = (colors) =>
     exSets: { color: colors.text, fontSize: 13, fontWeight: '800' },
     exSetsUnit: { color: colors.textDim, fontSize: 11 },
     exHint: { color: colors.textDim, fontSize: 11, marginTop: 2, fontStyle: 'italic' },
+    // identical to PlanDetailScreen's alternative chips — one visual
+    // language for "this exercise has swap options" across plan views
+    altWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 },
+    altChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      backgroundColor: colors.cardLight,
+      borderRadius: 7,
+      paddingHorizontal: 7,
+      paddingVertical: 3,
+    },
+    altText: { color: colors.blue, fontSize: 11, fontWeight: '600' },
     restChip: {
       flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.cardLight,
       borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5,

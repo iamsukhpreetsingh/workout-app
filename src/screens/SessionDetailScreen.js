@@ -2,11 +2,13 @@ import React, { useCallback, useState, useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Alert, StyleSheet, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import LoadError from '../shared/components/LoadError';
 import { getSession, deleteSession, updateSetType, updateSessionName } from '../db/queries';
 import { getPRSetIdsForSession } from '../db/pr';
 import { shareSessionAsRoutine } from '../lib/share';
 import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
-import { useColors, fmtDate } from '../theme';
+import { useColors } from '../theme';
+import { fmtDate } from '../shared/utils/format';
 import { formatDuration, groupLabels } from '../store/WorkoutContext';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
@@ -19,6 +21,8 @@ export default function SessionDetailScreen({ route, navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [session, setSession] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
   const [prSetIds, setPrSetIds] = useState(new Set());
   const [editingName, setEditingName] = useState(false);
   const [editedName, setEditedName] = useState('');
@@ -40,19 +44,29 @@ export default function SessionDetailScreen({ route, navigation }) {
   const reload = useCallback(() => {
     let mounted = true;
     async function load() {
-      const s = await getSession(route.params.sessionId);
-      if (!mounted) return;
-      setSession(s);
-      if (s) {
-        const prs = await getPRSetIdsForSession(s.id);
-        if (mounted) setPrSetIds(prs);
+      try {
+        const s = await getSession(route.params.sessionId);
+        if (!mounted) return;
+        setSession(s);
+        if (s) {
+          const prs = await getPRSetIdsForSession(s.id);
+          if (mounted) setPrSetIds(prs);
+        }
+        if (mounted) setLoadError(false);
+      } catch (e) {
+        console.warn('[SessionDetailScreen] load failed:', e?.message || e);
+        if (mounted) setLoadError(true);
       }
     }
     load();
     return () => { mounted = false; };
-  }, [route.params.sessionId]);
+  }, [route.params.sessionId, retryTick]);
 
   useFocusEffect(reload);
+
+  if (loadError && !session) {
+    return <LoadError onRetry={() => setRetryTick((t) => t + 1)} />;
+  }
 
   if (!session) {
     return (
@@ -192,7 +206,7 @@ export default function SessionDetailScreen({ route, navigation }) {
           )}
           {/* <Text style={styles.exName}>{ex.name}</Text>
           {ex.notes ? <Text style={styles.exNote}>{ex.notes}</Text> : null} */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             <Text style={styles.exName}>{ex.name}</Text>
             <TouchableOpacity
               // onPress={() => setDetailEx(ex)}
@@ -202,7 +216,18 @@ export default function SessionDetailScreen({ route, navigation }) {
               <Ionicons name="information-circle-outline" size={18} color={colors.primary} />
             </TouchableOpacity>
           </View>
+          {ex.original_exercise_name ? (
+            <Text style={styles.swappedLabel}>
+              swapped from {ex.original_exercise_name}
+            </Text>
+          ) : null}
           {ex.notes ? <Text style={styles.exNote}>{ex.notes}</Text> : null}
+          {ex.trainer_note ? (
+            <View style={styles.trainerNoteRow}>
+              <Ionicons name="people" size={11} color={colors.blue} />
+              <Text style={styles.exNote}>Shared with trainer: {ex.trainer_note}</Text>
+            </View>
+          ) : null}
           <View style={styles.setHeader}>
             <Text style={styles.setHeaderLabel}>TYPE</Text>
             <Text style={styles.setHeaderLabel}>KG</Text>
@@ -328,7 +353,9 @@ const makeStyles = (colors) =>
     groupLabel: { color: colors.blue, fontWeight: '700', fontSize: 12, marginBottom: 6 },
 
     exName: { color: colors.text, fontSize: 16, fontWeight: '800', marginBottom: 2 },
+    swappedLabel: { color: colors.textDim, fontSize: 11, fontStyle: 'italic', marginTop: -2 },
     exNote: { color: colors.textDim, fontSize: 12, fontStyle: 'italic', marginBottom: 8 },
+    trainerNoteRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
 
     setHeader: { flexDirection: 'row', marginTop: 8, marginBottom: 2 },
     setHeaderLabel: { color: colors.textDim, fontSize: 10, fontWeight: '700', flex: 1, textAlign: 'center', letterSpacing: 0.5 },

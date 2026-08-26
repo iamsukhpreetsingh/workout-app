@@ -4,6 +4,7 @@ import { api, registerTokenHooks, tryRefresh } from '../lib/api';
 import { clearViewChoice } from '../lib/viewMode';
 import { setCurrentUserId } from '../db/queries';
 import { pullFromCloud } from '../lib/sync';
+import { syncExerciseCatalog } from '../lib/exerciseCatalog';
 import { getSyncSettings } from '../lib/sync';
 import { hasUnsyncedBackupData } from '../lib/localOnly';
 import { Alert } from 'react-native';
@@ -66,6 +67,13 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  // Exercise library is server-authoritative: refresh the local cache
+  // (skipped when the server version is unchanged). Never fatal.
+  const refreshExerciseCatalog = useCallback(() => {
+    syncExerciseCatalog().catch((e) =>
+      console.log('[AUTH] exercise catalog sync failed:', e?.message));
+  }, []);
+
   // Launch sequence: splash → check stored tokens → silent refresh if
   // possible → main app, else login screen.
   useEffect(() => {
@@ -90,6 +98,7 @@ export function AuthProvider({ children }) {
           setAuthStatus('authenticated');
           // Pull data from cloud after session restore
           pullFromCloud().catch(e => console.log('[AUTH] Pull failed:', e.message));
+          refreshExerciseCatalog();
           return;
         } catch {
           // fall through to refresh attempt
@@ -104,6 +113,7 @@ export function AuthProvider({ children }) {
           setAuthStatus('authenticated');
           // Pull data from cloud after session restore
           pullFromCloud().catch(e => console.log('[AUTH] Pull failed:', e.message));
+          refreshExerciseCatalog();
           return;
         } catch {
           // fall through
@@ -135,6 +145,7 @@ export function AuthProvider({ children }) {
     async (email, password) => {
       const data = await api('/auth/login', { method: 'POST', body: { email, password }, skipAuth: true });
       await applySession(data.user, data.accessToken, data.refreshToken);
+      refreshExerciseCatalog();
       return data.user;
     },
     [applySession]
@@ -144,6 +155,7 @@ export function AuthProvider({ children }) {
     async (payload) => {
       const data = await api('/auth/signup', { method: 'POST', body: payload, skipAuth: true });
       await applySession(data.user, data.accessToken, data.refreshToken);
+      refreshExerciseCatalog();
       return data.user;
     },
     [applySession]
@@ -187,8 +199,16 @@ export function AuthProvider({ children }) {
     setAuthStatus('unauthenticated');
   }, []);
 
+  // Swap the stored token pair in place (password change). Unlike
+  // applySession, this deliberately skips setUser/cloud-pull — identity
+  // hasn't changed, only credentials.
+  const rotateSession = useCallback(async (accessToken, refreshToken) => {
+    await writeJson(KEY_ACCESS, accessToken);
+    await writeJson(KEY_REFRESH, refreshToken);
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, authStatus, login, signup, logout }}>
+    <AuthContext.Provider value={{ user, authStatus, login, signup, logout, rotateSession }}>
       {children}
     </AuthContext.Provider>
   );

@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
+import { MAIN_TABS, TAB_CLIENTS } from '../shared/constants/routes';
 
 // Profile identity/info only — app preferences stay in Settings.
 export default function ProfileScreen({ navigation }) {
@@ -218,7 +219,7 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer }) {
       {isTrainer && (
         <TouchableOpacity
           style={styles.clientsRow}
-          onPress={() => navigation.navigate('Main', { screen: 'Clients' })}
+          onPress={() => navigation.navigate(MAIN_TABS, { screen: TAB_CLIENTS })}
         >
           <Ionicons name="people-outline" size={20} color={colors.primary} />
           <Text style={styles.clientsText}>Manage Clients</Text>

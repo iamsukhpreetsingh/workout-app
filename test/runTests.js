@@ -220,4 +220,94 @@ test('Fix 2 Percentage-Based: training-max driven, unaffected by ramps', () => {
   assert.strictEqual(r.suggestedWeight, 70);
 });
 
+// ---- Check-in per-date independence + future-date blocking ----
+// Regression tests for the diet/supplement check-in bug: a single plan-wide
+// answer bled into every date's display, and future dates were answerable.
+import { todayLocalISO, isFutureDate, buildCheckinMap } from '../src/lib/checkinDates.js';
+
+const T = todayLocalISO(); // real device "today", local calendar
+const dayOffset = (base, n) => {
+  const d = new Date(`${base}T12:00:00`); // noon anchor: immune to DST edges
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+test('check-in: todayLocalISO returns the LOCAL calendar date (not UTC)', () => {
+  // at 00:30 local in UTC+5:30, toISOString() still shows YESTERDAY in UTC;
+  // local components must win. Verify format and self-consistency.
+  assert.match(T, /^\d{4}-\d{2}-\d{2}$/);
+  const now = new Date();
+  assert.strictEqual(
+    T,
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  );
+});
+
+test('check-in: future dates blocked, past/today allowed — even near midnight', () => {
+  // 11:58 PM case: today itself must never read as future regardless of
+  // time-of-day, because comparison is DATE-ONLY on local calendar strings
+  assert.strictEqual(isFutureDate(T), false);
+  assert.strictEqual(isFutureDate(dayOffset(T, -1)), false); // past backfill ok
+  assert.strictEqual(isFutureDate(dayOffset(T, -30)), false);
+  assert.strictEqual(isFutureDate(dayOffset(T, 1)), true); // tomorrow
+  assert.strictEqual(isFutureDate(dayOffset(T, 3)), true); // Aug-27-style repro
+  // lexicographic safety across month/year boundaries
+  assert.strictEqual(isFutureDate('2026-08-24', '2026-09-01'), false);
+  assert.strictEqual(isFutureDate('2026-10-01', '2026-09-01'), true);
+  assert.strictEqual(isFutureDate('2027-01-01', '2026-12-31'), true);
+});
+
+test('check-in: exact reproduction — Aug22 No / Aug24 Yes stay independent', () => {
+  // seed rows exactly like the bug report: No on the 22nd, later Yes on the
+  // 24th; every other date must remain UNANSWERED and the 22nd must keep No
+  const rows = [
+    { date: '2026-08-22', followed: false },
+    { date: '2026-08-24', followed: true },
+  ];
+  const map = buildCheckinMap(rows);
+  assert.strictEqual(map['2026-08-22'], false); // keeps its own No
+  assert.strictEqual(map['2026-08-24'], true); // keeps its own Yes
+  assert.ok(!('2026-08-23' in map)); // never answered → unanswered
+  assert.ok(!('2026-08-25' in map));
+  assert.ok(!('2026-08-27' in map)); // future date has NO state at all
+});
+
+test('check-in: four dates, mixed answers, random-order reads never bleed', () => {
+  const rows = [
+    { date: '2026-08-20', followed: true },
+    { date: '2026-08-21', followed: false },
+    { date: '2026-08-23', followed: true },
+    { date: '2026-08-24', followed: false },
+  ];
+  const map = buildCheckinMap(rows);
+  // deliberately non-chronological reads
+  const reads = ['2026-08-24', '2026-08-20', '2026-08-23', '2026-08-21'];
+  const expected = { '2026-08-24': false, '2026-08-20': true, '2026-08-23': true, '2026-08-21': false };
+  for (const d of reads) {
+    assert.strictEqual(map[d], expected[d], `${d} must show only its own answer`);
+  }
+  // writing one more date mutates ONLY that key
+  const after = { ...map };
+  after['2026-08-22'] = false; // simulates checkIn(false) on Aug 22
+  assert.strictEqual(after['2026-08-22'], false);
+  assert.strictEqual(after['2026-08-24'], false); // untouched by the new write
+  assert.strictEqual(after['2026-08-20'], true);
+});
+
+test('check-in: supplement rows (taken) and SQLite ints both map correctly', () => {
+  // API shape: taken true/false · local SQLite shape: followed 1/0
+  const supp = buildCheckinMap([{ date: '2026-08-22', taken: false }, { date: '2026-08-24', taken: true }], 'taken');
+  assert.strictEqual(supp['2026-08-22'], false);
+  assert.strictEqual(supp['2026-08-24'], true);
+  const sqlite = buildCheckinMap([
+    { date: '2026-08-22T00:00:00.000Z', followed: 0 },
+    { date: '2026-08-24', followed: 1 },
+  ]);
+  assert.strictEqual(sqlite['2026-08-22'], false);
+  assert.strictEqual(sqlite['2026-08-24'], true);
+  // null/absent values must read as UNANSWERED, not coerced to No
+  const partial = buildCheckinMap([{ date: '2026-08-22', followed: null }]);
+  assert.ok(!('2026-08-22' in partial));
+});
+
 console.log(`\n${passed} tests passed`);

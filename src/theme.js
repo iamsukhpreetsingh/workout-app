@@ -40,20 +40,15 @@ export function getColors(isDark) {
 
 export const colors = darkColors;
 
-export const fmtDate = (ts) =>
-  new Date(ts).toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-
-export const fmtShortDate = (ts) =>
-  new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-
-export const fmtVolume = (v) => {
-  if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
-  return String(Math.round(v));
+// Spacing scale — 4pt grid. Use for margins/padding/gaps instead of magic
+// numbers in new code; existing styles migrate opportunistically.
+export const spacing = {
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 24,
+  xxl: 32,
 };
 
 // ---- Live palette store -------------------------------------------------

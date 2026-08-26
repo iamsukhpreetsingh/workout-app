@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const users = require('../data/users');
 const tags = require('../data/tags');
+const { registerRoute } = require('../admin/registry');
 
 const router = express.Router();
 
@@ -25,7 +26,17 @@ function signRefreshToken(user, jti) {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // POST /auth/signup
-router.post('/signup', async (req, res, next) => {
+registerRoute(
+  router,
+  {
+    method: 'POST',
+    path: '/signup',
+    description: 'Create a new user or trainer account and return initial access/refresh tokens',
+    requiresAuth: false,
+    allowedRoles: ['public'],
+    category: 'Auth',
+  },
+  async (req, res, next) => {
   try {
     const { email, password, name, role } = req.body || {};
     if (!email || !EMAIL_RE.test(email)) {
@@ -64,7 +75,17 @@ router.post('/signup', async (req, res, next) => {
 });
 
 // POST /auth/login
-router.post('/login', async (req, res, next) => {
+registerRoute(
+  router,
+  {
+    method: 'POST',
+    path: '/login',
+    description: 'Authenticate with email/password; blocked when the account is suspended by an admin',
+    requiresAuth: false,
+    allowedRoles: ['public'],
+    category: 'Auth',
+  },
+  async (req, res, next) => {
   try {
     const { email, password } = req.body || {};
     if (!email || !password) {
@@ -101,7 +122,17 @@ router.post('/login', async (req, res, next) => {
 });
 
 // POST /auth/refresh — one refresh token → new access token (+ rotation)
-router.post('/refresh', async (req, res, next) => {
+registerRoute(
+  router,
+  {
+    method: 'POST',
+    path: '/refresh',
+    description: 'Exchange a valid refresh token for a new access token, rotating the refresh token',
+    requiresAuth: false,
+    allowedRoles: ['public (valid refresh token)'],
+    category: 'Auth',
+  },
+  async (req, res, next) => {
   try {
     const { refreshToken } = req.body || {};
     if (!refreshToken) return res.status(400).json({ error: 'refreshToken is required' });
@@ -131,7 +162,17 @@ router.post('/refresh', async (req, res, next) => {
 });
 
 // POST /auth/logout — revoke the refresh token server-side
-router.post('/logout', async (req, res, next) => {
+registerRoute(
+  router,
+  {
+    method: 'POST',
+    path: '/logout',
+    description: 'Revoke the supplied refresh token (server-side logout)',
+    requiresAuth: false,
+    allowedRoles: ['public'],
+    category: 'Auth',
+  },
+  async (req, res, next) => {
   try {
     const { refreshToken } = req.body || {};
     if (refreshToken) await users.revokeRefreshToken(refreshToken);
@@ -141,4 +182,9 @@ router.post('/logout', async (req, res, next) => {
   }
 });
 
+// shared with the authenticated change-password flow so access/refresh
+// tokens are always signed identically (same claims, same TTLs)
 module.exports = router;
+module.exports.signAccessToken = signAccessToken;
+module.exports.signRefreshToken = signRefreshToken;
+module.exports.REFRESH_TTL_DAYS = REFRESH_TTL_DAYS;

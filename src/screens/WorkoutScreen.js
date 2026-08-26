@@ -8,6 +8,8 @@ import {
   Alert,
   ScrollView,
   StyleSheet,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as KeepAwake from 'expo-keep-awake';
@@ -15,6 +17,7 @@ import { useWorkout, groupLabels, elapsedSeconds } from '../store/WorkoutContext
 import { saveSession, createPlan } from '../db/queries';
 import { getSettings, updateSettings } from '../db/settings';
 import ExercisePicker from '../components/ExercisePicker';
+import { resolveExerciseByName } from '../lib/startAssigned';
 import RestTimerBar from '../components/RestTimerBar';
 import RestEditorModal from '../components/RestEditorModal';
 import PlateSheet from '../components/PlateSheet';
@@ -46,6 +49,14 @@ export default function WorkoutScreen({ navigation }) {
   const [selected, setSelected] = useState([]);
   const [prToast, setPrToast] = useState(null);
   const [notesKey, setNotesKey] = useState(null); // exercise with open notes editor
+  // Draft-based comment editing: typing stays local until the tick is
+  // tapped; only then is the note committed for THAT exercise. Keyed by
+  // exercise key so each editor's draft/saved state is independent.
+  const [noteDraft, setNoteDraft] = useState({ personal: '', trainer: '' });
+  const [notesJustSaved, setNotesJustSaved] = useState(false);
+  const notesSaveTimer = useRef(null);
+  const [swapKey, setSwapKey] = useState(null); // exercise with open swap picker
+  const [adHocPickerVisible, setAdHocPickerVisible] = useState(false);
   const sessionBest = useRef({});
   const restoredRef = useRef(false);
   const [suggestions, setSuggestions] = useState({}); // exerciseKey → {suggestion, missingTrainingMax}
@@ -53,6 +64,33 @@ export default function WorkoutScreen({ navigation }) {
   const [dismissedTmPrompts, setDismissedTmPrompts] = useState(new Set());
 
   const styles = makeStyles(colors);
+
+  // open the notes editor pre-filled from THIS exercise's saved values;
+  // closing without saving discards the draft
+  const toggleNotesEditor = (item) => {
+    if (notesSaveTimer.current) { clearTimeout(notesSaveTimer.current); notesSaveTimer.current = null; }
+    if (notesKey === item.key) {
+      setNotesKey(null);
+      return;
+    }
+    setNotesKey(item.key);
+    setNoteDraft({ personal: item.notes || '', trainer: item.trainerNote || '' });
+    setNotesJustSaved(false);
+  };
+
+  const notesDirty = (item) =>
+    noteDraft.personal !== (item.notes || '') || noteDraft.trainer !== (item.trainerNote || '');
+
+  // tick save — commits BOTH note types for this exercise only, then
+  // flashes a saved indicator. Personal note stays private; the trainer
+  // note is what later syncs to the trainer as shared_note.
+  const saveExerciseNotes = (item) => {
+    dispatch({ type: 'SET_EXERCISE_NOTES', exerciseKey: item.key, notes: noteDraft.personal });
+    dispatch({ type: 'SET_EXERCISE_TRAINER_NOTE', exerciseKey: item.key, note: noteDraft.trainer });
+    setNotesJustSaved(true);
+    if (notesSaveTimer.current) clearTimeout(notesSaveTimer.current);
+    notesSaveTimer.current = setTimeout(() => setNotesJustSaved(false), 2000);
+  };
 
   useEffect(() => {
     (async () => {
@@ -150,6 +188,8 @@ export default function WorkoutScreen({ navigation }) {
           restSeconds: e.restSeconds,
           groupId: e.groupId,
           notes: e.notes || null,
+          trainerNote: e.trainerNote || null,
+          originalExerciseName: e.originalExerciseName || null,
           sets: e.sets
             .filter((s) => parseFloat(s.weight) > 0 || parseInt(s.reps, 10) > 0)
             .map((s) => ({
@@ -278,6 +318,27 @@ export default function WorkoutScreen({ navigation }) {
     }
   };
 
+  // Mid-session swap: replaces the card's identity for THIS SESSION ONLY.
+  // Progression suggestions reset so the swapped-to exercise gets its OWN
+  // history-based suggestion (null for a first-time exercise — never
+  // borrowed from the original).
+  const doSwap = async (item, targetName) => {
+    setSwapKey(null);
+    setAdHocPickerVisible(false);
+    try {
+      const exercise = await resolveExerciseByName(targetName);
+      delete suggestionsRef.current[item.key];
+      setSuggestions({ ...suggestionsRef.current });
+      dispatch({
+        type: 'SWAP_EXERCISE',
+        exerciseKey: item.key,
+        exercise: { id: exercise.id, name: exercise.name, muscle_group: exercise.muscle_group },
+      });
+    } catch (e) {
+      Alert.alert('Could not swap', String(e.message || e));
+    }
+  };
+
   const toggleSelect = (key) => {
     setSelected((prev) =>
       prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
@@ -296,6 +357,7 @@ export default function WorkoutScreen({ navigation }) {
 
   const restEditEx = workout.exercises.find((e) => e.key === restEditKey);
   const notesEx = workout.exercises.find((e) => e.key === notesKey);
+  const swapEx = workout.exercises.find((e) => e.key === swapKey);
   const plateSet = (() => {
     for (const e of workout.exercises) {
       const s = e.sets.find((x) => x.key === plateForKey);
@@ -413,14 +475,18 @@ export default function WorkoutScreen({ navigation }) {
                 )}
                 {!selectMode && (
                   <View style={styles.headerActions}>
-                    {/* Per-exercise note: outline when empty, filled when set */}
-                    <TouchableOpacity
-                      onPress={() => setNotesKey(notesKey === item.key ? null : item.key)}
-                    >
+                    {/* Equipment-aware substitution: swap for the rest of
+                        this session only (never touches the source plan) */}
+                    <TouchableOpacity onPress={() => setSwapKey(item.key)}>
+                      <Text style={styles.headerAction}>Swap</Text>
+                    </TouchableOpacity>
+                    {/* Per-exercise notes: outline when empty, filled when
+                        a personal OR trainer-shared note is set */}
+                    <TouchableOpacity onPress={() => toggleNotesEditor(item)}>
                       <Ionicons
-                        name={item.notes ? 'chatbox' : 'chatbox-outline'}
+                        name={item.notes || item.trainerNote ? 'chatbox' : 'chatbox-outline'}
                         size={16}
-                        color={item.notes ? colors.orange : colors.textDim}
+                        color={item.notes || item.trainerNote ? colors.orange : colors.textDim}
                       />
                     </TouchableOpacity>
                     <TouchableOpacity onPress={() => setRestEditKey(item.key)}>
@@ -451,18 +517,53 @@ export default function WorkoutScreen({ navigation }) {
                 )}
               </View>
 
-              {/* inline per-exercise notes editor */}
+              {/* inline per-exercise notes editor — draft + explicit tick
+                  save; nothing persists until the tick is tapped */}
               {notesKey === item.key && (
-                <TextInput
-                  style={styles.exNotesInput}
-                  placeholder="Note for this exercise (e.g. left shoulder felt tight)"
-                  placeholderTextColor={colors.textDim}
-                  value={item.notes || ''}
-                  onChangeText={(notes) =>
-                    dispatch({ type: 'SET_EXERCISE_NOTES', exerciseKey: item.key, notes })
-                  }
-                  multiline
-                />
+                <View style={styles.exNotesWrap}>
+                  <View style={styles.exNotesHeaderRow}>
+                    <Ionicons name="lock-closed" size={11} color={colors.textDim} />
+                    <Text style={styles.exNotesLabel}>Personal Notes</Text>
+                    {notesJustSaved ? (
+                      <View style={styles.exNotesSavedRow}>
+                        <Ionicons name="checkmark-circle" size={13} color={colors.green} />
+                        <Text style={styles.exNotesSavedText}>Saved</Text>
+                      </View>
+                    ) : null}
+                    <TouchableOpacity
+                      style={[styles.exNotesTickBtn, !notesDirty(item) && styles.exNotesTickBtnOff]}
+                      disabled={!notesDirty(item)}
+                      onPress={() => saveExerciseNotes(item)}
+                      accessibilityLabel="Save notes"
+                    >
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={24}
+                        color={notesDirty(item) ? colors.green : colors.textDim}
+                      />
+                    </TouchableOpacity>
+                  </View>
+                  <TextInput
+                    style={styles.exNotesInput}
+                    placeholder="Private note for you (e.g. remember to increase weight next session)"
+                    placeholderTextColor={colors.textDim}
+                    value={noteDraft.personal}
+                    onChangeText={(personal) => setNoteDraft((d) => ({ ...d, personal }))}
+                    multiline
+                  />
+                  <View style={styles.exNotesHeaderRow}>
+                    <Ionicons name="people" size={11} color={colors.textDim} />
+                    <Text style={styles.exNotesLabel}>Share with Trainer</Text>
+                  </View>
+                  <TextInput
+                    style={[styles.exNotesInput, styles.exNotesInputTrainer]}
+                    placeholder="Visible to your trainer (e.g. knees felt slightly uncomfortable on the last set)"
+                    placeholderTextColor={colors.textDim}
+                    value={noteDraft.trainer}
+                    onChangeText={(trainer) => setNoteDraft((d) => ({ ...d, trainer }))}
+                    multiline
+                  />
+                </View>
               )}
 
               {/* 💡 Suggested Today — from the resolved progression formula
@@ -740,6 +841,52 @@ export default function WorkoutScreen({ navigation }) {
         }
       />
 
+      {/* Swap picker: configured alternatives first (one tap), then the
+          standard exercise picker for an ad hoc substitute — handles both
+          "no alternatives configured" and "none of them are free either". */}
+      <Modal
+        visible={!!swapEx}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSwapKey(null)}
+      >
+        <Pressable style={styles.swapOverlay} onPress={() => setSwapKey(null)}>
+          <View style={styles.swapSheet}>
+            <Text style={styles.swapTitle}>Swap {swapEx?.name}</Text>
+            <View style={styles.swapDivider} />
+            {(swapEx?.alternatives || []).map((name) => (
+              <TouchableOpacity
+                key={name}
+                style={styles.swapOption}
+                onPress={() => doSwap(swapEx, name)}
+              >
+                <Ionicons name="swap-horizontal" size={16} color={colors.primary} />
+                <Text style={styles.swapOptionText}>{name}</Text>
+              </TouchableOpacity>
+            ))}
+            <View style={styles.swapDivider} />
+            <TouchableOpacity
+              style={styles.swapOption}
+              onPress={() => {
+                setAdHocPickerVisible(true);
+              }}
+            >
+              <Ionicons name="search" size={16} color={colors.blue} />
+              <Text style={[styles.swapOptionText, styles.swapAdHocText]}>
+                Choose a different exercise →
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <ExercisePicker
+        visible={adHocPickerVisible}
+        onClose={() => setAdHocPickerVisible(false)}
+        onPick={(exercise) => doSwap(swapEx, exercise.name)}
+        excludeNames={[swapEx?.name].filter(Boolean)}
+      />
+
       <RestEditorModal
         visible={!!restEditEx}
         exerciseName={restEditEx?.name}
@@ -812,6 +959,26 @@ const makeStyles = (colors) =>
       marginBottom: 8,
       minHeight: 44,
     },
+    exNotesWrap: { marginBottom: 8 },
+    exNotesHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      marginBottom: 4,
+    },
+    exNotesLabel: {
+      color: colors.textDim,
+      fontSize: 11,
+      fontWeight: '800',
+      letterSpacing: 0.5,
+      textTransform: 'uppercase',
+      flex: 1,
+    },
+    exNotesSavedRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginRight: 8 },
+    exNotesSavedText: { color: colors.green, fontSize: 11, fontWeight: '700' },
+    exNotesTickBtn: { marginLeft: 'auto' },
+    exNotesTickBtnOff: { opacity: 0.45 },
+    exNotesInputTrainer: { borderColor: colors.border, borderWidth: 1 },
     selectCheck: { flexDirection: 'row', alignItems: 'center', flex: 1 },
     setHeader: { flexDirection: 'row', marginBottom: 4 },
     setHeaderLabel: { color: colors.textDim, fontSize: 11, flex: 1, textAlign: 'center' },
@@ -906,4 +1073,23 @@ const makeStyles = (colors) =>
     deltaTextSmall: { fontSize: 9, fontWeight: '600' },
     deltaUp: { color: colors.green },
     deltaDown: { color: colors.orange },
+    swapOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 32 },
+    swapSheet: {
+      backgroundColor: colors.card,
+      borderRadius: 14,
+      paddingVertical: 8,
+      paddingHorizontal: 6,
+    },
+    swapTitle: { color: colors.text, fontWeight: '800', fontSize: 16, padding: 12 },
+    swapDivider: { height: 1, backgroundColor: colors.border },
+    swapOption: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingVertical: 13,
+      paddingHorizontal: 14,
+      borderRadius: 10,
+    },
+    swapOptionText: { color: colors.text, fontSize: 15, fontWeight: '600' },
+    swapAdHocText: { color: colors.blue },
   });

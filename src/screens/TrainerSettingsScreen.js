@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../store/AuthContext';
 import { useColors } from '../theme';
 import { api } from '../lib/api';
+import ChangePasswordCard from '../components/ChangePasswordCard';
 
 // Trainer View's Settings tab — invite code, profile summary, view
 // switcher, logout. Deliberately minimal; app preferences live in User
@@ -131,6 +132,8 @@ export default function TrainerSettingsScreen({ navigation, onSwitchView }) {
         </View>
         <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
       </TouchableOpacity>
+
+      <ChangePasswordCard />
 
       <TouchableOpacity style={styles.logoutBtn} onPress={() => logout()}>
         <Ionicons name="log-out-outline" size={17} color={colors.red} />

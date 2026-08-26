@@ -11,6 +11,7 @@ import * as FileSystem from 'expo-file-system';
 import { getDb } from '../db/db';
 import { getCurrentUserId } from '../db/userId';
 import { api } from './api';
+import { startRestoreRunReport, finishRestoreRunReport } from './adminTelemetry';
 
 const PHOTOS_DIR = `${FileSystem.documentDirectory}progress_photos/`;
 
@@ -45,7 +46,22 @@ export async function isRestoreNeeded() {
   return true;
 }
 
+// Public entry point — unchanged behavior, plus fire-and-forget telemetry
+// for the admin dashboard's restore monitoring (Phase 11). Reporting can
+// never throw and never alters the restore outcome; failures re-throw
+// exactly as before.
 export async function performRestore(onProgress = () => {}) {
+  const runId = await startRestoreRunReport();
+  try {
+    await runRestoreSteps(onProgress);
+    finishRestoreRunReport(runId, 'success');
+  } catch (e) {
+    finishRestoreRunReport(runId, 'failed', e?.message?.slice(0, 200) || null);
+    throw e;
+  }
+}
+
+async function runRestoreSteps(onProgress = () => {}) {
   const userId = getCurrentUserId();
   if (!userId) throw new Error('Not signed in');
   const db = await getDb();
@@ -148,6 +164,9 @@ export async function performRestore(onProgress = () => {}) {
          p.created_at ? new Date(p.created_at).getTime() : Date.now(),
          userId, JSON.stringify(p.tags || []), p.id]);
       await db.runAsync('DELETE FROM plan_exercises WHERE plan_id = ?', [planId]);
+      await db.runAsync(
+        `DELETE FROM plan_exercise_alternatives WHERE plan_exercise_id IN (
+           SELECT CAST(id AS TEXT) FROM plan_exercises WHERE plan_id = ?)`, [planId]);
       for (let i = 0; i < (exercises || []).length; i++) {
         const ex = exercises[i] || {};
         let exerciseId = null;
@@ -157,10 +176,21 @@ export async function performRestore(onProgress = () => {}) {
           if (row) exerciseId = row.id;
         }
         if (exerciseId == null) continue;
-        await db.runAsync(
+        const pe = await db.runAsync(
           `INSERT INTO plan_exercises (plan_id, exercise_id, position, target_sets, rest_seconds, group_id)
            VALUES (?,?,?,?,?,?)`,
           [planId, exerciseId, ex.order_index ?? i, ex.target_sets ?? 3, ex.rest_seconds ?? 90, ex.group_id ?? null]);
+        // configured swap alternatives — restored so routines keep their
+        // substitution options after a device wipe/reinstall
+        const alts = Array.isArray(ex.alternatives) ? ex.alternatives : [];
+        for (let ai = 0; ai < Math.min(alts.length, 3); ai++) {
+          const name = String(typeof alts[ai] === 'string' ? alts[ai] : alts[ai]?.alternative_exercise_name || '').trim();
+          if (!name) continue;
+          await db.runAsync(
+            `INSERT INTO plan_exercise_alternatives (plan_exercise_id, alternative_exercise_name, order_index)
+             VALUES (?,?,?)`,
+            [String(pe.lastInsertRowId), name, ai]);
+        }
       }
     }
   });
@@ -209,9 +239,10 @@ export async function performRestore(onProgress = () => {}) {
         if (!ex.exercise_name) continue;
         const exerciseId = await exerciseIdByName(ex.exercise_name, ex.muscle_group);
         const se = await db.runAsync(
-          `INSERT INTO session_exercises (session_id, exercise_id, position, rest_seconds, group_id, notes)
-           VALUES (?,?,?,?,?,?)`,
-          [sid, exerciseId, ex.order_index ?? i, ex.rest_seconds ?? 90, ex.group_id ?? null, ex.notes ?? null]);
+          `INSERT INTO session_exercises (session_id, exercise_id, position, rest_seconds, group_id, notes, trainer_note)
+           VALUES (?,?,?,?,?,?,?)`,
+          [sid, exerciseId, ex.order_index ?? i, ex.rest_seconds ?? 90, ex.group_id ?? null,
+           ex.notes ?? null, ex.trainerNote ?? null]);
         for (let j = 0; j < (ex.sets || []).length; j++) {
           const st = ex.sets[j] || {};
           await db.runAsync(
@@ -258,13 +289,26 @@ export async function performRestore(onProgress = () => {}) {
                   ingredients, allergens, prep_time_minutes, cook_time_minutes, difficulty,
                   alternate_servings, tags)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-              [it.local_entity_id, m.local_entity_id, it.local_recipe_id ?? null, it.name,
-               it.calories ?? null, it.protein_g ?? null, it.carbs_g ?? null, it.fat_g ?? null,
-               it.serving_size ?? null, it.recipe_url ?? null, it.quantity_multiplier ?? 1,
-               it.client_note ?? null, it.order_index ?? 0, it.photo_path ?? null,
-               JSON.stringify(it.ingredients || []), JSON.stringify(it.allergens || []),
-               it.prep_time_minutes ?? null, it.cook_time_minutes ?? null, it.difficulty ?? null,
-               JSON.stringify(it.alternate_servings || []), JSON.stringify(it.tags || [])]);
+               [it.local_entity_id, m.local_entity_id, it.local_recipe_id ?? null, it.name,
+                it.calories ?? null, it.protein_g ?? null, it.carbs_g ?? null, it.fat_g ?? null,
+                it.serving_size ?? null, it.recipe_url ?? null, it.quantity_multiplier ?? 1,
+                it.client_note ?? null, it.order_index ?? 0, it.photo_path ?? null,
+                JSON.stringify(it.ingredients || []), JSON.stringify(it.allergens || []),
+                it.prep_time_minutes ?? null, it.cook_time_minutes ?? null, it.difficulty ?? null,
+                JSON.stringify(it.alternate_servings || []), JSON.stringify(it.tags || [])]);
+            // configured dish alternatives ride inside the item payload
+            for (let ai = 0; ai < (it.alternatives || []).length; ai++) {
+              const a = it.alternatives[ai];
+              await db.runAsync(
+                `INSERT INTO local_diet_plan_meal_item_alternatives
+                   (local_diet_plan_meal_item_id, alternative_name, alternative_calories,
+                    alternative_protein_g, alternative_carbs_g, alternative_fat_g,
+                    alternative_recipe_local_id, order_index)
+                 VALUES (?,?,?,?,?,?,?,?)`,
+                [it.local_entity_id, String(a?.name ?? '').trim(), a?.calories ?? null,
+                 a?.protein_g ?? null, a?.carbs_g ?? null, a?.fat_g ?? null,
+                 a?.recipe_local_id ?? null, ai]);
+            }
           }
         }
       }
@@ -284,10 +328,33 @@ export async function performRestore(onProgress = () => {}) {
            it.timing ?? null, it.notes ?? null, it.order_index ?? 0]);
       }
     }
-    const [dietCis, suppCis] = await Promise.all([
+    const [dietCis, suppCis, dietSwaps] = await Promise.all([
       api('/user/backup/diet-checkins'),
       api('/user/backup/supplement-checkins'),
+      api('/user/backup/diet-swaps').catch(() => []),
     ]);
+    for (const s of dietSwaps) {
+      // swaps restore as already-synced — they ARE the server truth
+      await db.runAsync(
+        `INSERT INTO local_diet_item_swaps
+           (user_id, diet_plan_meal_item_ref, plan_ref, swap_date, original_name,
+            swapped_name, swapped_calories, swapped_protein_g, swapped_carbs_g,
+            swapped_fat_g, synced, server_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,1,?)
+         ON CONFLICT(diet_plan_meal_item_ref, swap_date) DO UPDATE SET
+           plan_ref = excluded.plan_ref,
+           original_name = excluded.original_name,
+           swapped_name = excluded.swapped_name,
+           swapped_calories = excluded.swapped_calories,
+           swapped_protein_g = excluded.swapped_protein_g,
+           swapped_carbs_g = excluded.swapped_carbs_g,
+           swapped_fat_g = excluded.swapped_fat_g,
+           synced = 1, server_id = excluded.server_id`,
+        [userId, s.diet_plan_meal_item_ref, s.plan_ref, String(s.swap_date).slice(0, 10),
+         s.original_name, s.swapped_name, s.swapped_calories ?? null,
+         s.swapped_protein_g ?? null, s.swapped_carbs_g ?? null, s.swapped_fat_g ?? null,
+         s.id]);
+    }
     for (const c of dietCis) {
       await db.runAsync(
         `INSERT INTO local_diet_checkins (user_id, diet_plan_local_id, date, followed, note, synced)

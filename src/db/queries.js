@@ -31,9 +31,13 @@ export async function listExercises() {
   const db = await getDb();
   const userId = getCurrentUserId();
   if (!userId) return [];
-  // seeds (user_id NULL) are device-shared; customs are account-scoped
+  // server-catalog globals (user_id NULL, never archived) + account-scoped
+  // custom exercises; archived server-side rows stay in DB for history but
+  // are hidden from selection
   return db.getAllAsync(
-    `SELECT * FROM exercises WHERE user_id IS NULL OR user_id = ? ORDER BY muscle_group, name`,
+    `SELECT * FROM exercises
+      WHERE (user_id IS NULL OR user_id = ?) AND is_archived = 0
+      ORDER BY muscle_group, name`,
     [userId]
   );
 }
@@ -206,6 +210,16 @@ export async function listPlans() {
     plan.exerciseCount = (
       await db.getAllAsync('SELECT COUNT(*) AS c FROM plan_exercises WHERE plan_id = ?', [plan.id])
     )[0].c;
+    // total configured alternatives across all exercises — drives the
+    // "↔ N swappable" badge on the routine list cards
+    plan.alternativeCount = (
+      await db.getAllAsync(
+        `SELECT COUNT(*) AS c FROM plan_exercise_alternatives a
+         JOIN plan_exercises pe ON CAST(pe.id AS TEXT) = a.plan_exercise_id
+         WHERE pe.plan_id = ?`,
+        [plan.id]
+      )
+    )[0].c;
     plan.tags = plan.tags ? JSON.parse(plan.tags) : [];
   }
   return plans;
@@ -218,9 +232,6 @@ export async function getPlan(id) {
   const plan = await db.getFirstAsync('SELECT * FROM workout_plans WHERE id = ? AND user_id = ?', [id, userId]);
   if (!plan) return null;
   plan.exercises = await db.getAllAsync(
-    // `SELECT pe.id, pe.target_sets, pe.position, pe.rest_seconds, pe.group_id,
-    //         e.id AS exercise_id, e.name, e.muscle_group
-    //  FROM plan_exercises pe
         `SELECT pe.id, pe.target_sets, pe.position, pe.rest_seconds, pe.group_id,
             e.id AS exercise_id, e.name, e.muscle_group, e.equipment, e.body_part,
             e.target, e.secondary_muscles, e.instructions, e.instruction_steps,
@@ -231,6 +242,19 @@ export async function getPlan(id) {
      ORDER BY pe.position`,
     [id]
   );
+  // configured alternatives (0-3 per entry) for the live-swap picker
+  const altRows = await db.getAllAsync(
+    `SELECT plan_exercise_id, alternative_exercise_name, alternative_exercise_id_local
+     FROM plan_exercise_alternatives ORDER BY order_index`
+  );
+  const altByParent = {};
+  for (const a of altRows) {
+    (altByParent[a.plan_exercise_id] = altByParent[a.plan_exercise_id] || []).push({
+      name: a.alternative_exercise_name,
+      exerciseId: a.alternative_exercise_id_local ? Number(a.alternative_exercise_id_local) : null,
+    });
+  }
+  for (const ex of plan.exercises) ex.alternatives = altByParent[String(ex.id)] || [];
   
   for (const ex of plan.exercises) {
     // Positional prior-session sets for per-set prefill (falls back to
@@ -298,6 +322,50 @@ export async function getPlan(id) {
 // }
 
 
+// exercises: [{ exerciseId, targetSets, restSeconds, groupId, alternatives }]
+// alternatives: 0-3 entries [{ name, exerciseId? }] — validated client-side
+// by AlternativesEditor; re-validated here (cap + duplicates).
+function normalizeAlternatives(exerciseId, primaryName, alternatives = []) {
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const seen = new Set([norm(primaryName)]);
+  const out = [];
+  for (const a of alternatives) {
+    // builders pass plain strings; some flows pass {name} objects
+    const name = String(typeof a === 'string' ? a : a?.name || '').trim();
+    if (!name) continue;
+    if (out.length >= 3) throw new Error('Up to 3 alternatives per exercise');
+    if (seen.has(norm(name))) throw new Error(`"${name}" is already added as an alternative`);
+    seen.add(norm(name));
+    out.push({ name, exerciseId: typeof a === 'object' ? a.exerciseId ?? null : null });
+  }
+  return out;
+}
+
+// Insert one plan_exercises row plus its configured alternatives.
+async function insertPlanExercise(db, planId, ex, i) {
+  const r = await db.runAsync(
+    `INSERT INTO plan_exercises (plan_id, exercise_id, position, target_sets, rest_seconds, group_id)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      planId,
+      ex.exerciseId,
+      i,
+      ex.targetSets || 3,
+      ex.restSeconds || 90,
+      ex.groupId || null,
+    ]
+  );
+  const primaryName = ex.name || null;
+  for (const [j, alt] of normalizeAlternatives(ex.exerciseId, primaryName, ex.alternatives).entries()) {
+    await db.runAsync(
+      `INSERT INTO plan_exercise_alternatives
+         (plan_exercise_id, alternative_exercise_name, alternative_exercise_id_local, order_index)
+       VALUES (?, ?, ?, ?)`,
+      [String(r.lastInsertRowId), alt.name, alt.exerciseId != null ? String(alt.exerciseId) : null, j]
+    );
+  }
+}
+
 // exercises: [{ exerciseId, targetSets, restSeconds, groupId }]
 // tags: optional array of strings (max 5)
 export async function createPlan(name, notes, exercises, tags = []) {
@@ -311,18 +379,7 @@ export async function createPlan(name, notes, exercises, tags = []) {
   );
   const planId = result.lastInsertRowId;
   for (let i = 0; i < exercises.length; i++) {
-    await db.runAsync(
-      `INSERT INTO plan_exercises (plan_id, exercise_id, position, target_sets, rest_seconds, group_id)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        planId,
-        exercises[i].exerciseId,
-        i,
-        exercises[i].targetSets || 3,
-        exercises[i].restSeconds || 90,
-        exercises[i].groupId || null,
-      ]
-    );
+    await insertPlanExercise(db, planId, exercises[i], i);
   }
 
   // queue the backup — the engine builds the payload fresh at upload time
@@ -363,6 +420,12 @@ export async function deletePlan(id) {
   );
 
   await db.runAsync('DELETE FROM workout_plans WHERE id = ? AND user_id = ?', [id, userId]);
+  // alternatives are keyed by plan_exercise id with no FK — sweep orphans
+  await db.runAsync(
+    `DELETE FROM plan_exercise_alternatives WHERE plan_exercise_id NOT IN (
+       SELECT CAST(pe.id AS TEXT) FROM plan_exercises pe
+     )`
+  );
 
   // server delete only if it was ever backed up; never-synced deletes are
   // clean local removals (no queue row, no server call — no 404 loops)
@@ -426,19 +489,13 @@ export async function updatePlan(id, name, notes, exercises, tags = []) {
     [name, notes || null, tagsJson, id, userId]
   );
   await db.runAsync('DELETE FROM plan_exercises WHERE plan_id = ?', [id]);
+  await db.runAsync(
+    `DELETE FROM plan_exercise_alternatives WHERE plan_exercise_id NOT IN (
+       SELECT CAST(pe.id AS TEXT) FROM plan_exercises pe
+     )`
+  );
   for (let i = 0; i < exercises.length; i++) {
-    await db.runAsync(
-      `INSERT INTO plan_exercises (plan_id, exercise_id, position, target_sets, rest_seconds, group_id)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        exercises[i].exerciseId,
-        i,
-        exercises[i].targetSets || 3,
-        exercises[i].restSeconds || 90,
-        exercises[i].groupId || null,
-      ]
-    );
+    await insertPlanExercise(db, id, exercises[i], i);
   }
 
   // queue the edit — engine rebuilds the payload fresh
@@ -488,6 +545,7 @@ export async function getSession(id) {
     //         e.id AS exercise_id, e.name, e.muscle_group
     //  FROM session_exercises se
         `SELECT se.id AS session_exercise_id, se.position, se.rest_seconds, se.group_id, se.notes,
+            se.trainer_note, se.original_exercise_name,
             e.id AS exercise_id, e.name, e.muscle_group, e.equipment, e.body_part,
             e.target, e.secondary_muscles, e.instructions, e.instruction_steps,
             e.media_id, e.gif_url, e.attribution, e.is_custom, e.training_max
@@ -618,9 +676,9 @@ export async function saveSession(session) {
   for (let i = 0; i < session.exercises.length; i++) {
     const ex = session.exercises[i];
     const r = await db.runAsync(
-      `INSERT INTO session_exercises (session_id, exercise_id, position, rest_seconds, group_id, notes)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [sessionId, ex.exerciseId, i, ex.restSeconds || 90, ex.groupId || null, ex.notes || null]
+      `INSERT INTO session_exercises (session_id, exercise_id, position, rest_seconds, group_id, notes, trainer_note, original_exercise_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [sessionId, ex.exerciseId, i, ex.restSeconds || 90, ex.groupId || null, ex.notes || null, ex.trainerNote || null, ex.originalExerciseName || null]
     );
     const seId = r.lastInsertRowId;
     for (let j = 0; j < ex.sets.length; j++) {
@@ -975,7 +1033,10 @@ export async function markSessionSyncAttempted(sessionId) {
 }
 
 // Per-set drill-down payload for one session. STRUCTURAL ONLY: weight,
-// reps, set_type, completed. RPE and notes are deliberately never included.
+// reps, set_type, completed. RPE and PERSONAL notes are deliberately never
+// included. THE one documented exception: trainer_note (the user's
+// "Share with Trainer" field) rides along as shared_note — that is its
+// entire purpose.
 export async function getSessionExerciseDetailPayload(sessionId) {
   const db = await getDb();
   const userId = getCurrentUserId();
@@ -986,7 +1047,8 @@ export async function getSessionExerciseDetailPayload(sessionId) {
   );
   if (!session) return null;
   const exercises = await db.getAllAsync(
-    `SELECT e.name AS exercise_name, e.muscle_group, se.position AS order_index
+    `SELECT e.name AS exercise_name, e.muscle_group, se.position AS order_index,
+            se.original_exercise_name, se.trainer_note AS shared_note
      FROM session_exercises se
      JOIN exercises e ON e.id = se.exercise_id
      WHERE se.session_id = ?
@@ -998,6 +1060,8 @@ export async function getSessionExerciseDetailPayload(sessionId) {
       'SELECT position, weight, reps, set_type, completed FROM sets WHERE session_exercise_id IN (SELECT id FROM session_exercises WHERE session_id = ? AND position = ?) ORDER BY position',
       [sessionId, ex.order_index]
     );
+    ex.original_exercise_name = ex.original_exercise_name || null;
+    ex.shared_note = ex.shared_note || null; // trainer-shared note ONLY — personal notes never leave the device
     ex.sets = sets.map((s, i) => ({
       set_number: i + 1,
       weight: s.weight || 0,

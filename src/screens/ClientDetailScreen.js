@@ -21,50 +21,16 @@ import LineChart from '../components/LineChart';
 import BarChart from '../components/BarChart';
 import CapsuleDropdown from '../components/CapsuleDropdown';
 import { useColors } from '../theme';
+import { fmtVolume } from '../shared/utils/format';
+import { fmtDuration, relativeTime, isoDay, weeklyVolumeBuckets, TYPE_TAG } from '../features/coaching/utils/clientAnalytics';
+import OverviewPanel from '../features/coaching/components/OverviewPanel';
+import CoachingList from '../features/coaching/components/CoachingList';
+import Segmented from '../features/coaching/components/Segmented';
+import ClientWorkoutsTab from '../features/coaching/components/ClientWorkoutsTab';
+import { ASSIGNED_PLAN_DETAIL, ASSIGN_WORKOUT, ASSIGN_WORKOUT_PICKER, COACHING_PLAN_DETAIL , DIET_PLAN_BUILDER, SUPPLEMENT_PLAN_BUILDER } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
-function fmtK(v) {
-  const n = Number(v) || 0;
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n));
-}
-
-function fmtDuration(sec) {
-  if (!sec) return null;
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
-
-function relativeTime(iso) {
-  if (!iso) return null;
-  const diff = Date.now() - new Date(iso).getTime();
-  const days = Math.floor(diff / 86400000);
-  if (days < 1) return 'Today';
-  if (days === 1) return 'Yesterday';
-  if (days < 7) return `${days} days ago`;
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-function isoDay(offsetDays = 0) {
-  return new Date(Date.now() + offsetDays * 86400000).toISOString().slice(0, 10);
-}
-
-function weeklyVolumeBuckets(summaries) {
-  const startOfWeek = (d) => {
-    const date = new Date(d);
-    const day = (date.getDay() + 6) % 7;
-    date.setDate(date.getDate() - day);
-    date.setHours(0, 0, 0, 0);
-    return date;
-  };
-  const buckets = new Map();
-  for (const s of summaries) {
-    const key = startOfWeek(new Date(s.performed_at)).getTime();
-    buckets.set(key, (buckets.get(key) || 0) + (Number(s.total_volume) || 0));
-  }
-  return [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([x, y]) => ({ x, y }));
-}
 
 // Trainer's Client Detail: identity + analytics tabs (Volume / Strength /
 // Measurements) + content tabs (Workouts / Diet / Supplements). The selected
@@ -113,8 +79,6 @@ export default function ClientDetailScreen({ route, navigation }) {
   // this trainer's own override state
   const [progResolved, setProgResolved] = useState(null); // {formula_key, params, source}
   const [progOverride, setProgOverride] = useState(null); // {formula_key, params} | null
-  // const [progEditing, setProgEditing] = useState(false);
-  // const [progDraft, setProgDraft] = useState(null);
   const [progBusy, setProgBusy] = useState(false);
 
   React.useLayoutEffect(() => {
@@ -184,49 +148,6 @@ export default function ClientDetailScreen({ route, navigation }) {
   
 
 
-  const loadNotificationPref = useCallback(async () => {
-    try {
-      const roster = await api('/trainer/clients');
-      const client = roster.find(c => c.id === clientId);
-      if (client && client.trainer_notifications_enabled !== undefined) {
-        setNotificationPref(client.trainer_notifications_enabled);
-      }
-    } catch (e) {
-      // Default to true if we can't fetch
-      setNotificationPref(true);
-    }
-  }, [clientId]);
-
-  // useFocusEffect(
-  //   useCallback(() => {
-  //     loadNotificationPref();
-  //   }, [loadNotificationPref])
-  // );
-
-    useFocusEffect(
-    useCallback(() => {
-      loadNotificationPref();
-      loadProgression();
-    }, [loadNotificationPref, loadProgression])
-  );
-
-  // const saveProgOverride = async (formulaKey, params) => {
-  //   if (progBusy) return;
-  //   setProgBusy(true);
-  //   try {
-  //     await api(`/trainer/clients/${clientId}/progression-override`, {
-  //       method: 'PUT',
-  //       body: { formula_key: formulaKey, params: params || {} },
-  //     });
-  //     setProgEditing(false);
-  //     await loadProgression();
-  //   } catch (e) {
-  //     Alert.alert('Could not save override', e.message || 'Please try again.');
-  //   } finally {
-  //     setProgBusy(false);
-  //   }
-  // };
-
 
     // Data-only: saves the override and refreshes. Editor UI state (closing
   // the editor) is OverviewPanel's concern — handled via the return value.
@@ -247,34 +168,6 @@ export default function ClientDetailScreen({ route, navigation }) {
       setProgBusy(false);
     }
   };
-
-
-  // const clearProgOverride = async () => {
-  //   if (progBusy) return;
-  //   Alert.alert(
-  //     'Reset progression strategy',
-  //     'Clear your override? This client will fall back to their own setting (or the app default).',
-  //     [
-  //       { text: 'Cancel', style: 'cancel' },
-  //       {
-  //         text: 'Reset',
-  //         style: 'destructive',
-  //         onPress: async () => {
-  //           setProgBusy(true);
-  //           try {
-  //             await api(`/trainer/clients/${clientId}/progression-override`, { method: 'DELETE' });
-  //             setProgEditing(false);
-  //             await loadProgression();
-  //           } catch (e) {
-  //             Alert.alert('Could not clear', e.message || 'Please try again.');
-  //           } finally {
-  //             setProgBusy(false);
-  //           }
-  //         },
-  //       },
-  //     ]
-  //   );
-  // };
 
 
     const clearProgOverride = async () => {
@@ -321,22 +214,25 @@ export default function ClientDetailScreen({ route, navigation }) {
     }
   };
 
-  // Also load notification preference in loadContent to ensure it's available
+  // Notification preference for this client (fetched from the roster on
+  // every focus; defaults to true when unavailable)
+  const loadNotificationPref = useCallback(async () => {
+    try {
+      const roster = await api('/trainer/clients');
+      const client = roster.find((c) => c.id === clientId);
+      if (client && client.trainer_notifications_enabled !== undefined) {
+        setNotificationPref(client.trainer_notifications_enabled);
+      }
+    } catch (e) {
+      // Ignore - use default
+    }
+  }, [clientId]);
+
   useFocusEffect(
     useCallback(() => {
-      const load = async () => {
-        try {
-          const roster = await api('/trainer/clients');
-          const client = roster.find(c => c.id === clientId);
-          if (client && client.trainer_notifications_enabled !== undefined) {
-            setNotificationPref(client.trainer_notifications_enabled);
-          }
-        } catch (e) {
-          // Ignore - use default
-        }
-      };
-      load();
-    }, [clientId])
+      loadNotificationPref();
+      loadProgression();
+    }, [loadNotificationPref, loadProgression])
   );
 
   // analytics re-query — runs on tab / range / picker changes; loading state
@@ -451,7 +347,7 @@ export default function ClientDetailScreen({ route, navigation }) {
         items.push({
           at: new Date(sm.performed_at).getTime(),
           icon: 'barbell-outline',
-          text: `Completed "${sm.name || 'Workout'}" - ${fmtK(sm.total_volume)} vol`,
+          text: `Completed "${sm.name || 'Workout'}" - ${fmtVolume(sm.total_volume)} vol`,
         });
       }
       for (const m2 of meas) {
@@ -610,9 +506,7 @@ export default function ClientDetailScreen({ route, navigation }) {
           onLoadActivity={loadActivity}
           notificationPref={notificationPref}
           onNotificationToggle={handleNotificationToggle}
-        //   loadingNotificationPref={loadingPref}
-        // />
-                  loadingNotificationPref={loadingPref}
+          loadingNotificationPref={loadingPref}
           progResolved={progResolved}
           progOverride={progOverride}
           onProgSave={saveProgOverride}
@@ -719,110 +613,19 @@ export default function ClientDetailScreen({ route, navigation }) {
       )}
 
       {activeTab === 'workouts' && (
-        <View>
-          <Text style={styles.groupLabel}>Recent</Text>
-          {summaries.length === 0 && (
-            <Text style={styles.emptySub}>
-              No synced workouts yet — sessions appear here as your client trains.
-            </Text>
-          )}
-          {summaries.map((s) => {
-            const isOpen = expanded === s.id;
-            const details = detailCache.current[s.id];
-            return (
-              <View key={s.id} style={styles.card}>
-                <TouchableOpacity style={styles.sessRow} onPress={() => toggleExpand(s.id)}>
-                  <View style={styles.dateBlock}>
-                    <Text style={[styles.dateDay, NUMS]}>{new Date(s.performed_at).getDate()}</Text>
-                    <Text style={styles.dateMon}>
-                      {new Date(s.performed_at).toLocaleDateString(undefined, { month: 'short' })}
-                    </Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.sessName} numberOfLines={1}>
-                      {s.name || 'Workout'}
-                    </Text>
-                    <Text style={[styles.meta, NUMS]}>
-                      {s.exercise_count} ex · {s.working_set_count} sets · {fmtK(s.total_volume)} vol
-                      {s.duration_seconds ? ` · ${fmtDuration(s.duration_seconds)}` : ''}
-                    </Text>
-                  </View>
-                  <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textDim} />
-                </TouchableOpacity>
-
-                {isOpen && (
-                  <View style={styles.detailWrap}>
-                    {!details ? (
-                      <ActivityIndicator color={colors.primary} size="small" />
-                    ) : details.error ? (
-                      <Text style={styles.error}>{details.error}</Text>
-                    ) : (
-                      details.map((ex) => (
-                        <View key={`${ex.exercise_name}-${ex.order_index}`} style={styles.detailEx}>
-                          <Text style={styles.detailExName}>{ex.exercise_name}</Text>
-                          {ex.sets.map((set, i) => (
-                            <View key={i} style={styles.detailSetRow}>
-                              <Text style={[styles.detailCell, NUMS]}>{set.set_number}</Text>
-                              <Text style={[styles.detailCell, set.set_type === 'warmup' && styles.warmupText]}>
-                                {TYPE_TAG[set.set_type] || 'W'}
-                              </Text>
-                              <Text style={[styles.detailCell, NUMS, set.set_type === 'warmup' && styles.warmupText]}>
-                                {set.weight}
-                              </Text>
-                              <Text style={[styles.detailCell, NUMS, set.set_type === 'warmup' && styles.warmupText]}>
-                                {set.reps}
-                              </Text>
-                            </View>
-                          ))}
-                        </View>
-                      ))
-                    )}
-                  </View>
-                )}
-              </View>
-            );
-          })}
-
-          <Text style={[styles.groupLabel, { marginTop: 18 }]}>Assigned</Text>
-          {assignedPlans.length === 0 && (
-            <Text style={styles.emptySub}>Nothing assigned yet — build one below.</Text>
-          )}
-          {assignedPlans.map((ap) => (
-            <View key={ap.id} style={styles.card}>
-              <TouchableOpacity
-                style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}
-                activeOpacity={0.8}
-                onPress={() => navigation.navigate('AssignedPlanDetail', { planId: ap.id, clientId, clientName })}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.sessName} numberOfLines={1}>
-                    {ap.name}
-                  </Text>
-                  <Text style={[styles.meta, NUMS]}>
-                    {ap.exercise_count} exercises · assigned{' '}
-                    {new Date(ap.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.editIconBtn}
-                onPress={() => navigation.navigate('AssignWorkout', { clientId, clientName, planId: ap.id })}
-              >
-                <Ionicons name="create-outline" size={18} color={colors.textDim} />
-              </TouchableOpacity>
-            </View>
-          ))}
-
-          <TouchableOpacity
-            style={[styles.assignBtn, readOnly && { opacity: 0.4 }]}
-            disabled={readOnly}
-            onPress={() => navigation.navigate('AssignWorkoutPicker', { clientId, clientName })}
-          >
-            <Ionicons name="add-circle-outline" size={20} color="#fff" />
-            <Text style={styles.assignText}>Assign Workout</Text>
-          </TouchableOpacity>
-        </View>
+        <ClientWorkoutsTab
+          styles={styles}
+          colors={colors}
+          navigation={navigation}
+          clientId={clientId}
+          clientName={clientName}
+          readOnly={readOnly}
+          summaries={summaries}
+          assignedPlans={assignedPlans}
+          expanded={expanded}
+          detailCache={detailCache}
+          toggleExpand={toggleExpand}
+        />
       )}
 
       {activeTab === 'diet' && (
@@ -887,289 +690,6 @@ export default function ClientDetailScreen({ route, navigation }) {
         </TouchableOpacity>
       </Modal>
     </ScrollView>
-  );
-}
-
-const TYPE_TAG = { working: 'W', warmup: 'WU', dropset: 'DS', failure: 'F' };
-
-// // ── Overview panel ──────────────────────────────────────────────────────
-// // Week/month stat cards + the one place all three assign actions live
-// // together + a merged recent-activity feed.
-// function OverviewPanel({
-//   styles, colors, navigation, clientId, clientName, readOnly,
-//   summaries, activity, onLoadActivity,
-//   notificationPref, onNotificationToggle, loadingNotificationPref,
-// }) {
-
-function OverviewPanel({
-  styles, colors, navigation, clientId, clientName, readOnly,
-  summaries, activity, onLoadActivity,
-  notificationPref, onNotificationToggle, loadingNotificationPref,
-//   progResolved, progOverride, onProgSave, onProgClear, progBusy,
-// }) {
-
-  progResolved, progOverride, onProgSave, onProgClear, progBusy,
-}) {
-  // Editing state lives HERE — it's pure UI state for this card, and this
-  // is the only component that uses it.
-  const [progEditing, setProgEditing] = React.useState(false);
-  const [progDraft, setProgDraft] = React.useState(null);
-  const confirmRemoveClient = () =>
-    Alert.alert(
-      'Remove client',
-      `You'll keep read-only access to ${clientName || 'this client'}'s workout history, diet plans, and supplement plans for 30 days, after which they'll be permanently removed. They will immediately lose access to anything you've assigned them.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api(`/trainer/clients/${clientId}/unlink`, { method: 'POST' });
-              navigation.goBack();
-            } catch (e) {
-              Alert.alert('Could not remove client', e.message || 'Please try again.');
-            }
-          },
-        },
-      ]
-    );
-
-  React.useEffect(() => { onLoadActivity && onLoadActivity(); }, []);
-
-  const now = Date.now();
-  const week = summaries.filter((s) => now - new Date(s.performed_at).getTime() < 7 * 86400000);
-  const month = summaries.filter((s) => now - new Date(s.performed_at).getTime() < 30 * 86400000);
-  const stat = (rows) => ({
-    count: rows.length,
-    vol: rows.reduce((n, r) => n + (Number(r.total_volume) || 0), 0),
-  });
-  const wk = stat(week);
-  const mo = stat(month);
-
-  const actions = [
-    { label: 'Assign Workout', icon: 'barbell-outline', to: 'AssignWorkoutPicker' },
-    { label: 'Assign Diet', icon: 'nutrition-outline', to: 'DietPlanBuilder', kind: 'diet' },
-    { label: 'Assign Supplement', icon: 'medkit-outline', to: 'SupplementPlanBuilder', kind: 'supplement' },
-  ];
-
-  return (
-    <View>
-      <View style={styles.statRow}>
-        <View style={styles.statCard}>
-          <Text style={[styles.statBig, NUMS]}>{wk.count}</Text>
-          <Text style={styles.statLabel}>workouts this week</Text>
-          <Text style={[styles.statVol, NUMS]}>{fmtK(wk.vol)} vol</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={[styles.statBig, NUMS]}>{mo.count}</Text>
-          <Text style={styles.statLabel}>workouts this month</Text>
-          <Text style={[styles.statVol, NUMS]}>{fmtK(mo.vol)} vol</Text>
-        </View>
-      </View>
-
-      <Text style={styles.groupLabel}>Notifications</Text>
-      {!readOnly && (
-        <View style={[styles.qaRow, { marginBottom: 12 }]}>
-          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8 }}>
-            <Text style={styles.qaText}>Notify me about this client</Text>
-            <Switch
-              value={notificationPref}
-              onValueChange={onNotificationToggle}
-              disabled={loadingNotificationPref}
-              trackColor={{ false: colors.border, true: colors.primary }}
-              thumbColor="#fff"
-            />
-          </View>
-        </View>
-      )}
-
-            <Text style={styles.groupLabel}>Progression Strategy</Text>
-      <View style={styles.card}>
-        {progEditing ? (
-          <View>
-            {/* <Text style={{ color: styles.seeAll.color, fontSize: 12, marginBottom: 4 }}> */}
-              <Text style={{ color: colors.textDim, fontSize: 12, marginBottom: 4 }}>
-              Override for {clientName || 'this client'}:
-            </Text>
-            <ProgressionStrategyEditor
-              value={progDraft || { formula_key: 'linear_progression', params: {} }}
-              onValueChange={setProgDraft}
-              busy={progBusy}
-            />
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-              <TouchableOpacity
-                style={[styles.editBtn, { flex: 1 }]}
-                onPress={() => { setProgEditing(false); setProgDraft(null); }}
-                disabled={progBusy}
-              >
-                <Text style={styles.editBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.qaBtn, { flex: 1, justifyContent: 'center' }]}
-                // onPress={() => progDraft && onProgSave(progDraft.formula_key, progDraft.params)}
-                  onPress={async () => {
-                  if (!progDraft) return;
-                  const ok = await onProgSave(progDraft.formula_key, progDraft.params);
-                  if (ok) setProgEditing(false); // close editor only on success
-                }}
-                disabled={progBusy || !progDraft}
-              >
-                <Text style={styles.qaText}>Save Override</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : (
-          <View>
-            {(() => {
-              const f = progResolved ? getFormula(progResolved.formula_key) : null;
-              const sourceLabel =
-                progResolved?.source === 'trainer_override'
-                  ? 'your override'
-                  : progResolved?.source === 'user_setting'
-                  ? "client's own setting"
-                  : 'app default';
-              return (
-                <View>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Ionicons name="trending-up" size={15} color={colors.primary} />
-                    <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700', flex: 1 }}>
-                      Active: {f ? f.displayName : progResolved?.formula_key || '—'}
-                    </Text>
-                  </View>
-                  <Text style={{ color: colors.textDim, fontSize: 12, marginTop: 3 }}>
-                    ({sourceLabel})
-                  </Text>
-                  {!readOnly && (
-                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-                      <TouchableOpacity
-                        style={[styles.editBtn, { flex: 1 }]}
-                        onPress={() => {
-                          setProgDraft(
-                            progOverride
-                              ? { ...progOverride }
-                              : { formula_key: progResolved?.formula_key || 'linear_progression', params: { ...(progResolved?.params || {}) } }
-                          );
-                          setProgEditing(true);
-                        }}
-                      >
-                        <Ionicons name="create-outline" size={15} color={colors.primary} />
-                        <Text style={styles.editBtnText}>
-                          {progOverride ? 'Edit Override' : 'Override'}
-                        </Text>
-                      </TouchableOpacity>
-                      {progOverride && (
-                        <TouchableOpacity
-                          style={[styles.removeClientBtn, { marginBottom: 0 }]}
-                          onPress={onProgClear}
-                          disabled={progBusy}
-                        >
-                          <Text style={styles.removeClientText}>Reset</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-                </View>
-              );
-            })()}
-          </View>
-        )}
-      </View>
-
-
-      <Text style={styles.groupLabel}>Quick Actions</Text>
-      {!readOnly ? (
-        <TouchableOpacity style={styles.removeClientBtn} onPress={confirmRemoveClient}>
-          <Ionicons name="person-remove-outline" size={14} color={colors.red} />
-          <Text style={styles.removeClientText}>Remove Client</Text>
-        </TouchableOpacity>
-      ) : null}
-      <View style={styles.qaRow}>
-        {actions.map((a) => (
-          <TouchableOpacity
-            key={a.to}
-            style={styles.qaBtn}
-            activeOpacity={0.8}
-            onPress={() =>
-              navigation.navigate(a.to, a.kind ? { clientId, clientName, kind: a.kind } : { clientId, clientName })
-            }
-          >
-            <Ionicons name={a.icon} size={18} color={colors.primary} />
-            <Text style={styles.qaText}>{a.label}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <Text style={styles.groupLabel}>Recent Activity</Text>
-      {activity.length === 0 && (
-        <Text style={styles.emptySub}>Nothing synced yet for this client.</Text>
-      )}
-      {activity.map((a, i) => (
-        <View key={i} style={styles.activityRow}>
-          <Ionicons name={a.icon} size={15} color={colors.textDim} />
-          <Text style={styles.activityText} numberOfLines={1}>
-            {a.text}
-          </Text>
-          <Text style={styles.activityWhen}>{relativeTime(a.at)}</Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-// diet/supplement list body for the content tabs
-function CoachingList({ kind, plans, styles, colors, navigation, clientId, clientName, emptyLabel }) {
-  const builder = kind === 'diet' ? 'DietPlanBuilder' : 'SupplementPlanBuilder';
-  return (
-    <View>
-      {plans.length === 0 && <Text style={styles.emptySub}>{emptyLabel}</Text>}
-      {plans.map((p) => (
-        <TouchableOpacity
-          key={p.id}
-          style={styles.card}
-          activeOpacity={0.8}
-          onPress={() =>
-            navigation.navigate('CoachingPlanDetail', { planId: p.id, kind, clientId, clientName })
-          }
-        >
-          <View style={{ flex: 1 }}>
-            <Text style={styles.sessName} numberOfLines={1}>
-              {p.name}
-            </Text>
-            <Text style={[styles.meta, NUMS]}>
-              {p.item_count} {kind === 'diet' ? 'meals' : 'supplements'} · assigned{' '}
-              {new Date(p.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-        </TouchableOpacity>
-      ))}
-      <TouchableOpacity
-        style={styles.assignBtn}
-        onPress={() => navigation.navigate(builder, { clientId, clientName, kind })}
-      >
-        <Ionicons name="add-circle-outline" size={20} color="#fff" />
-        <Text style={styles.assignText}>
-          {kind === 'diet' ? 'Assign Diet Plan' : 'Assign Supplement Plan'}
-        </Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-// segmented control — same visual language as the client Routines tabs
-function Segmented({ styles, value, onChange, options }) {
-  return (
-    <View style={styles.segRow}>
-      {options.map((o) => {
-        const on = value === o.value;
-        return (
-          <TouchableOpacity key={o.value} style={[styles.segBtn, on && styles.segBtnOn]} onPress={() => onChange(o.value)}>
-            <Text style={[styles.segText, on && { color: '#fff' }]}>{o.label}</Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
   );
 }
 
@@ -1279,6 +799,14 @@ const makeStyles = (colors) =>
     detailWrap: { marginTop: 10, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 10 },
     detailEx: { marginBottom: 10 },
     detailExName: { color: colors.text, fontWeight: '700', fontSize: 13, marginBottom: 4 },
+    detailSwapped: { color: colors.textDim, fontSize: 11, fontStyle: 'italic', marginTop: -2, marginBottom: 4 },
+    sharedNoteRow: {
+      flexDirection: 'row', alignItems: 'flex-start', gap: 5,
+      backgroundColor: colors.cardLight, borderRadius: 8,
+      paddingHorizontal: 8, paddingVertical: 6, marginBottom: 6,
+    },
+    sharedNoteText: { color: colors.text, fontSize: 11, fontStyle: 'italic', flex: 1 },
+    sharedNoteLabel: { fontStyle: 'normal', fontWeight: '700' },
     detailSetRow: { flexDirection: 'row' },
     detailCell: { color: colors.text, flex: 1, textAlign: 'center', fontSize: 12 },
     warmupText: { color: colors.textDim },
