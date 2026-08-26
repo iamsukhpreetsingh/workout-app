@@ -18,6 +18,7 @@ import {
   AppleOutlined,
   CloudSyncOutlined,
   BarChartOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { api, getProfile, logout, restoreProfile, AdminProfile } from './api';
 import { ImpersonationProvider, ImpersonationBanner } from './impersonation';
@@ -38,6 +39,7 @@ import WorkoutsPage from './pages/WorkoutsPage';
 import NutritionPage from './pages/NutritionPage';
 import SyncHealthPage from './pages/SyncHealthPage';
 import AnalyticsPage from './pages/AnalyticsPage';
+import AdminManagementPage from './pages/AdminManagementPage';
 
 const { Sider, Header, Content } = Layout;
 
@@ -74,6 +76,7 @@ export default function App() {
     isSupport ? { key: 'broadcast', icon: <SoundOutlined />, label: 'Broadcast' } : null,
     isSupport ? { key: 'flags', icon: <FlagOutlined />, label: 'Feature Flags' } : null,
     isSuper ? { key: 'audit', icon: <AuditOutlined />, label: 'Audit Log' } : null,
+    isSupport ? { key: 'admin-mgmt', icon: <SettingOutlined />, label: 'Admin Management' } : null,
   ].filter(Boolean) as any[];
 
   return (
@@ -126,6 +129,7 @@ export default function App() {
             {page === 'broadcast' && <BroadcastPage />}
             {page === 'flags' && <FlagsPage />}
             {page === 'audit' && <AuditPage />}
+            {page === 'admin-mgmt' && <AdminManagementPage />}
           </Content>
         </Layout>
       </Layout>

@@ -72,13 +72,17 @@ function requireAdmin() {
 const ROLE_RANK = { read_only: 0, analyst: 1, content_moderator: 2, support: 3, super_admin: 4 };
 
 function requireAdminRole(...allowedRoles) {
-  return (req, res, next) => {
+  const guard = (req, res, next) => {
     if (!req.admin) return res.status(401).json({ error: 'Admin authentication required' });
     if (!allowedRoles.includes(req.admin.role)) {
       return res.status(403).json({ error: `Requires role: ${allowedRoles.join(' or ')}` });
     }
     next();
   };
+  // marker lets registerRoute() detect a swapped (guard, handler) argument
+  // order and still mount the guard BEFORE the handler
+  guard.isRoleMiddleware = true;
+  return guard;
 }
 
 // support+ effectively: helper used by generic browser defaults

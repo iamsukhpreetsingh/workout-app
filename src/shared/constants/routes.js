@@ -5,6 +5,8 @@
 // Auth stack
 export const LOGIN = 'Login';
 export const SIGNUP = 'Signup';
+export const FORGOT_PASSWORD = 'ForgotPassword';
+export const RESET_PASSWORD = 'ResetPassword';
 
 // User-view tabs
 export const TAB_HOME = 'Home';

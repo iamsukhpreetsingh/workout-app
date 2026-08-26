@@ -8,7 +8,7 @@
     "seed-exercises": "node scripts/seedExercises.js",
     "purge-archives": "node scripts/purgeExpiredArchives.js",
     "check-routes": "node scripts/checkRouteRegistry.js",
-    "test": "node --test test/",
+    "test": "node --test test/admin.test.js test/passwordReset.test.js test/adminMgmt.test.js test/exerciseCatalog.test.js",
     "dev": "node scripts/checkRouteRegistry.js && node server.js"
   },
   "dependencies": {
@@ -17,6 +17,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^9.0.5",
     "pg": "^8.12.0"
   }
 }

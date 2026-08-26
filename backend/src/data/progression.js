@@ -30,6 +30,33 @@ function defaultParamsForKey(key) {
   return out;
 }
 
+// Admin-set GLOBAL defaults (Admin Management section). One authoritative row
+// per formula key; merged OVER schema defaults and UNDER any explicitly saved
+// user/trainer params. Historical calculations are never rewritten — these
+// values only feed the NEXT resolution.
+async function getGlobalDefaults(key) {
+  const base = defaultParamsForKey(key);
+  try {
+    const { rows } = await query(
+      'SELECT params FROM progression_formula_globals WHERE formula_key = $1',
+      [key]
+    );
+    if (rows.length && rows[0].params && typeof rows[0].params === 'object') {
+      // only accept keys that exist in the schema, clamped to min/max
+      const f = findFormula(key);
+      const schema = new Map((f && f.paramSchema || []).map((p) => [p.key, p]));
+      for (const [k, v] of Object.entries(rows[0].params)) {
+        const p = schema.get(k);
+        if (!p || p.type !== 'number' || typeof v !== 'number') continue;
+        base[k] = Math.min(p.max ?? Infinity, Math.max(p.min ?? -Infinity, v));
+      }
+    }
+  } catch {
+    // globals table missing/unavailable → fall back to pure schema defaults
+  }
+  return base;
+}
+
 // Throws 400 on unknown formula key, unknown param name, non-numeric number,
 // or values outside the schema's declared min/max. Missing params get their
 // schema defaults — stored params are always complete.
@@ -67,10 +94,10 @@ async function getUserSetting(userId) {
       formula_key: rows[0].formula_key,
       params: rows[0].params && Object.keys(rows[0].params).length
         ? rows[0].params
-        : defaultParamsForKey(rows[0].formula_key),
+        : await getGlobalDefaults(rows[0].formula_key),
     };
   }
-  return { formula_key: APP_DEFAULT_KEY, params: defaultParamsForKey(APP_DEFAULT_KEY) };
+  return { formula_key: APP_DEFAULT_KEY, params: await getGlobalDefaults(APP_DEFAULT_KEY) };
 }
 
 async function upsertUserSetting(userId, formulaKey, params) {
@@ -110,7 +137,7 @@ async function getResolved(userId) {
       formula_key: ov[0].formula_key,
       params: ov[0].params && Object.keys(ov[0].params).length
         ? ov[0].params
-        : defaultParamsForKey(ov[0].formula_key),
+        : await getGlobalDefaults(ov[0].formula_key),
       source: 'trainer_override',
       trainer_name: ov[0].trainer_name,
     };
@@ -123,14 +150,14 @@ async function getResolved(userId) {
       formula_key: own[0].formula_key,
       params: own[0].params && Object.keys(own[0].params).length
         ? own[0].params
-        : defaultParamsForKey(own[0].formula_key),
+        : await getGlobalDefaults(own[0].formula_key),
       source: 'user_setting',
       trainer_name: null,
     };
   }
   return {
     formula_key: APP_DEFAULT_KEY,
-    params: defaultParamsForKey(APP_DEFAULT_KEY),
+    params: await getGlobalDefaults(APP_DEFAULT_KEY),
     source: 'default',
     trainer_name: null,
   };

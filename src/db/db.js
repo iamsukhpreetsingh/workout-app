@@ -1,6 +1,4 @@
 import * as SQLite from 'expo-sqlite';
-import { SEED_EXERCISES } from '../seed/exercises';
-import FULL_EXERCISES from '../seed/exercises_full.json';
 
 let dbInstance = null;
 let dbInitPromise = null;
@@ -144,27 +142,6 @@ async function ensureBaseTables(db) {
     sync_enabled INTEGER NOT NULL DEFAULT 1
   );`);
   await db.runAsync('INSERT OR IGNORE INTO sync_settings (id) VALUES (1)');
-  // Seed the exercise library. Skipped on healthy installs (row count >=
-  // seed size) so cold start stays fast; still runs — and INSERT OR IGNORE
-  // keeps it idempotent — when the library is missing or incomplete, which
-  // heals fresh installs and devices whose seed silently failed.
-  // BUGFIX (historical): this used to bind `ex.muscle`, but the seed data's
-  // key is `muscle_group` — every insert put NULL into a NOT NULL column and
-  // INSERT OR IGNORE silently skipped ALL 39 rows, leaving fresh installs
-  // with an empty exercise library.
-  try {
-    const { c } = await db.getFirstAsync('SELECT COUNT(*) AS c FROM exercises');
-    if (c < SEED_EXERCISES.length) {
-      for (const ex of SEED_EXERCISES) {
-        await db.runAsync(
-          'INSERT OR IGNORE INTO exercises (name, muscle_group) VALUES (?, ?)',
-          [ex.name, ex.muscle_group]
-        );
-      }
-    }
-  } catch (e) {
-    console.warn('[DB] exercise seed skipped:', e?.message || e);
-  }
 }
 
 // Ensure critical columns exist (runs after migrations)
@@ -289,15 +266,8 @@ const MIGRATIONS = [
       weight REAL NOT NULL DEFAULT 0, reps INTEGER NOT NULL DEFAULT 0,
       is_warmup INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL
     );`);
-    const count = await db.getFirstAsync('SELECT COUNT(*) AS c FROM exercises');
-    if (count.c === 0) {
-      for (const ex of SEED_EXERCISES) {
-        await db.runAsync(
-          'INSERT OR IGNORE INTO exercises (name, muscle_group) VALUES (?, ?)',
-          [ex.name, ex.muscle_group]
-        );
-      }
-    }
+    // exercise library seeding RETIRED — content syncs from the server
+    // catalog at login (src/lib/exerciseCatalog.js)
   },
   // v2: rest timer defaults + user settings
   async (db) => {
@@ -707,13 +677,11 @@ const MIGRATIONS = [
   async (db) => {
     await addColumnSafe(db, 'exercises', 'user_id', 'TEXT');
   },
-    // v27: enriched exercise library — one-time import of the full dataset
-  // from src/seed/exercises_full.json (multilingual instructions + steps,
-  // equipment, body-part taxonomy, media refs). Rows matching an existing
-  // seed exercise (case-insensitive name) are ENRICHED in place; new names
-  // are inserted. Custom exercises are never touched. Enrichment fields are
-  // device-local by design (identical JSON on every device) — only custom
-  // exercises carry equipment/instructions through backup/sync.
+    // v27: enriched exercise library schema. The full dataset import that
+    // lived here was RETIRED — library content is now server-authoritative
+    // (GET /exercises/catalog, synced by src/lib/exerciseCatalog.js at
+    // login). Existing devices keep their cached rows; fresh installs get
+    // the library on first login sync.
   async (db) => {
     await addColumnSafe(db, 'exercises', 'body_part', 'TEXT');
     await addColumnSafe(db, 'exercises', 'equipment', 'TEXT');
@@ -724,52 +692,6 @@ const MIGRATIONS = [
     await addColumnSafe(db, 'exercises', 'gif_url', 'TEXT');
   await addColumnSafe(db, 'exercises', 'attribution', 'TEXT');
   await addColumnSafe(db, 'session_exercises', 'original_exercise_name', 'TEXT NULL');
-
-    const CAT_TO_GROUP = {
-      chest: 'Chest', back: 'Back', shoulders: 'Shoulders',
-      'upper arms': 'Arms', 'lower arms': 'Arms', arms: 'Arms',
-      'upper legs': 'Legs', 'lower legs': 'Legs', legs: 'Legs',
-      waist: 'Core', cardio: 'Cardio', neck: 'Shoulders',
-    };
-    const existing = await db.getAllAsync('SELECT id, name, is_custom FROM exercises');
-    const byLower = new Map(existing.map((r) => [String(r.name).toLowerCase(), r]));
-
-    for (const ex of FULL_EXERCISES) {
-      if (!ex?.name) continue;
-      const group = CAT_TO_GROUP[String(ex.category || '').toLowerCase()] || 'Other';
-      const vals = [
-        group,
-        ex.body_part || ex.category || null,
-        ex.equipment || null,
-        ex.target || null,
-        JSON.stringify(ex.secondary_muscles || []),
-        JSON.stringify(ex.instructions || {}),
-        JSON.stringify(ex.instruction_steps || {}),
-        ex.media_id || null,
-        ex.gif_url || null,
-        ex.attribution || null,
-      ];
-      const match = byLower.get(String(ex.name).toLowerCase());
-      if (match) {
-        if (match.is_custom) continue; // never overwrite user-created exercises
-        await db.runAsync(
-          `UPDATE exercises SET muscle_group = ?, body_part = ?, equipment = ?, target = ?,
-             secondary_muscles = ?, instructions = ?, instruction_steps = ?,
-             media_id = ?, gif_url = ?, attribution = ?
-           WHERE id = ?`,
-          [...vals, match.id]
-        );
-      } else {
-        await db.runAsync(
-          `INSERT OR IGNORE INTO exercises
-             (name, muscle_group, is_custom, body_part, equipment, target, secondary_muscles,
-              instructions, instruction_steps, media_id, gif_url, attribution, synced)
-           VALUES (?,?,0,?,?,?,?,?,?,?,?,?,1)`,
-          [ex.name, ...vals, 1]
-        );
-      }
-    }
-    console.log('[DB] enriched exercise library imported:', FULL_EXERCISES.length, 'entries');
   },
     // v28: auto-progression engine foundation — cached resolved formula
   // setting (from /client/progression-resolved; makes suggestions work
@@ -880,6 +802,14 @@ const MIGRATIONS = [
       );
     }
   },
+  // v33: server-authoritative exercise catalog. The library's CONTENT is now
+  // owned by the backend (GET /exercises/catalog) and synced at login via
+  // src/lib/exerciseCatalog.js — bundled seed JSON is no longer imported.
+  // is_archived hides globals archived/removed server-side without deleting
+  // rows (plans/sessions reference exercise ids).
+  async (db) => {
+    await addColumnSafe(db, 'exercises', 'is_archived', 'INTEGER NOT NULL DEFAULT 0');
+  },
 ];
 
 async function backfillPRs(db) {
@@ -926,7 +856,7 @@ async function backfillPRs(db) {
       SELECT exercise_id, record_type, COALESCE(secondary_value, -9999) AS sv, MAX(value) AS maxv
       FROM personal_records
       GROUP BY exercise_id, record_type, COALESCE(secondary_value, -9999)
-    ) best ON pr.exercise_id = best.exercise_id AND pr.record_type = best.record_type 
+    ) best ON pr.exercise_id = best.exercise_id AND pr.record_type = best.record_type
       AND COALESCE(pr.secondary_value, -9999) = best.sv AND pr.value = best.maxv
   )`);
 }

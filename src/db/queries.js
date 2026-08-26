@@ -31,9 +31,13 @@ export async function listExercises() {
   const db = await getDb();
   const userId = getCurrentUserId();
   if (!userId) return [];
-  // seeds (user_id NULL) are device-shared; customs are account-scoped
+  // server-catalog globals (user_id NULL, never archived) + account-scoped
+  // custom exercises; archived server-side rows stay in DB for history but
+  // are hidden from selection
   return db.getAllAsync(
-    `SELECT * FROM exercises WHERE user_id IS NULL OR user_id = ? ORDER BY muscle_group, name`,
+    `SELECT * FROM exercises
+      WHERE (user_id IS NULL OR user_id = ?) AND is_archived = 0
+      ORDER BY muscle_group, name`,
     [userId]
   );
 }

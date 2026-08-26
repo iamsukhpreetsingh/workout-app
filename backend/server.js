@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const authRoutes = require('./src/routes/auth');
+const passwordResetRoutes = require('./src/routes/passwordReset');
 const trainerRoutes = require('./src/routes/trainer');
 const clientRoutes = require('./src/routes/client');
 const adminAuth = require('./src/admin/auth');
@@ -16,6 +17,7 @@ const tagRoutes = require('./src/routes/tags');
 const backupRoutes = require('./src/routes/backup');
 const progressionRoutes = require('./src/routes/progression');
 const syncReportRoutes = require('./src/routes/syncReport');
+const exerciseCatalogRoutes = require('./src/routes/exerciseCatalog');
 const { requireAuth } = require('./src/middleware/auth');
 const { getUserById } = require('./src/data/users');
 
@@ -65,6 +67,7 @@ app.post('/uploads/dish-photo', requireAuth, async (req, res) => {
 });
 
 app.use('/auth', authRoutes);
+app.use('/auth', passwordResetRoutes);
 app.use('/trainer', trainerRoutes);
 app.use('/client', clientRoutes);
 
@@ -80,11 +83,14 @@ app.use('/admin', require('./src/admin/workoutContent').router);
 app.use('/admin', require('./src/admin/nutritionAdmin').router);
 app.use('/admin', require('./src/admin/syncHealth').router);
 app.use('/admin', require('./src/admin/analyticsExtra').router);
+// Admin Management (isolated testing section): global formulas, exercise library, unified users
+app.use('/admin', require('./src/admin/adminManagement').router);
 app.use('/notifications', notificationRoutes);
 app.use('/trainer', tagRoutes);
 app.use('/user', backupRoutes);
 app.use('/', progressionRoutes);
 app.use('/sync', syncReportRoutes);
+app.use('/exercises', exerciseCatalogRoutes);
 
 // GET /me — current user profile (never includes password_hash)
 app.get('/me', requireAuth, async (req, res) => {

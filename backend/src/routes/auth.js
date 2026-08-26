@@ -182,4 +182,9 @@ registerRoute(
   }
 });
 
+// shared with the authenticated change-password flow so access/refresh
+// tokens are always signed identically (same claims, same TTLs)
 module.exports = router;
+module.exports.signAccessToken = signAccessToken;
+module.exports.signRefreshToken = signRefreshToken;
+module.exports.REFRESH_TTL_DAYS = REFRESH_TTL_DAYS;

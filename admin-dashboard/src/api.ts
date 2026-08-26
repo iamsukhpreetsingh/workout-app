@@ -482,3 +482,142 @@ interface ImpersonatedUserApi {
 }
 export const impersonateUser = (id: string) =>
   api<ImpersonationResponse>(`/users/${id}/impersonate`, { method: 'POST' });
+
+// ════════════════════ Admin Management (/mgmt) ═══════════════════════
+export interface MgmtParamSpec {
+  key: string;
+  label: string;
+  type: string; // 'number' | 'boolean'
+  default: number | boolean;
+  min?: number;
+  max?: number;
+}
+export interface MgmtFormula {
+  key: string;
+  displayName: string;
+  description: string;
+  requiresTrainingMax: boolean;
+  paramSchema: MgmtParamSpec[];
+  hasGlobalOverride: boolean;
+  globalParams: Record<string, number | boolean> | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  usersConfigured: number;
+}
+export interface MgmtFormulaPreview {
+  key: string;
+  currentEffective: Record<string, number | boolean>;
+  proposedEffective: Record<string, number | boolean>;
+}
+export const getMgmtFormulas = () =>
+  api<{ formulas: MgmtFormula[] }>('/mgmt/formulas');
+export const setMgmtFormulaParams = (key: string, params: Record<string, number | boolean>) =>
+  api<any>(`/mgmt/formulas/${encodeURIComponent(key)}/params`, { method: 'PUT', body: { params } });
+export const resetMgmtFormulaParams = (key: string) =>
+  api<any>(`/mgmt/formulas/${encodeURIComponent(key)}/params`, { method: 'DELETE' });
+export const previewMgmtFormula = (key: string, params: Record<string, number | boolean>) =>
+  api<MgmtFormulaPreview>(`/mgmt/formulas/${encodeURIComponent(key)}/preview`, { method: 'POST', body: { params } });
+
+export interface MgmtExercise {
+  id: string;
+  name: string;
+  category: string | null;
+  body_part: string | null;
+  equipment: string | null;
+  muscle_group: string | null;
+  target: string | null;
+  image: string | null;
+  is_archived: boolean;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+export const getMgmtExercises = (
+  params: {
+    q?: string; body_part?: string; equipment?: string; archived?: boolean;
+    page?: number; pageSize?: number; sort?: string; dir?: string;
+  } = {}
+) => {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set('q', params.q);
+  if (params.body_part) qs.set('body_part', params.body_part);
+  if (params.equipment) qs.set('equipment', params.equipment);
+  if (params.archived != null) qs.set('archived', String(params.archived));
+  if (params.page != null) qs.set('page', String(params.page));
+  if (params.pageSize != null) qs.set('pageSize', String(params.pageSize));
+  if (params.sort) qs.set('sort', params.sort);
+  if (params.dir) qs.set('dir', params.dir);
+  return api<{ total: number; page: number; pageSize: number; exercises: MgmtExercise[] }>(`/mgmt/exercises?${qs}`);
+};
+export const createMgmtExercise = (body: {
+  name: string;
+  body_part?: string; equipment?: string; category?: string;
+  muscle_group?: string; target?: string; instructions?: string; attribution?: string;
+}) => api<MgmtExercise>('/mgmt/exercises', { method: 'POST', body });
+export const patchMgmtExercise = (id: string, body: Record<string, any>) =>
+  api<MgmtExercise>(`/mgmt/exercises/${id}`, { method: 'PATCH', body });
+export interface MgmtExerciseUsage {
+  exercise: { id: string; name: string };
+  usage: {
+    workout_templates: number;
+    assigned_plans: number;
+    historical_session_records: number;
+    note: string;
+  };
+}
+export const getMgmtExerciseUsage = (id: string) =>
+  api<MgmtExerciseUsage>(`/mgmt/exercises/${id}/usage`);
+// Soft-archive; pass restore=true to restore an archived row.
+export const archiveMgmtExercise = (id: string, restore = false) =>
+  api<any>(`/mgmt/exercises/${id}${restore ? '?restore=true' : ''}`, { method: 'DELETE' });
+
+export interface MgmtUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  is_suspended: boolean;
+  created_at: string;
+}
+export const getMgmtUsers = (
+  params: {
+    q?: string; status?: 'active' | 'suspended'; role?: string;
+    sort?: 'name' | 'email' | 'created'; dir?: 'asc' | 'desc';
+    page?: number; pageSize?: number;
+  } = {}
+) => {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set('q', params.q);
+  if (params.status) qs.set('status', params.status);
+  if (params.role) qs.set('role', params.role);
+  if (params.sort) qs.set('sort', params.sort);
+  if (params.dir) qs.set('dir', params.dir);
+  if (params.page != null) qs.set('page', String(params.page));
+  if (params.pageSize != null) qs.set('pageSize', String(params.pageSize));
+  return api<{ total: number; page: number; pageSize: number; users: MgmtUser[] }>(`/mgmt/users?${qs}`);
+};
+export interface MgmtUserOverview {
+  profile: {
+    id: string; name: string; email: string; role: string;
+    is_suspended: boolean; created_at: string; last_active: string | null;
+  };
+  activeTrainer: { id: string; name: string; email: string } | null;
+  counts: {
+    workouts: number; customExercises: number; dietPlans: number; supplementPlans: number;
+    dishes: number; recipes: number; dietCheckins: number; supplementCheckins: number;
+    measurements: number; progressionSettings: number;
+  };
+}
+export const getMgmtUserOverview = (id: string) =>
+  api<MgmtUserOverview>(`/mgmt/users/${id}/overview`);
+export type MgmtUserDomain =
+  | 'workouts' | 'custom-exercises' | 'diets' | 'dishes' | 'recipes'
+  | 'supplements' | 'nutrition' | 'progression' | 'analytics';
+export const getMgmtUserDomainData = (userId: string, domain: MgmtUserDomain, page = 1, pageSize = 10) => {
+  const qs = new URLSearchParams();
+  qs.set('page', String(page));
+  qs.set('pageSize', String(pageSize));
+  return api<{ total: number; page: number; pageSize: number; items: any[] }>(
+    `/mgmt/users/${userId}/${domain}?${qs}`
+  );
+};

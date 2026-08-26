@@ -362,6 +362,65 @@ appears in `/admin/api-registry`), sensitive-column masking, table-name
 rejection before query, and one RBAC boundary per role (analyst/read_only
 writes → 403; super_admin control case → 200).
 
+### Admin Management section (migration 035) — testing area
+
+Isolated new dashboard tab (`/admin/mgmt/*`, frontend "Admin Management"):
+
+- **Global progression defaults**: `progression_formula_globals` stores one
+  admin-set param row per formula key. `progression.js` merges it OVER schema
+  defaults and UNDER any explicit trainer/user params — so edits reach every
+  user without personal overrides, and historical calculations are never
+  rewritten. Params are validated against each formula's `paramSchema`
+  (structured numbers/booleans only — no expressions can be injected).
+- **Global exercise library**: admin-only create/edit; DELETE is always a
+  SOFT archive (`is_archived`), never a hard delete — exercise references are
+  name-based across templates/plans/history, so archiving preserves
+  everything. Duplicate names rejected case/whitespace-insensitively.
+- **Unified user management**: `/admin/mgmt/users/:id/overview|workouts|
+  custom-exercises|diets|dishes|recipes|supplements|nutrition|progression|
+  analytics` — every query hard-scoped by user/client id (cross-user leakage
+  is covered by tests). Reads: support+; ALL writes: super_admin only;
+  writes audited.
+
+### Server-authoritative exercise catalog
+
+The mobile app renders its exercise library from THIS backend, not a bundled
+seed: `GET /exercises/catalog` (auth required) serves every non-archived
+global exercise with the same muscle-group mapping the app expects, and
+`GET /exercises/catalog/meta` returns a cheap version string so devices only
+re-download when the library changes. The app syncs at login into its local
+SQLite cache (`src/lib/exerciseCatalog.js`) — offline usage keeps working off
+that cache. Admin-created/archived exercises in the Admin Management section
+flow to all devices on their next sync.
+
+### Forgot / reset password (migration 034)
+
+Self-service flow, fully independent of admin tooling:
+
+- `POST /auth/forgot-password` `{email}` → ALWAYS returns
+  `"If an account exists for this email, a password reset link has been sent."`
+  (account enumeration is impossible from the response; SMTP failures are
+  logged server-side and do not change the response).
+- `POST /auth/reset-password` `{token, password}` → consumes a single-use
+  256-bit token (only its SHA-256 hash is stored in
+  `password_reset_tokens`), expires per
+  `PASSWORD_RESET_TOKEN_EXPIRY_MINUTES` (default 30), revokes all of the
+  user's refresh tokens inside the same transaction as the password update.
+- Email transport is abstracted (`src/email/provider.js`); Gmail SMTP is
+  just the current provider (`src/email/smtpProvider.js`, Nodemailer,
+  STARTTLS). Swap providers by registering a new one — business logic never
+  changes. Requires a Gmail **App Password** (2-Step Verification), set via
+  `SMTP_USER` / `SMTP_PASSWORD` / `EMAIL_FROM` in root `.env`.
+- Reset link: `${APP_SCHEME}://reset-password?token=…` deep link into the
+  mobile app (falls back to `FRONTEND_URL` when no scheme is set). The app's
+  AuthStack handles `ForgotPassword` and `ResetPassword` screens; the token
+  can also be pasted manually.
+- Abuse controls (`src/middleware/rateLimit.js`, in-memory fixed window):
+  forgot-password 10/hr per IP + 3/hr per email; reset-password 20/hr per IP.
+- Tests: `test/passwordReset.test.js` covers the full matrix (enumeration
+  equivalence, normalization, expiry, single-use, invalidation-of-older,
+  refresh-token revocation, rate limiting) with the mailer stubbed.
+
 ### Sync/restore telemetry (migrations 032)
 
 The device sync engine posts throttled queue-health snapshots to

@@ -10,6 +10,8 @@ import { useAuth } from '../store/AuthContext';
 import IntakeFormScreen from '../screens/IntakeFormScreen';
 import LoginScreen from '../screens/LoginScreen';
 import SignupScreen from '../screens/SignupScreen';
+import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
+import ResetPasswordScreen from '../screens/ResetPasswordScreen';
 import ViewChoiceScreen from '../screens/ViewChoiceScreen';
 import HomeScreen from '../screens/HomeScreen';
 import WorkoutScreen from '../features/workouts/screens/WorkoutScreen';
@@ -46,6 +48,8 @@ import SyncSettingsScreen from '../screens/SyncSettingsScreen';
 import {
   LOGIN,
   SIGNUP,
+  FORGOT_PASSWORD,
+  RESET_PASSWORD,
   TAB_HOME,
   TAB_HISTORY,
   TAB_PLANS,
@@ -127,6 +131,8 @@ export function AuthStack() {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name={LOGIN} component={LoginScreen} />
       <Stack.Screen name={SIGNUP} component={SignupScreen} />
+      <Stack.Screen name={FORGOT_PASSWORD} component={ForgotPasswordScreen} />
+      <Stack.Screen name={RESET_PASSWORD} component={ResetPasswordScreen} />
     </Stack.Navigator>
   );
 }

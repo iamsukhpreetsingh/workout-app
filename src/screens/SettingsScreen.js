@@ -12,6 +12,7 @@ import { getSyncSettings } from '../lib/sync';
 import { getCachedProgressionSetting, fetchAndCacheProgressionSetting } from '../lib/progression';
 import { getFormula } from '../progressionFormulas';
 import ProgressionStrategyEditor from '../components/ProgressionStrategyEditor';
+import ChangePasswordCard from '../components/ChangePasswordCard';
 import { INTAKE_FORM, SYNC_SETTINGS } from '../shared/constants/routes';
 
 export default function SettingsScreen({ onSwitchView }) {
@@ -398,6 +399,8 @@ export default function SettingsScreen({ onSwitchView }) {
           </TouchableOpacity>
         </View>
       ) : null}
+
+      <ChangePasswordCard />
 
       <View style={[styles.card, { backgroundColor: colors.card }]}>
         <Text style={[styles.cardTitle, { color: colors.text }]}>Account</Text>

@@ -16,6 +16,11 @@ function registerRoute(router, { method, path, description, requiresAuth = true,
   // function handler, normalize so the middleware always mounts FIRST.
   let h = handler;
   let mw = roleMiddleware;
+  // role guards are self-identifying — if one landed in the handler slot,
+  // swap so the guard ALWAYS mounts before the handler
+  if (h && h.isRoleMiddleware && typeof mw === 'function') {
+    [h, mw] = [mw, h];
+  }
   if (!mw && Array.isArray(h)) {
     throw new Error(`registerRoute ${method} ${path}: middleware array passed without a handler`);
   }

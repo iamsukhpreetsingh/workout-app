@@ -18,6 +18,20 @@ import {
   TrainerStack,
   ActiveWorkoutMiniBar,
 } from './src/navigation/navigators';
+import { RESET_PASSWORD } from './src/shared/constants/routes';
+
+// Deep linking — password-reset emails open the app directly on the Reset
+// Password screen via workouttracker://reset-password?token=...
+const linking = {
+  prefixes: ['workouttracker://'],
+  config: {
+    screens: {
+      Login: 'login',
+      ForgotPassword: 'forgot-password',
+      ResetPassword: 'reset-password',
+    },
+  },
+};
 import { initConnectivityListener } from './src/lib/sync';
 import { initSyncEngine, resyncQueueForCurrentUser, processQueue } from './src/lib/syncEngine';
 import { fetchAndCacheProgressionSetting } from './src/lib/progression';
@@ -258,7 +272,7 @@ function AppContent() {
   const showTrainerNav = authStatus === 'authenticated' && isTrainer && trainerView === 'trainer';
 
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer theme={navTheme} linking={linking}>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       {/* Hard auth gate: no unauthenticated path into the main app */}
       {authStatus === 'checking' && <Splash />}
