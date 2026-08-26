@@ -51,9 +51,12 @@ structure.txt
 
 # Command code (IDE-specific)
 .commandcode/
-
+.claude/
 # Metro
 .metro-health-check*
 
 # Watchman
 .watchmanconfig
+
+design/
+

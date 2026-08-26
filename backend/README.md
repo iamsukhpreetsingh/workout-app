@@ -330,14 +330,45 @@ Frontend lives in `../admin-dashboard/` (Vite + React + TS + Ant Design).
    token columns), a non-default role, or navigation to a custom module.
    Sensitive columns are masked in every generic response — never returned.
 2. **Adding an endpoint?** Use `registerRoute()` from
-   `src/admin/registry.js` — NEVER raw `router.get/post/...` for admin
-   routes. Pass `enforce: ['role', …]` to mount the role guard
-   server-side; `allowedRoles` is display text for the API Explorer.
-   Every endpoint registered this way appears in the dashboard's API
-   Explorer automatically. (App-side routes may migrate to the same
-   wrapper incrementally.)
+   `src/admin/registry.js` — NEVER raw `router.get/post/...`. This applies
+   to the ENTIRE backend (mobile API and admin API alike). The wrapper
+   mounts the route on Express AND records its metadata so it appears in
+   the dashboard's API Explorer automatically. Pass the auth/role
+   middleware as the 4th argument (single function or array) — it is
+   mounted BEFORE your handler; `allowedRoles` is display text for the
+   explorer. Run `npm run check-routes` (or `-- --strict` in CI) to flag
+   any raw registration that bypasses the wrapper; `npm run dev` prints
+   the report on every start.
 3. **Every admin write must call `writeAudit()`** — the audit log is the
-   platform's accountability guarantee for user/health data.
+   platform's accountability guarantee for user/health data. Viewing
+   extra-sensitive data (client intake profiles) must call `readAudit()`.
+
+### Admin module layout
+
+Purpose-built modules live in `src/admin/`, one file per domain, each
+exporting `{ router }` and mounted under `/admin` in `server.js`:
+`modules.js` (users/content/analytics/broadcast/flags/impersonation/audit),
+`relationships.js` (Phase 5 lifecycle + purge controls), `intakeProfiles.js`
+(Phase 8, read-audited), `progressionAdmin.js` (Phase 9),
+`workoutContent.js` (Phase 6), `nutritionAdmin.js` (Phase 7 incl. allergen
+consistency check), `syncHealth.js` (Phases 10-11), `analyticsExtra.js`
+(Phase 12 + password reset / per-user sync overview).
+
+### Tests
+
+`npm test` runs `node --test test/` against the real database: auto-discovery
+(a throwaway table appears in `/admin/schema`; a throwaway registerRoute()
+appears in `/admin/api-registry`), sensitive-column masking, table-name
+rejection before query, and one RBAC boundary per role (analyst/read_only
+writes → 403; super_admin control case → 200).
+
+### Sync/restore telemetry (migrations 032)
+
+The device sync engine posts throttled queue-health snapshots to
+`POST /sync/report` and restore flows open/close runs via
+`POST /sync/restore-run/start|finish` — all fire-and-forget from the app
+(`src/lib/adminTelemetry.js`); these tables feed the admin Sync & Restore
+dashboard and are never on an app critical path.
 
 Notables: generic table names are validated against the live schema before
 any query (no injection); suspended users are blocked at app login;

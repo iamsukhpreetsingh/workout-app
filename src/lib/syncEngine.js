@@ -23,6 +23,30 @@ import * as FileSystem from 'expo-file-system';
 import { getDb } from '../db/db';
 import { getCurrentUserId } from '../db/userId';
 import { api } from './api';
+import { postSyncReport } from './adminTelemetry';
+
+// ── admin telemetry (Phase 11): throttled queue-health reporting ────────
+// Fire-and-forget: at most every 10 min, or immediately when something
+// failed. Any error is swallowed inside postSyncReport.
+const REPORT_INTERVAL_MS = 10 * 60 * 1000;
+let lastReportAt = 0;
+async function reportHealthToAdmin(force = false) {
+  try {
+    const now = Date.now();
+    if (!force && now - lastReportAt < REPORT_INTERVAL_MS) return;
+    lastReportAt = now;
+    const status = await getEngineStatus();
+    let failingItems = null;
+    if ((status.failed_count || 0) > 0) {
+      failingItems = (await getFailedItems()).slice(0, 20);
+    }
+    await postSyncReport({
+      pendingCount: status.pending_count || 0,
+      failedCount: status.failed_count || 0,
+      failingItems,
+    });
+  } catch {}
+}
 
 const BACKOFF_MS = [30 * 1000, 2 * 60 * 1000, 10 * 60 * 1000, 60 * 60 * 1000];
 const MAX_ATTEMPTS = 5;
@@ -814,6 +838,7 @@ export async function processQueue({ manual = false } = {}) {
     }
 
     if (uploaded > 0) await touchLastSynced();
+    reportHealthToAdmin(failed > 0);
     return { uploaded, failed, deferred, errors };
   } finally {
     processing = false;

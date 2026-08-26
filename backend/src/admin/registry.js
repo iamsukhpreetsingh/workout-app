@@ -11,6 +11,17 @@
 const REGISTRY = [];
 
 function registerRoute(router, { method, path, description, requiresAuth = true, allowedRoles = [], enforce = null, category = 'Uncategorized' }, handler, roleMiddleware = null) {
+  // Tolerate swapped arg order (handler/middleware) from callers: if the
+  // 3rd arg is middleware (array or function) and the 4th is a plain
+  // function handler, normalize so the middleware always mounts FIRST.
+  let h = handler;
+  let mw = roleMiddleware;
+  if (!mw && Array.isArray(h)) {
+    throw new Error(`registerRoute ${method} ${path}: middleware array passed without a handler`);
+  }
+  if (typeof h !== 'function' && typeof mw === 'function') {
+    [h, mw] = [mw, h];
+  }
   const m = String(method).toLowerCase();
   if (!['get', 'post', 'patch', 'put', 'delete'].includes(m)) {
     throw new Error(`registerRoute: unsupported method ${method}`);
@@ -20,8 +31,8 @@ function registerRoute(router, { method, path, description, requiresAuth = true,
   // server-side, not just metadata for the explorer. `allowedRoles` is
   // display text for the API Explorer (may be descriptive for routes with
   // dynamic per-table checks).
-  if (roleMiddleware) router[m](path, roleMiddleware, handler);
-  else router[m](path, handler);
+  if (mw) router[m](path, mw, h);
+  else router[m](path, h);
   // ...and record metadata for the admin API Explorer
   REGISTRY.push({
     method: m.toUpperCase(),

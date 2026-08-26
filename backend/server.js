@@ -15,6 +15,7 @@ const notificationRoutes = require('./src/routes/notifications');
 const tagRoutes = require('./src/routes/tags');
 const backupRoutes = require('./src/routes/backup');
 const progressionRoutes = require('./src/routes/progression');
+const syncReportRoutes = require('./src/routes/syncReport');
 const { requireAuth } = require('./src/middleware/auth');
 const { getUserById } = require('./src/data/users');
 
@@ -71,10 +72,19 @@ app.use('/client', clientRoutes);
 app.use('/admin', adminAuth.router);
 app.use('/admin', adminGeneric.router);
 app.use('/admin', adminModules.router);
+// purpose-built admin modules (Phases 5-12) — one router per module
+app.use('/admin', require('./src/admin/relationships').router);
+app.use('/admin', require('./src/admin/intakeProfiles').router);
+app.use('/admin', require('./src/admin/progressionAdmin').router);
+app.use('/admin', require('./src/admin/workoutContent').router);
+app.use('/admin', require('./src/admin/nutritionAdmin').router);
+app.use('/admin', require('./src/admin/syncHealth').router);
+app.use('/admin', require('./src/admin/analyticsExtra').router);
 app.use('/notifications', notificationRoutes);
 app.use('/trainer', tagRoutes);
 app.use('/user', backupRoutes);
 app.use('/', progressionRoutes);
+app.use('/sync', syncReportRoutes);
 
 // GET /me — current user profile (never includes password_hash)
 app.get('/me', requireAuth, async (req, res) => {

@@ -11,6 +11,7 @@ import * as FileSystem from 'expo-file-system';
 import { getDb } from '../db/db';
 import { getCurrentUserId } from '../db/userId';
 import { api } from './api';
+import { startRestoreRunReport, finishRestoreRunReport } from './adminTelemetry';
 
 const PHOTOS_DIR = `${FileSystem.documentDirectory}progress_photos/`;
 
@@ -45,7 +46,22 @@ export async function isRestoreNeeded() {
   return true;
 }
 
+// Public entry point — unchanged behavior, plus fire-and-forget telemetry
+// for the admin dashboard's restore monitoring (Phase 11). Reporting can
+// never throw and never alters the restore outcome; failures re-throw
+// exactly as before.
 export async function performRestore(onProgress = () => {}) {
+  const runId = await startRestoreRunReport();
+  try {
+    await runRestoreSteps(onProgress);
+    finishRestoreRunReport(runId, 'success');
+  } catch (e) {
+    finishRestoreRunReport(runId, 'failed', e?.message?.slice(0, 200) || null);
+    throw e;
+  }
+}
+
+async function runRestoreSteps(onProgress = () => {}) {
   const userId = getCurrentUserId();
   if (!userId) throw new Error('Not signed in');
   const db = await getDb();

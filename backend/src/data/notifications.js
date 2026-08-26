@@ -16,6 +16,8 @@ const NOTIFICATION_TYPES = [
   'workout_completed',
   'diet_checkin',
   'supplement_checkin',
+  'admin_broadcast',    // admin dashboard broadcasts (Phase 10)
+  'sync_retry_nudge',   // admin retry-failed-sync nudge (Phase 11)
 ];
 
 // Create a notification and attempt push delivery

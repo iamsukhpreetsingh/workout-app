@@ -21,4 +21,10 @@ async function writeAudit(admin, action, targetTable = null, targetId = null, be
   }
 }
 
-module.exports = { writeAudit };
+// Read-audit — for extra-sensitive data (e.g. client intake profiles),
+// VIEWING is itself logged. Same non-blocking guarantees as writeAudit.
+async function readAudit(admin, action, targetTable = null, targetId = null) {
+  return writeAudit(admin, action, targetTable, targetId, null, null);
+}
+
+module.exports = { writeAudit, readAudit };

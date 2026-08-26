@@ -5,8 +5,11 @@
   "type": "commonjs",
   "scripts": {
     "migrate": "node scripts/migrate.js",
+    "seed-exercises": "node scripts/seedExercises.js",
     "purge-archives": "node scripts/purgeExpiredArchives.js",
-    "dev": "node server.js"
+    "check-routes": "node scripts/checkRouteRegistry.js",
+    "test": "node --test test/",
+    "dev": "node scripts/checkRouteRegistry.js && node server.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
