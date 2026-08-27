@@ -37,6 +37,9 @@ export const COACHING_PLAN_BUILDER = 'CoachingPlanBuilder';
 export const COACHING_PLAN_DETAIL = 'CoachingPlanDetail';
 export const ASSIGNED_PLAN_DETAIL = 'AssignedPlanDetail';
 export const ACTIVE_WORKOUT = 'ActiveWorkout';
+export const PROGRESS_PHOTOS = 'ProgressPhotos';
+export const TRAINER_PROGRESS_PHOTOS = 'TrainerProgressPhotos';
+
 
 // Trainer view
 export const TRAINER_TABS = 'TrainerMain';

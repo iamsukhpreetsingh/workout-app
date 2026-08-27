@@ -25,6 +25,8 @@ import ExerciseProgressScreen from '../screens/ExerciseProgressScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import BodyScreen from '../screens/BodyScreen';
+import ProgressPhotosScreen from '../screens/ProgressPhotosScreen';
+import TrainerProgressPhotosScreen from '../screens/TrainerProgressPhotosScreen';
 import TrainerClientsScreen from '../screens/TrainerClientsScreen';
 import TrainerSettingsScreen from '../screens/TrainerSettingsScreen';
 import ClientDetailScreen from '../screens/ClientDetailScreen';
@@ -64,6 +66,8 @@ import {
   INTAKE_FORM,
   PROFILE,
   BODY,
+  PROGRESS_PHOTOS,
+  TRAINER_PROGRESS_PHOTOS,
   CLIENT_DETAIL,
   ASSIGN_WORKOUT,
   CLIENT_ASSIGNED_DETAIL,
@@ -163,6 +167,7 @@ export function MainStack({ onSwitchView }) {
       <Stack.Screen name={INTAKE_FORM} component={IntakeFormScreen} options={{ title: 'Health Profile' }} />
       <Stack.Screen name={PROFILE} component={ProfileScreen} options={{ title: 'Profile' }} />
       <Stack.Screen name={BODY} component={BodyScreen} options={{ title: 'Body' }} />
+      <Stack.Screen name={PROGRESS_PHOTOS} component={ProgressPhotosScreen} options={{ title: 'Progress Photos' }} />
       <Stack.Screen name={CLIENT_DETAIL} component={ClientDetailScreen} options={{ title: 'Client' }} />
       <Stack.Screen name={ASSIGN_WORKOUT} component={AssignWorkoutScreen} options={{ title: 'Assign Workout' }} />
       <Stack.Screen
@@ -263,6 +268,7 @@ export function TrainerStack({ onSwitchView }) {
         {(props) => <TrainerTabs {...props} onSwitchView={onSwitchView} />}
       </Stack.Screen>
       <Stack.Screen name={CLIENT_DETAIL} component={ClientDetailScreen} options={{ title: 'Client' }} />
+      <Stack.Screen name={TRAINER_PROGRESS_PHOTOS} component={TrainerProgressPhotosScreen} options={{ title: 'Progress Photos' }} />
       <Stack.Screen
         name={ASSIGN_WORKOUT_PICKER}
         component={AssignWorkoutPickerScreen}

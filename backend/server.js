@@ -18,6 +18,7 @@ const backupRoutes = require('./src/routes/backup');
 const progressionRoutes = require('./src/routes/progression');
 const syncReportRoutes = require('./src/routes/syncReport');
 const exerciseCatalogRoutes = require('./src/routes/exerciseCatalog');
+const progressPhotoRoutes = require('./src/routes/progressPhotos');
 const { requireAuth } = require('./src/middleware/auth');
 const { getUserById } = require('./src/data/users');
 
@@ -39,14 +40,30 @@ app.get('/config/feature-flags', async (req, res) => {
   }
 });
 
-// ── dish photos ─────────────────────────────────────────────────────────
-// Unlike progress photos (local-only), catalog dish photos must be visible
-// on OTHER devices (the client viewing an assigned plan), so bytes live on
-// the server: uploads/<uuid>.jpg, DB stores the absolute URL, no base64
-// blobs in Postgres.
+// // ── dish photos ─────────────────────────────────────────────────────────
+// // Unlike progress photos (local-only), catalog dish photos must be visible
+// // on OTHER devices (the client viewing an assigned plan), so bytes live on
+// // the server: uploads/<uuid>.jpg, DB stores the absolute URL, no base64
+// // blobs in Postgres.
+// const UPLOAD_DIR = path.join(__dirname, 'uploads');
+// fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+// app.use('/uploads', express.static(UPLOAD_DIR));
+
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-app.use('/uploads', express.static(UPLOAD_DIR));
+// SECURITY FIX: previously the ENTIRE uploads/ tree was public — including
+// uploads/progress-photos/* (private body photos, fetchable by URL with no
+// auth). Static serving is now scoped to dish photos only (public catalog
+// content); progress photos stream exclusively through the authorized
+// /progress-photos/:id/image endpoint after ownership/visibility checks.
+app.use('/uploads/dish-photo', express.static(UPLOAD_DIR, { fallthrough: true }));
+app.use('/uploads', (req, res, next) => {
+  // block direct access to the private subtree; allow legacy dish files
+  if (req.path.startsWith('/progress-photos')) {
+    return res.status(403).json({ error: 'Progress photos require authorization' });
+  }
+  next();
+}, express.static(UPLOAD_DIR));
 
 app.post('/uploads/dish-photo', requireAuth, async (req, res) => {
   try {
@@ -91,6 +108,7 @@ app.use('/user', backupRoutes);
 app.use('/', progressionRoutes);
 app.use('/sync', syncReportRoutes);
 app.use('/exercises', exerciseCatalogRoutes);
+app.use('/', progressPhotoRoutes);
 
 // GET /me — current user profile (never includes password_hash)
 app.get('/me', requireAuth, async (req, res) => {

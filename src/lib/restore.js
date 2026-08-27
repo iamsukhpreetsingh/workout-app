@@ -11,6 +11,7 @@ import * as FileSystem from 'expo-file-system';
 import { getDb } from '../db/db';
 import { getCurrentUserId } from '../db/userId';
 import { api } from './api';
+import { getAccessToken, API_BASE } from './api';
 import { startRestoreRunReport, finishRestoreRunReport } from './adminTelemetry';
 
 const PHOTOS_DIR = `${FileSystem.documentDirectory}progress_photos/`;
@@ -421,29 +422,93 @@ async function runRestoreSteps(onProgress = () => {}) {
     }
   });
 
-  await step('Progress photos', async (onDetail) => {
-    const rows = await api('/user/backup/progress-photos');
+  // await step('Progress photos', async (onDetail) => {
+  //   const rows = await api('/user/backup/progress-photos');
+  //   if (!rows.length) return;
+  //   const dirInfo = await FileSystem.getInfoAsync(PHOTOS_DIR);
+  //   if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(PHOTOS_DIR, { intermediates: true });
+  //   for (let i = 0; i < rows.length; i++) {
+  //     const ph = rows[i];
+  //     onDetail(`Downloading photos… ${i + 1} of ${rows.length}`);
+  //     const filename = `${ph.date}_${ph.local_entity_id}.jpg`;
+  //     const dest = `${PHOTOS_DIR}${filename}`;
+  //     const info = await FileSystem.getInfoAsync(dest);
+  //     if (!info.exists) {
+  //       if (!ph.url) continue;
+  //       try { await FileSystem.downloadAsync(ph.url, dest); } catch { continue; }
+  //     }
+  //     const after = await FileSystem.getInfoAsync(dest);
+  //     if (!after.exists) continue; // broken URL — skip rather than fail the restore
+  //     const pid = parseInt(ph.local_entity_id, 10);
+  //     await db.runAsync(
+  //       `INSERT OR REPLACE INTO progress_photos (id, date, file_path, angle, created_at, synced, server_id)
+  //        VALUES (?,?,?,?,?,?,?)`,
+  //       [isNaN(pid) ? null : pid, ph.date, filename, ph.angle ?? null,
+  //        new Date().toISOString(), 1, ph.id]);
+  //   }
+  // });
+
+    await step('Progress photos', async (onDetail) => {
+    // FIRST-CLASS endpoint (visibility-aware), not the old backup route.
+    // Each row carries image_path — the authorized stream endpoint. The
+    // image is fetched WITH the JWT header (RN fetch → base64 → cached
+    // locally), and the row records both the cache file and the server
+    // path: display uses the local cache offline-first, server-truth
+    // whenever the cache is missing.
+    const rows = await api('/progress-photos');
     if (!rows.length) return;
     const dirInfo = await FileSystem.getInfoAsync(PHOTOS_DIR);
     if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(PHOTOS_DIR, { intermediates: true });
+
+    const downloadAuthorized = async (imagePath) => {
+      try {
+        const token = await getAccessToken();
+        const res = await global.fetch(`${API_BASE}${imagePath}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return null;
+        const blob = await res.blob();
+        // blob → base64 via RN's FileReader (works on Android/iOS)
+        return await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const s = String(reader.result || '');
+            const idx = s.indexOf('base64,');
+            resolve(idx >= 0 ? s.slice(idx + 7) : null);
+          };
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(blob);
+        });
+      } catch {
+        return null;
+      }
+    };
+
     for (let i = 0; i < rows.length; i++) {
       const ph = rows[i];
       onDetail(`Downloading photos… ${i + 1} of ${rows.length}`);
-      const filename = `${ph.date}_${ph.local_entity_id}.jpg`;
+      const filename = `${ph.photo_date}_restore_${i}.jpg`;
       const dest = `${PHOTOS_DIR}${filename}`;
       const info = await FileSystem.getInfoAsync(dest);
-      if (!info.exists) {
-        if (!ph.url) continue;
-        try { await FileSystem.downloadAsync(ph.url, dest); } catch { continue; }
+      if (!info.exists && ph.image_path) {
+        const b64 = await downloadAuthorized(ph.image_path);
+        if (b64) {
+          await FileSystem.writeAsStringAsync(dest, b64, {
+            encoding: FileSystem.EncodingType.Base64,
+          }).catch(() => {});
+        }
       }
-      const after = await FileSystem.getInfoAsync(dest);
-      if (!after.exists) continue; // broken URL — skip rather than fail the restore
-      const pid = parseInt(ph.local_entity_id, 10);
+      const cached = await FileSystem.getInfoAsync(dest);
+            // skip rows with neither a local cache nor a server path — nothing
+      // displayable, and inserting them would create ghost entries
+      if (!cached.exists && !ph.image_path) continue;
       await db.runAsync(
-        `INSERT OR REPLACE INTO progress_photos (id, date, file_path, angle, created_at, synced, server_id)
-         VALUES (?,?,?,?,?,?,?)`,
-        [isNaN(pid) ? null : pid, ph.date, filename, ph.angle ?? null,
-         new Date().toISOString(), 1, ph.id]);
+        `INSERT OR REPLACE INTO progress_photos
+           (id, date, file_path, angle, visibility, image_path, created_at, synced, server_id)
+         VALUES (?,?,?,?,?,?,?,?,1)`,
+        [Date.now() + i, ph.photo_date, cached.exists ? filename : null, null,
+         ph.visibility || 'PERSONAL', ph.image_path || null,
+         new Date().toISOString(), ph.id]);
     }
   });
 

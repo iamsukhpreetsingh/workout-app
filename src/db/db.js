@@ -810,6 +810,84 @@ const MIGRATIONS = [
   async (db) => {
     await addColumnSafe(db, 'exercises', 'is_archived', 'INTEGER NOT NULL DEFAULT 0');
   },
+
+    // v34: progress photos become a first-class feature (privacy + trainer
+  // sharing + S3/local storage server-side). Local additions: visibility
+  // (PERSONAL default — matches the server's import default) and the
+  // authorized image_path for photos that came FROM the server (restored
+  // or re-fetched; locally-captured photos keep file_path + null
+  // image_path). One photo per date is enforced at the write layer.
+  // sync_queue entity type stays 'progress_photo' — the HANDLER now talks
+  // to /progress-photos instead of /user/backup/progress-photos.
+  async (db) => {
+    await addColumnSafe(db, 'progress_photos', 'visibility', "TEXT NOT NULL DEFAULT 'PERSONAL'");
+    await addColumnSafe(db, 'progress_photos', 'image_path', 'TEXT');
+  },
+    // v35: progress_photos.file_path becomes nullable — server-backed rows
+  // (restored photos, or rows pulled from the first-class API) have NO
+  // local file and display via image_path instead. SQLite can't ALTER a
+  // NOT NULL constraint, so the column is rebuilt: copy rows, drop,
+  // recreate with the same shape minus NOT NULL, copy back.
+  async (db) => {
+    const cols = await db.getAllAsync("PRAGMA table_info('progress_photos')");
+    const filePathCol = cols.find((c) => c.name === 'file_path');
+    if (filePathCol && filePathCol.notnull === 1) {
+      await db.execAsync(`CREATE TABLE progress_photos_v35 (
+        id INTEGER PRIMARY KEY,
+        date TEXT NOT NULL,
+        file_path TEXT,
+        angle TEXT,
+        created_at TEXT NOT NULL,
+        synced INTEGER NOT NULL DEFAULT 0,
+        local_id TEXT,
+        server_id TEXT,
+        visibility TEXT NOT NULL DEFAULT 'PERSONAL',
+        image_path TEXT
+      )`);
+      await db.runAsync(
+        `INSERT INTO progress_photos_v35
+           (id, date, file_path, angle, created_at, synced, local_id, server_id, visibility, image_path)
+         SELECT id, date, file_path, angle, created_at,
+                COALESCE(synced, 0), local_id, server_id,
+                COALESCE(visibility, 'PERSONAL'), image_path
+         FROM progress_photos`
+      );
+      await db.execAsync('DROP TABLE progress_photos');
+      await db.execAsync('ALTER TABLE progress_photos_v35 RENAME TO progress_photos');
+    }
+  },
+
+    // v36: one-time repair — progress_photos.server_id values written by the
+  // OLD backup system are numeric ids from the retired
+  // /user/backup/progress-photos table. The first-class /progress-photos
+  // API keys on UUIDs; a stale numeric server_id made the sync engine PATCH
+  // /progress-photos/1 → 400 "invalid input syntax for type uuid". Rows
+  // with non-UUID server_ids are reset to NULL (treated as never-synced;
+  // the engine re-adopts the correct UUID from the server by photo_date).
+  async (db) => {
+    await db.runAsync(
+      `UPDATE progress_photos SET server_id = NULL
+       WHERE server_id IS NOT NULL
+         AND server_id NOT GLOB
+             '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'`
+    );
+  },
+
+    // v37: progress photos become USER-SCOPED locally, matching the server.
+  // On a multi-account device the old table bled every account's photos to
+  // every other account (the server was always correct — the local table
+  // had no user_id column and every reader returned all rows). Rebuild adds
+  // user_id + UNIQUE(user_id, date); existing rows are claimed by the first
+  // account to log in after this upgrade (adoptLegacyPhotos in backfill).
+  async (db) => {
+    await addColumnSafe(db, 'progress_photos', 'user_id', 'TEXT');
+    const count = await db.getFirstAsync('SELECT COUNT(*) AS c FROM progress_photos WHERE user_id IS NULL');
+    if (count.c > 0) {
+      // leave claiming to login-time adoption (backfill.js) — NULL rows are
+      // invisible to all readers until claimed, never misattributed
+    }
+  },
+
 ];
 
 async function backfillPRs(db) {

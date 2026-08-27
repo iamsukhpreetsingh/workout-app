@@ -11,6 +11,7 @@ const workoutTemplates = require('../data/workoutTemplates');
 const notifications = require('../data/notifications');
 const intakeProfiles = require('../data/intakeProfiles');
 const backup = require('../data/backup');
+const progressPhotos = require('../data/progressPhotos');
 const { query } = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { registerRoute } = require('../admin/registry');
@@ -823,6 +824,15 @@ registerRoute(router, {
     );
     if (!rows.length) {
       return res.status(404).json({ error: 'No active relationship with this client' });
+    }
+        // +1 rule: unlink resets all of this client's TRAINER_SHARED photos to
+    // PERSONAL (any future trainer starts with a clean slate). Non-fatal on
+    // failure — the trainer read endpoint re-checks association + visibility
+    // at query time, so a missed reset can never leak a photo.
+    try {
+      await progressPhotos.resetSharesOnDisconnect(req.params.clientId);
+    } catch (err) {
+      console.error('[ProgressPhotos] share reset on unlink failed:', err.message);
     }
     res.json(rows[0]);
   } catch (e) {

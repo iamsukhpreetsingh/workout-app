@@ -103,7 +103,28 @@ export default function OverviewPanel({
         </View>
       )}
 
-            <Text style={styles.groupLabel}>Progression Strategy</Text>
+      <Text style={styles.groupLabel}>Shared Progress Photos</Text>
+      <TouchableOpacity
+        style={styles.card}
+        activeOpacity={0.8}
+        onPress={() => navigation.navigate('TrainerProgressPhotos', { clientId, clientName })}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Ionicons name="images-outline" size={18} color={colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>
+              View Shared Progress Photos
+            </Text>
+            <Text style={{ color: colors.textDim, fontSize: 12, marginTop: 2 }}>
+              Only photos {clientName || 'this client'} marked "Share with Trainer"
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+        </View>
+      </TouchableOpacity>
+
+
+      <Text style={styles.groupLabel}>Progression Strategy</Text>
       <View style={styles.card}>
         {progEditing ? (
           <View>

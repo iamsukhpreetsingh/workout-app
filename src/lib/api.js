@@ -51,8 +51,13 @@ export async function api(path, { method = 'GET', body, headers, skipAuth = fals
     }
   }
 
-  const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
-  if (!res.ok) throw new ApiError(res.status, data?.error || `Request failed (${res.status})`);
+  // const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
+  // if (!res.ok) throw new ApiError(res.status, data?.error || `Request failed (${res.status})`);
+    const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
+  if (!res.ok) {
+    console.warn('[API] Error body:', JSON.stringify(data).slice(0, 300));
+    throw new ApiError(res.status, data?.error || `Request failed (${res.status})`);
+  }
   return data;
 }
 

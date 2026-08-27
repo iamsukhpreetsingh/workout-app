@@ -9,6 +9,7 @@ import { getDb } from '../db/db';
 import { getCurrentUserId } from '../db/userId';
 import { enqueueUpsert } from './syncEngine';
 import { adoptLegacyMetrics } from '../db/body';
+import { adoptLegacyPhotos } from '../db/photos';
 
 async function backfillDoneFor(userId) {
   const db = await getDb();
@@ -52,6 +53,7 @@ export async function runBackfillIfNeeded() {
 
   // claim pre-upgrade unscoped measurement rows + enqueue unsynced ones
   await adoptLegacyMetrics(userId);
+  await adoptLegacyPhotos(userId);
 
   const sessions = await db.getAllAsync(
     'SELECT id FROM workout_sessions WHERE user_id = ? AND synced = 0', [userId]);

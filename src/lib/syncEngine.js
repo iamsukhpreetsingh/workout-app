@@ -174,10 +174,39 @@ export async function enqueueUpsert(entityType, localId, dependsOn = null) {
 
 
 
+// // hadServerBackup: the caller checks (BEFORE deleting the local row) whether
+// // this entity was ever backed up (server_id set). Never-backed-up deletes
+// // are clean local removals — no queue row, no server call.
+// export async function enqueueDelete(entityType, localId, hadServerBackup) {
+//   const db = await getDb();
+//   try {
+//     await db.runAsync(
+//       `DELETE FROM sync_queue WHERE entity_type = ? AND entity_id = ? AND operation != 'DELETE'`,
+//       [entityType, String(localId)]
+//     );
+//     if (!hadServerBackup) return; // never synced — nothing to tell the server
+//     const now = Date.now();
+//     await db.runAsync(
+//       `INSERT INTO sync_queue (operation_id, entity_type, entity_id, operation, payload,
+//          created_at, updated_at, status)
+//        VALUES (?, ?, ?, 'DELETE', NULL, ?, ?, 'PENDING')`,
+//       [`${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, entityType, String(localId), now, now]
+//     );
+// //   } catch (e) {
+// //     console.error('[SYNC] enqueueDelete failed (local delete unaffected):', e.message);
+// //   }
+// // }
+
+//   } catch (e) {
+//     console.error('[SYNC] enqueueDelete failed (local delete unaffected):', e.message);
+//   }
 // hadServerBackup: the caller checks (BEFORE deleting the local row) whether
 // this entity was ever backed up (server_id set). Never-backed-up deletes
 // are clean local removals — no queue row, no server call.
-export async function enqueueDelete(entityType, localId, hadServerBackup) {
+// snapshot (optional): small JSON the remove-handler may need that can no
+// longer be read from the deleted row (e.g. progress photos need the
+// SERVER id because their delete endpoint keys on it, not the local id).
+export async function enqueueDelete(entityType, localId, hadServerBackup, snapshot = null) {
   const db = await getDb();
   try {
     await db.runAsync(
@@ -189,22 +218,15 @@ export async function enqueueDelete(entityType, localId, hadServerBackup) {
     await db.runAsync(
       `INSERT INTO sync_queue (operation_id, entity_type, entity_id, operation, payload,
          created_at, updated_at, status)
-       VALUES (?, ?, ?, 'DELETE', NULL, ?, ?, 'PENDING')`,
-      [`${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, entityType, String(localId), now, now]
+       VALUES (?, ?, ?, 'DELETE', ?, ?, ?, 'PENDING')`,
+      [`${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, entityType, String(localId),
+       snapshot ? JSON.stringify(snapshot) : null, now, now]
     );
-//   } catch (e) {
-//     console.error('[SYNC] enqueueDelete failed (local delete unaffected):', e.message);
-//   }
-// }
-
-
-
   } catch (e) {
     console.error('[SYNC] enqueueDelete failed (local delete unaffected):', e.message);
   }
   kickQueue();
 }
-
 
 // Debounced auto-sync kick: any enqueue schedules one processQueue attempt
 // a few seconds later. processQueue itself enforces mode/connectivity/
@@ -726,32 +748,185 @@ const HANDLERS = {
 
 
 
+  // progress_photo: {
+  //   path: '/user/backup/progress-photos',
+  //   async upsert(id) {
+  //     const db = await getDb();
+  //     const p = await db.getFirstAsync('SELECT * FROM progress_photos WHERE id = ?', [id]);
+  //     if (!p) return;
+  //   //   const base64 = await FileSystem.readAsStringAsync(p.file_path, {
+  //   //     encoding: FileSystem.EncodingType.Base64,
+  //   //   });
+
+  //         // file_path is stored as a bare filename (photos.js keeps files under
+  //     // documentDirectory/progress_photos/) — resolve to a full URI, while
+  //     // tolerating absolute paths if that ever changes
+  //     const filePath = String(p.file_path || '').startsWith('file:')
+  //       ? p.file_path
+  //       : `${FileSystem.documentDirectory}progress_photos/${p.file_path}`;
+  //     const base64 = await FileSystem.readAsStringAsync(filePath, {
+  //       encoding: FileSystem.EncodingType.Base64,
+  //     });
+  //     const row = await api(this.path, {
+  //       method: 'POST',
+  //       body: { local_entity_id: String(p.id), date: p.date, angle: p.angle, image_base64: base64 },
+  //     });
+  //     await db.runAsync('UPDATE progress_photos SET synced = 1, server_id = ? WHERE id = ?', [row?.id || null, id]);
+  //   },
+  //   async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
+  //   deps: null,
+  // },
+
+    // progress photos → the FIRST-CLASS /progress-photos API (not the old
+  // backup route). Upsert = create-or-replace BY DATE (LWW — the server's
+  // documented conflict policy), carrying the current bytes + visibility.
+  // DELETE by server id (photos always carry server_id once synced — the
+  // old local-id delete is retired along with the backup route).
   progress_photo: {
-    path: '/user/backup/progress-photos',
+    path: '/progress-photos',
     async upsert(id) {
       const db = await getDb();
-      const p = await db.getFirstAsync('SELECT * FROM progress_photos WHERE id = ?', [id]);
-      if (!p) return;
-    //   const base64 = await FileSystem.readAsStringAsync(p.file_path, {
-    //     encoding: FileSystem.EncodingType.Base64,
-    //   });
+      // const p = await db.getFirstAsync('SELECT * FROM progress_photos WHERE id = ?', [id]);
+        const p = await db.getFirstAsync(
+        'SELECT * FROM progress_photos WHERE id = ? AND (user_id IS NULL OR user_id = ?)',
+        [id, getCurrentUserId()]);
+      if (!p) return; // deleted meanwhile — clean no-op
+      const body = {
+        // photo_date: p.date,
+        photo_date: /^\d{4}-\d{2}-\d{2}$/.test(String(p.date)) ? p.date : new Date(p.date).toISOString().slice(0, 10),
+        visibility: p.visibility || 'PERSONAL',
+      };
+      // local capture → upload the bytes; server-fetched row (image_path,
+      // no local file) → metadata-only visibility change via PATCH
+      if (p.file_path) {
+        const filePath = String(p.file_path).startsWith('file:')
+          ? p.file_path
+          : `${FileSystem.documentDirectory}progress_photos/${p.file_path}`;
+        body.image_base64 = await FileSystem.readAsStringAsync(filePath, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const row = await api(this.path, { method: 'POST', body });
+        await db.runAsync(
+          'UPDATE progress_photos SET synced = 1, server_id = ?, image_path = ? WHERE id = ?',
+          [row?.id || null, row?.image_path || null, id]);
+      // } else if (p.server_id) {
+      //   await api(`${this.path}/${p.server_id}`, {
+      //     method: 'PATCH',
+      //     body: { visibility: p.visibility || 'PERSONAL' },
+      //   });
+      //   await db.runAsync('UPDATE progress_photos SET synced = 1 WHERE id = ?', [id]);
+      // }
+      // // no file_path and no server_id: nothing meaningful to push — skip
+      //       } else if (p.server_id) 
+      //         {
+      //   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(p.server_id));
+      //   if (!isUuid) {
+      //     const row = await api(this.path, {
+      //       method: 'POST',
+      //       body: {
+      //         photo_date: p.date,
+      //         visibility: p.visibility || 'PERSONAL',
+      //         image_base64: null, // no local file — see guard below
+      //       },
+      //     }).catch(() => null);
+      //     // POST without image fails validation ("image_base64 is required")
+      //     // — a no-file, bad-server-id row can't be repaired by upsert.
+      //     // Instead: pull the server's photo for this DATE and adopt its id.
+      //     if (!row) {
+      //       const list = await api(this.path).catch(() => []);
+      //       const match = (list || []).find((x) => x.photo_date === p.date);
+      //       if (match) {
+      //         await db.runAsync(
+      //           'UPDATE progress_photos SET synced = 1, server_id = ?, image_path = ? WHERE id = ?',
+      //           [match.id, match.image_path || null, id]);
+      //       } else {
+      //         // no server photo for this date either — nothing to sync;
+      //         // mark synced to stop the retry loop (display-only local row)
+      //         await db.runAsync('UPDATE progress_photos SET synced = 1 WHERE id = ?', [id]);
+      //       }
+      //     } else {
+      //       await db.runAsync(
+      //         'UPDATE progress_photos SET synced = 1, server_id = ?, image_path = ? WHERE id = ?',
+      //         [row?.id || null, row?.image_path || null, id]);
+      //     }
+      //   } else {
+      //     await api(`${this.path}/${p.server_id}`, {
+      //       method: 'PATCH',
+      //       body: { visibility: p.visibility || 'PERSONAL' },
+      //     });
+      //     await db.runAsync('UPDATE progress_photos SET synced = 1 WHERE id = ?', [id]);
+      //   }
+      // }
+      } else if (
+  p.server_id &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    String(p.server_id)
+  )
+) {
+  // genuine first-class UUID → metadata-only visibility update
+  await api(`${this.path}/${p.server_id}`, {
+    method: 'PATCH',
+    body: { visibility: p.visibility || 'PERSONAL' },
+  });
 
-          // file_path is stored as a bare filename (photos.js keeps files under
-      // documentDirectory/progress_photos/) — resolve to a full URI, while
-      // tolerating absolute paths if that ever changes
-      const filePath = String(p.file_path || '').startsWith('file:')
-        ? p.file_path
-        : `${FileSystem.documentDirectory}progress_photos/${p.file_path}`;
-      const base64 = await FileSystem.readAsStringAsync(filePath, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const row = await api(this.path, {
-        method: 'POST',
-        body: { local_entity_id: String(p.id), date: p.date, angle: p.angle, image_base64: base64 },
-      });
-      await db.runAsync('UPDATE progress_photos SET synced = 1, server_id = ? WHERE id = ?', [row?.id || null, id]);
+  await db.runAsync(
+    'UPDATE progress_photos SET synced = 1 WHERE id = ?',
+    [id]
+  );
+
+} else if (p.server_id) {
+  // STALE server_id (numeric — written by the retired backup system).
+  // No local file exists, so a full POST is impossible. Instead adopt
+  // the server's real photo for this DATE.
+  const list = await api(this.path).catch(() => []);
+
+  const match = (list || []).find(
+    (x) => String(x.photo_date) === String(p.date)
+  );
+
+  if (match) {
+    await db.runAsync(
+      'UPDATE progress_photos SET synced = 1, server_id = ?, image_path = ? WHERE id = ?',
+      [match.id, match.image_path || null, id]
+    );
+  } else {
+    // No server photo for this date either.
+    // This local row is display-only, so stop retrying it.
+    await db.runAsync(
+      'UPDATE progress_photos SET synced = 1 WHERE id = ?',
+      [id]
+    );
+  }
+
+} else {
+  // no file_path, no server_id: nothing pushable — display-only
+  await db.runAsync(
+    'UPDATE progress_photos SET synced = 1 WHERE id = ?',
+    [id]
+  );
+}
     },
-    async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
+    async remove(id) {
+      const db = await getDb();
+      // enqueueDelete captured hadServerBackup before the row vanished, but
+      // the row is gone by process time — the server delete keys on the
+      // SERVER id, which we must recover. Look it up by entity id in the
+      // (just-deleted) local table returns nothing, so delete-by-date LWW
+      // replacement covers the row; for true deletes we rely on the queue
+      // carrying the id: extract from the queue row's entity_id → the id
+      // IS the local id. Server-side delete needs the server id, which we
+      // stash in the queue via a pre-delete snapshot:
+      const snap = await db.getFirstAsync(
+        'SELECT payload FROM sync_queue WHERE entity_type = ? AND entity_id = ? AND operation = ?',
+        ['progress_photo', String(id), 'DELETE']
+      );
+      let serverId = null;
+      try { serverId = snap?.payload ? JSON.parse(snap.payload).server_id : null; } catch {}
+      if (serverId) {
+        await api(`${this.path}/${serverId}`, { method: 'DELETE' });
+      }
+      // no snapshot (never synced) — clean local removal, nothing to do
+    },
     deps: null,
   },
 };
