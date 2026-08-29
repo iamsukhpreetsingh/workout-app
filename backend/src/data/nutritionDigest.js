@@ -177,4 +177,270 @@ async function getClientFoodLogForTrainer(trainerId, clientId, from, to) {
   return rows;
 }
 
-module.exports = { buildTrendSummary, getWeeklyDigest, getTrainerWeeklyDigest, getClientFoodLogForTrainer };
+// ── trainer day / week / month monitoring (spec §1–13, §21–23) ───────────
+
+const MEAL_ORDER = ['breakfast', 'lunch', 'dinner', 'snack', 'other'];
+const STATUS_OF = (actual, target, tol) => {
+  if (!target) return null;
+  if (actual * 100 < target * (100 - tol)) return 'under_target';
+  if (actual * 100 > target * (100 + tol)) return 'over_target';
+  return 'on_target';
+};
+
+// The target VERSION effective on a date — historical days always evaluate
+// against the version in force on THEIR date (§24 Rule 12).
+async function resolveTargetForDate(userId, dateStr) {
+  const { rows } = await query(
+    `SELECT * FROM user_nutrition_targets
+     WHERE user_id = $1 AND effective_from <= $2::date
+     ORDER BY effective_from DESC, version_number DESC LIMIT 1`,
+    [userId, String(dateStr).slice(0, 10)]
+  );
+  const v = rows[0];
+  return v
+    ? {
+        calories: v.calories,
+        protein_g: Number(v.protein_g),
+        carbs_g: Number(v.carbs_g),
+        fat_g: Number(v.fat_g),
+        tolerance_pct: v.tolerance_pct ?? 10,
+        target_source: v.target_source,
+        target_mode: v.target_mode || 'daily',
+      }
+    : null;
+}
+
+// ONE day, full detail: status headline (Target Hit / Under / Over / Not
+// Logged — "not logged" is NEVER "under target"), per-macro independent
+// status against the tolerance, remaining/excess, grouped read-only log.
+async function getClientDailyNutrition(userId, dateStr) {
+  const date = String(dateStr).slice(0, 10);
+  const [target, entryRows] = await Promise.all([
+    resolveTargetForDate(userId, date),
+    query(
+      `SELECT * FROM food_log_entries WHERE user_id = $1 AND log_date = $2::date ORDER BY logged_at ASC`,
+      [userId, date]
+    ).then((r) => r.rows),
+  ]);
+  const tol = target?.tolerance_pct ?? 10;
+  const sum = (k) => entryRows.reduce((n, e) => n + (Number(e[k]) || 0), 0);
+  const totals = {
+    calories: Math.round(sum('calories')),
+    protein_g: Math.round(sum('protein_g')),
+    carbs_g: Math.round(sum('carbs_g')),
+    fat_g: Math.round(sum('fat_g')),
+  };
+  const isLogged = entryRows.length > 0;
+  const macroBlock = (actual, t) => ({
+    actual, target: t || null,
+    status: isLogged && t ? STATUS_OF(actual, t, tol) : null,
+    remaining: t ? Math.max(0, t - actual) : null,
+    over: t ? Math.max(0, actual - t) : null,
+  });
+  const groups = new Map();
+  for (const e of entryRows) {
+    const mt = MEAL_ORDER.includes(e.meal_type) ? e.meal_type : 'other';
+    if (!groups.has(mt)) groups.set(mt, []);
+    groups.get(mt).push({
+      id: e.id, name: e.name, calories: e.calories != null ? Math.round(e.calories) : null,
+      quantity: e.quantity, serving_unit: e.serving_unit, food_source_type: e.food_source_type,
+    });
+  }
+  return {
+    date,
+    is_future: date > todayStr(),
+    target,
+    isLogged,
+    totals,
+    calorieStatus: !isLogged ? 'not_logged' : target?.calories ? STATUS_OF(totals.calories, target.calories, tol) : null,
+    remaining: target?.calories ? Math.max(0, target.calories - totals.calories) : null,
+    over: target?.calories ? Math.max(0, totals.calories - target.calories) : null,
+    macros: target
+      ? {
+          protein_g: macroBlock(totals.protein_g, target.protein_g),
+          carbs_g: macroBlock(totals.carbs_g, target.carbs_g),
+          fat_g: macroBlock(totals.fat_g, target.fat_g),
+        }
+      : null,
+    foodLog: MEAL_ORDER.filter((mt) => groups.has(mt)).map((mt) => ({
+      meal_type: mt,
+      kcal: groups.get(mt).reduce((n, e) => n + (e.calories || 0), 0),
+      entries: groups.get(mt),
+    })),
+  };
+}
+
+// Week / Month history (§8–13): one aggregated query over the date range —
+// never the client's lifetime history. Averages come from LOGGED days only
+// (§12); not-logged days are never counted as under-target (§10).
+async function getClientNutritionHistory(userId, { mode = 'week', date } = {}) {
+  const anchor = String(date || todayStr()).slice(0, 10);
+  let fromDate, toDate;
+  if (mode === 'month') {
+    fromDate = anchor.slice(0, 8) + '01';
+    const d = new Date(`${fromDate}T12:00:00Z`);
+    d.setUTCMonth(d.getUTCMonth() + 1);
+    d.setUTCDate(0);
+    toDate = dayStr(d);
+  } else {
+    // week = the 7 days ending at the anchor date
+    toDate = anchor;
+    const d = new Date(`${anchor}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 6);
+    fromDate = dayStr(d);
+  }
+  const [target, { rows: agg }] = await Promise.all([
+    resolveTargetForDate(userId, anchor),
+    query(
+      `SELECT log_date,
+              SUM(calories) AS calories, SUM(protein_g) AS protein_g,
+              SUM(carbs_g) AS carbs_g, SUM(fat_g) AS fat_g
+       FROM food_log_entries
+       WHERE user_id = $1 AND log_date >= $2::date AND log_date <= $3::date
+       GROUP BY log_date`,
+      [userId, fromDate, toDate]
+    ),
+  ]);
+  const tol = target?.tolerance_pct ?? 10;
+  const byDate = new Map(agg.map((r) => [String(r.log_date).slice(0, 10), r]));
+  const days = [];
+  const cur = new Date(`${fromDate}T12:00:00Z`);
+  while (dayStr(cur) <= toDate) {
+    const ds = dayStr(cur);
+    const e = byDate.get(ds);
+    const calories = e ? Math.round(Number(e.calories) || 0) : 0;
+    days.push({
+      date: ds,
+      dow: new Date(`${ds}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
+      isLogged: !!e,
+      calories,
+      protein_g: e ? Math.round(Number(e.protein_g) || 0) : 0,
+      carbs_g: e ? Math.round(Number(e.carbs_g) || 0) : 0,
+      fat_g: e ? Math.round(Number(e.fat_g) || 0) : 0,
+      status: !e ? 'not_logged' : target?.calories ? STATUS_OF(calories, target.calories, tol) : null,
+    });
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return summarizeHistory(days, target, { mode, fromDate, toDate });
+}
+
+// Pure summarization over per-day rows — unit-testable without a database.
+function summarizeHistory(days, target, { mode, fromDate, toDate } = {}) {
+  const logged = days.filter((d) => d.isLogged);
+  const avg = (k) =>
+    logged.length ? Math.round(logged.reduce((n, d) => n + (Number(d[k]) || 0), 0) / logged.length) : null;
+  const onTarget = logged.filter((d) => d.status === 'on_target').length;
+  const under = logged.filter((d) => d.status === 'under_target').length;
+  const over = logged.filter((d) => d.status === 'over_target').length;
+  return {
+    mode,
+    from_date: fromDate,
+    to_date: toDate,
+    total_days: days.length,
+    days_logged: logged.length,
+    days_on_target: onTarget,
+    days_under: under,
+    days_over: over,
+    averages: target
+      ? {
+          calories: avg('calories'),
+          calories_target: target.calories,
+          protein_g: avg('protein_g'),
+          protein_target: target.protein_g,
+          carbs_g: avg('carbs_g'),
+          carbs_target: target.carbs_g,
+          fat_g: avg('fat_g'),
+          fat_target: target.fat_g,
+        }
+      : { calories: avg('calories'), protein_g: avg('protein_g'), carbs_g: avg('carbs_g'), fat_g: avg('fat_g') },
+    achievement_pct: logged.length ? Math.round((onTarget / logged.length) * 100) : null,
+    days,
+  };
+}
+
+// ── missed-target notifications (§14–18) ─────────────────────────────────
+
+async function getNutritionPrefs(trainerId, clientId) {
+  const { rows } = await query(
+    `SELECT * FROM trainer_nutrition_prefs WHERE trainer_id = $1 AND client_id = $2`,
+    [trainerId, clientId]
+  );
+  return rows[0] || { trainer_id: trainerId, client_id: clientId, target_miss_notifications: false };
+}
+
+async function setNutritionPrefs(trainerId, clientId, { target_miss_notifications }) {
+  await coaching.assertActiveAssociation(trainerId, clientId);
+  const { rows } = await query(
+    `INSERT INTO trainer_nutrition_prefs (trainer_id, client_id, target_miss_notifications)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (trainer_id, client_id) DO UPDATE SET
+       target_miss_notifications = EXCLUDED.target_miss_notifications, updated_at = now()
+     RETURNING *`,
+    [trainerId, clientId, target_miss_notifications === true]
+  );
+  return rows[0];
+}
+
+// Evaluate COMPLETED days (past only — today is still happening) and create
+// ONE notification per (trainer, client, date, direction), gated on the
+// relationship's preference. Editing a historical day re-evaluates the
+// status but never duplicates alerts: the UNIQUE ledger absorbs every
+// subsequent sync of the same day, and a day corrected to on-target sends
+// nothing new (§17). on_target days — even with 0/4 plan meals followed —
+// never notify (§15).
+// Pure: which (if any) notification direction a day's status produces.
+// on_target — even with 0/4 plan meals followed — never notifies; a day
+// with no food logged never notifies (§15, §28).
+function missDirection(calorieStatus) {
+  if (calorieStatus === 'under_target') return 'under';
+  if (calorieStatus === 'over_target') return 'over';
+  return null;
+}
+
+async function evaluateMissedTargetNotifications(userId, dates) {
+  const { rows: trainers } = await query(
+    `SELECT tc.trainer_id, COALESCE(p.target_miss_notifications, false) AS enabled
+     FROM trainer_clients tc
+     LEFT JOIN trainer_nutrition_prefs p ON p.trainer_id = tc.trainer_id AND p.client_id = tc.client_id
+     WHERE tc.client_id = $1 AND tc.status = 'active'`,
+    [userId]
+  );
+  for (const t of trainers) {
+    if (!t.enabled) continue;
+    for (const rawDate of Array.isArray(dates) ? dates : [dates]) {
+      const date = String(rawDate).slice(0, 10);
+      if (date >= todayStr()) continue;
+      const day = await getClientDailyNutrition(userId, date);
+      if (!day.isLogged || !day.target?.calories) continue;
+      const direction = missDirection(day.calorieStatus);
+      if (!direction) continue;
+      // idempotent ledger — ON CONFLICT DO NOTHING is the dedup guarantee
+      const { rowCount } = await query(
+        `INSERT INTO diet_target_notifications (trainer_id, client_id, log_date, direction)
+         VALUES ($1,$2,$3,$4) ON CONFLICT (trainer_id, client_id, log_date, direction) DO NOTHING`,
+        [t.trainer_id, userId, date, direction]
+      );
+      if (!rowCount) continue;
+      const { rows: clientRows } = await query('SELECT name FROM users WHERE id = $1', [userId]);
+      const clientName = clientRows[0]?.name || 'Your client';
+      const { createNotification } = require('./notifications');
+      await createNotification({
+        recipientId: t.trainer_id,
+        actorId: userId,
+        type: 'nutrition_target_missed',
+        title: 'Nutrition Target Missed',
+        body:
+          direction === 'under'
+            ? `${clientName} was below their calorie target on ${date}. Target: ${day.target.calories} kcal, actual: ${day.totals.calories} kcal (${day.remaining} kcal below).`
+            : `${clientName} exceeded their calorie target on ${date}. Target: ${day.target.calories} kcal, actual: ${day.totals.calories} kcal (${day.over} kcal over).`,
+        relatedClientId: userId,
+      }).catch(() => {});
+    }
+  }
+}
+
+module.exports = {
+  buildTrendSummary, getWeeklyDigest, getTrainerWeeklyDigest, getClientFoodLogForTrainer,
+  resolveTargetForDate, getClientDailyNutrition, getClientNutritionHistory, summarizeHistory,
+  missDirection, getNutritionPrefs, setNutritionPrefs, evaluateMissedTargetNotifications,
+};

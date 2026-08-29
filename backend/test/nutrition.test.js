@@ -112,3 +112,46 @@ test('monitoring: simple-mode check-in days map to simple_followed/simple_missed
   assert.strictEqual(m.daysOnTarget, 2);
   assert.strictEqual(m.daysUnder, 1);
 });
+
+// ---- Trainer day/week/month monitoring (spec §1–13, §24, §28) ----
+const { summarizeHistory, missDirection } = require('../src/data/nutritionDigest');
+
+test('history averages: not-logged days excluded, never zero — 2400/2300/gap/2500 → 2400', () => {
+  const days = [
+    { date: 'd1', dow: 'Mon', isLogged: true, calories: 2400, protein_g: 190, carbs_g: 240, fat_g: 70, status: 'on_target' },
+    { date: 'd2', dow: 'Tue', isLogged: true, calories: 2300, protein_g: 185, carbs_g: 235, fat_g: 68, status: 'under_target' },
+    { date: 'd3', dow: 'Wed', isLogged: false, calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, status: 'not_logged' },
+    { date: 'd4', dow: 'Thu', isLogged: true, calories: 2500, protein_g: 200, carbs_g: 250, fat_g: 72, status: 'over_target' },
+  ];
+  const s = summarizeHistory(days, { calories: 2400, protein_g: 200, carbs_g: 250, fat_g: 70 });
+  assert.strictEqual(s.averages.calories, 2400); // (2400+2300+2500)/3 — NOT 1800
+  assert.strictEqual(s.averages.protein_g, 192);
+  assert.strictEqual(s.days_logged, 3);
+  assert.strictEqual(s.days_on_target, 1);
+  assert.strictEqual(s.days_under, 1); // not-logged day NOT counted as under
+  assert.strictEqual(s.days_over, 1);
+  assert.strictEqual(s.total_days, 4);
+  assert.strictEqual(s.achievement_pct, 33);
+});
+
+test('history: not-logged days are their own status, never under_target', () => {
+  const s = summarizeHistory(
+    [{ date: 'd1', dow: 'Mon', isLogged: false, calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, status: 'not_logged' }],
+    { calories: 2400, protein_g: 200, carbs_g: 250, fat_g: 70 }
+  );
+  assert.strictEqual(s.days[0].status, 'not_logged');
+  assert.strictEqual(s.days_under, 0);
+  assert.strictEqual(s.days_on_target, 0);
+  assert.strictEqual(s.averages.calories, null); // no logged days → no average
+  assert.strictEqual(s.achievement_pct, null);
+});
+
+test('notification direction: target miss notifies, on-target and not-logged never do', () => {
+  assert.strictEqual(missDirection('under_target'), 'under');
+  assert.strictEqual(missDirection('over_target'), 'over');
+  // §28 "Target achieved with different foods": on target with 0/4 plan
+  // meals followed is still on_target → NO negative notification
+  assert.strictEqual(missDirection('on_target'), null);
+  // §28 "Not logged": a day with no entries is Not Logged, never Under Target
+  assert.strictEqual(missDirection('not_logged'), null);
+});

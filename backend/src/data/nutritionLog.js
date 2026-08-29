@@ -339,6 +339,11 @@ async function upsertFoodLogEntries(userId, list) {
     if (!e?.local_entity_id || !e.name || !e.log_date) {
       throw new HttpError(400, 'Each entry requires local_entity_id, name and log_date');
     }
+    // §24 Rule 1 — future food logging is forbidden, server-side as well as
+    // client-side: a future-dated entry is never persisted
+    if (String(e.log_date).slice(0, 10) > todayStr()) {
+      throw new HttpError(400, 'Food cannot be logged for a future date');
+    }
     const mealType = MEAL_TYPES.includes(e.meal_type) ? e.meal_type : 'other';
     const sourceType = SOURCES.includes(e.food_source_type) ? e.food_source_type : 'manual';
     const { rows: r } = await query(

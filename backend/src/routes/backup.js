@@ -245,7 +245,17 @@ router.delete('/backup/food-log/:localId', requireAuth, async (req, res) => {
 // keyed (user_id, local_entity_id) → idempotent under repeated offline syncs.
 router.post('/backup/food-log-entries', requireAuth, async (req, res) => {
   try {
-    res.status(201).json(await nutritionLog.upsertFoodLogEntries(req.user.id, req.body));
+    const rows = await nutritionLog.upsertFoodLogEntries(req.user.id, req.body);
+    // fire-and-forget missed-target evaluation for every COMPLETED day this
+    // sync touched — idempotent per (trainer, client, date, direction), and
+    // gated on the trainer's per-client preference, so a day logged in
+    // several updates throughout the day can never spam notifications
+    const dates = [...new Set(rows.map((r) => String(r.log_date).slice(0, 10)))];
+    if (dates.length) {
+      const { evaluateMissedTargetNotifications } = require('../data/nutritionDigest');
+      evaluateMissedTargetNotifications(req.user.id, dates).catch(() => {});
+    }
+    res.status(201).json(rows);
   } catch (e) {
     httpError(res, e, 400);
   }

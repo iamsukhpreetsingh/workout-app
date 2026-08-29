@@ -792,6 +792,77 @@ registerRoute(router, {
   }
 }, [requireAuth, requireRole('trainer')]);
 
+// ---- Trainer day / week / month monitoring (read-only) ----
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/nutrition-day',
+  description: "One client day, full detail: Target Hit / Under / Over / Not Logged status (against the target version effective on that date), per-macro status with remaining/excess, and the grouped read-only food log. ?date=YYYY-MM-DD.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
+    res.json(await nutritionDigest.getClientDailyNutrition(
+      req.params.clientId, req.query.date || new Date().toISOString().slice(0, 10)
+    ));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/nutrition-history',
+  description: "Week (?mode=week) or month (?mode=month) history ending at ?date=: per-day status list, averages over LOGGED days only, and days logged/on-target/under/over counts.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
+    const mode = req.query.mode === 'month' ? 'month' : 'week';
+    res.json(await nutritionDigest.getClientNutritionHistory(req.params.clientId, {
+      mode, date: req.query.date,
+    }));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+// Missed-target notification preference — ONE setting per relationship.
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/nutrition-notifications',
+  description: "The trainer's nutrition notification preference for this client.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
+    res.json(await nutritionDigest.getNutritionPrefs(req.user.id, req.params.clientId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+registerRoute(router, {
+  method: 'PUT',
+  path: '/clients/:clientId/nutrition-notifications',
+  body: { target_miss_notifications: 'boolean' },
+  description: "Toggles missed-target notifications for this client (default OFF — the trainer opts in).",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    res.json(await nutritionDigest.setNutritionPrefs(req.user.id, req.params.clientId, req.body || {}));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
 registerRoute(router, {
   method: 'PUT',
   path: '/clients/:clientId/nutrition-suggestions',

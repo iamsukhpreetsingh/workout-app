@@ -7,11 +7,19 @@ import { getDb } from './db';
 import { getCurrentUserId } from './userId';
 import { enqueueUpsert, enqueueDelete } from '../lib/syncEngine';
 import { buildRecentFoods } from '../features/diet/domain/nutritionCore';
+import { isFutureDate } from '../lib/checkinDates';
 
 export const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack', 'other'];
 export const FOOD_SOURCE_TYPES = ['global_database', 'personal_recipe', 'trainer_recipe', 'custom_dish', 'manual'];
 
 const newLocalId = () => `fle_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+// §24 Rule 1 — future food logging is forbidden. Today and past dates are
+// loggable/editable (backfill); future dates are blocked at the DATA LAYER,
+// not just the UI, so no code path can create a future entry.
+export function canLogFoodForDate(date, today = null) {
+  return !isFutureDate(date, today ?? undefined);
+}
 
 export async function logFoodEntry({
   date,
@@ -32,6 +40,7 @@ export async function logFoodEntry({
 }) {
   if (!name || !String(name).trim()) throw new Error('Food name is required');
   if (!date) throw new Error('date is required');
+  if (!canLogFoodForDate(date)) throw new Error('Food cannot be logged for a future date');
   const db = await getDb();
   const userId = getCurrentUserId();
   if (!userId) throw new Error('Not signed in');
