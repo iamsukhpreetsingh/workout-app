@@ -624,6 +624,13 @@ async function backupSummary(userId) {
     measurements: await one('SELECT COUNT(*) AS c FROM measurement_entries WHERE client_id = $1'),
     personal_records: await one('SELECT COUNT(*) AS c FROM backup_personal_records WHERE user_id = $1'),
     progress_photos: await one('SELECT COUNT(*) AS c FROM backup_progress_photos WHERE user_id = $1'),
+    // diet diaries — MUST be counted here: the fresh-install restore gate
+    // (isRestoreNeeded) decides from these counts whether a restore is
+    // required. A diet-only user must never compute total === 0 and skip
+    // the restore that would bring their food logs back.
+    food_log_entries: await one('SELECT COUNT(*) AS c FROM food_log_entries WHERE user_id = $1'),
+    legacy_food_log_entries: await one('SELECT COUNT(*) AS c FROM backup_food_log_entries WHERE user_id = $1'),
+    custom_dishes: await one('SELECT COUNT(*) AS c FROM custom_dishes WHERE user_id = $1'),
   };
 }
 

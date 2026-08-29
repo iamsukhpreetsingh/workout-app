@@ -4,6 +4,7 @@
 // principle as every catalog-sourced value in this app).
 import { getDb } from './db';
 import { getCurrentUserId } from './userId';
+import { api } from '../lib/api';
 import { enqueueUpsert, enqueueDelete } from '../lib/syncEngine';
 
 const newLocalId = () => `dish_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -62,7 +63,59 @@ export async function saveDish({ localId, name, totalServings = 1, ingredients =
   return id;
 }
 
+// Fresh-install hydration safety net: if this user has no local dishes,
+// pull the server copy once (restore step is the primary mechanism; this
+// covers skipped gates and timing gaps — same pattern as My Dishes recipes).
+let dishesLoadPromise = null;
+export async function ensureDishesLoaded() {
+  const userId = getCurrentUserId();
+  if (!userId) return;
+  const db = await getDb();
+  const row = await db.getFirstAsync('SELECT COUNT(*) AS c FROM custom_dishes WHERE user_id = ?', [userId]);
+  if (row.c > 0) return;
+  if (dishesLoadPromise) return dishesLoadPromise;
+  dishesLoadPromise = (async () => {
+    try {
+      const remote = await api('/user/backup/custom-dishes');
+      const db2 = await getDb();
+      for (const d of remote || []) {
+        await db2.runAsync(
+          `INSERT OR REPLACE INTO custom_dishes
+             (local_id, user_id, server_id, synced, name, total_servings, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?)`,
+          [d.local_entity_id, userId, d.id, 1, d.name, d.total_servings || 1, Date.now(), Date.now()]
+        );
+        const have = await db2.getFirstAsync(
+          'SELECT COUNT(*) AS c FROM custom_dish_ingredients WHERE custom_dish_local_id = ?',
+          [d.local_entity_id]
+        );
+        if (have.c === 0) {
+          for (let i = 0; i < (d.ingredients || []).length; i++) {
+            const ing = d.ingredients[i];
+            await db2.runAsync(
+              `INSERT INTO custom_dish_ingredients
+                 (custom_dish_local_id, global_food_id, ingredient_name, quantity, unit,
+                  calories_snapshot, protein_g_snapshot, carbs_g_snapshot, fat_g_snapshot, order_index)
+               VALUES (?,?,?,?,?,?,?,?,?,?)`,
+              [d.local_entity_id, ing.global_food_id ?? null, ing.ingredient_name,
+               ing.quantity ?? 0, ing.unit || 'g',
+               ing.calories_snapshot ?? 0, ing.protein_g_snapshot ?? 0,
+               ing.carbs_g_snapshot ?? 0, ing.fat_g_snapshot ?? 0, i]
+            );
+          }
+        }
+      }
+    } catch {
+      // offline — local view stands, retried next read
+    } finally {
+      dishesLoadPromise = null;
+    }
+  })();
+  return dishesLoadPromise;
+}
+
 export async function listDishes() {
+  await ensureDishesLoaded();
   const db = await getDb();
   const userId = getCurrentUserId();
   if (!userId) return [];
@@ -78,6 +131,7 @@ export async function listDishes() {
 }
 
 export async function getDish(localId) {
+  await ensureDishesLoaded();
   const db = await getDb();
   const userId = getCurrentUserId();
   const d = await db.getFirstAsync(
