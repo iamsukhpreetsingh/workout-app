@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { shareRoutine } from '../lib/share';
 import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import { useColors } from '../theme';
+import { useHeaderActions } from '../components/HeaderActions';
 import { fmtDate } from '../shared/utils/format';
 import LoadError from '../shared/components/LoadError';
 import { ACTIVE_WORKOUT, PLAN_EDITOR } from '../shared/constants/routes';
@@ -41,23 +42,20 @@ export default function PlanDetailScreen({ route, navigation }) {
   );
 
   // Share action in the routine header (same treatment as Session Detail)
-  React.useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <View style={{ flexDirection: 'row' }}>
-          <TouchableOpacity
-            onPress={() => navigation.navigate(PLAN_EDITOR, { planId: plan?.id })}
-            style={{ paddingHorizontal: 8 }}
-          >
-            <Ionicons name="create-outline" size={21} color={colors.text} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => plan && shareRoutine(plan)} style={{ paddingHorizontal: 8 }}>
-            <Ionicons name="share-social-outline" size={21} color={colors.text} />
-          </TouchableOpacity>
-        </View>
-      ),
-    });
-  }, [navigation, plan, colors]);
+  const headerExtra = (
+    <View style={{ flexDirection: 'row' }}>
+      <TouchableOpacity
+        onPress={() => navigation.navigate(PLAN_EDITOR, { planId: plan?.id })}
+        style={{ paddingHorizontal: 8 }}
+      >
+        <Ionicons name="create-outline" size={21} color={colors.text} />
+      </TouchableOpacity>
+      <TouchableOpacity onPress={() => plan && shareRoutine(plan)} style={{ paddingHorizontal: 8 }}>
+        <Ionicons name="share-social-outline" size={21} color={colors.text} />
+      </TouchableOpacity>
+    </View>
+  );
+  useHeaderActions(navigation, [plan, colors], headerExtra);
 
   const startWorkout = (p) => {
     if (workout) {

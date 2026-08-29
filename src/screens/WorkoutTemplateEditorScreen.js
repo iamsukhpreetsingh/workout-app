@@ -18,6 +18,7 @@ import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import RestEditorModal from '../components/RestEditorModal';
 import { groupLabels } from '../store/WorkoutContext';
 import { useColors } from '../theme';
+import { useHeaderActions } from '../components/HeaderActions';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -63,20 +64,20 @@ export default function WorkoutTemplateEditorScreen({ route, navigation }) {
       .catch(() => setWorkoutTags([]));
   }, []);
 
+  const headerExtra = id ? (
+    <TouchableOpacity
+      onPress={confirmDelete}
+      style={{ padding: 8 }}
+    >
+      <Ionicons name="trash-outline" size={20} color={colors.red} />
+    </TouchableOpacity>
+  ) : null;
   React.useLayoutEffect(() => {
     navigation.setOptions({
       title: id ? 'Edit Template' : 'New Template',
-      headerRight: () =>
-        id ? (
-          <TouchableOpacity
-            onPress={confirmDelete}
-            style={{ padding: 8 }}
-          >
-            <Ionicons name="trash-outline" size={20} color={colors.red} />
-          </TouchableOpacity>
-        ) : null,
     });
-  }, [navigation, id, colors]);
+  }, [navigation, id]);
+  useHeaderActions(navigation, [id, colors], headerExtra);
 
   React.useEffect(() => {
     if (!templateId) return;

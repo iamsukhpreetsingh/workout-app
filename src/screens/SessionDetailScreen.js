@@ -8,6 +8,7 @@ import { getPRSetIdsForSession } from '../db/pr';
 import { shareSessionAsRoutine } from '../lib/share';
 import ExerciseDetailSheet from '../components/ExerciseDetailSheet';
 import { useColors } from '../theme';
+import { useHeaderActions } from '../components/HeaderActions';
 import { fmtDate } from '../shared/utils/format';
 import { formatDuration, groupLabels } from '../store/WorkoutContext';
 
@@ -33,27 +34,24 @@ export default function SessionDetailScreen({ route, navigation }) {
   const inputRef = useRef(null);
 
   // Share the performed workout structure (no notes/RPE/timestamps)
-  React.useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () =>
-        session ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <TouchableOpacity
-              onPress={() => setEditingSets((v) => !v)}
-              style={{ paddingHorizontal: 10 }}
-              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-            >
-              <Text style={{ color: editingSets ? colors.primary : colors.text, fontWeight: '800', fontSize: 14 }}>
-                {editingSets ? 'Done' : 'Edit'}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => shareSessionAsRoutine(session)} style={{ paddingHorizontal: 8 }}>
-              <Ionicons name="share-social-outline" size={21} color={colors.text} />
-            </TouchableOpacity>
-          </View>
-        ) : null,
-    });
-  }, [navigation, session, colors, editingSets]);
+  // contextual actions (Edit/Share) ride BESIDE the persistent bell+settings
+  const headerExtra = session ? (
+    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      <TouchableOpacity
+        onPress={() => setEditingSets((v) => !v)}
+        style={{ paddingHorizontal: 10 }}
+        hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+      >
+        <Text style={{ color: editingSets ? colors.primary : colors.text, fontWeight: '800', fontSize: 14 }}>
+          {editingSets ? 'Done' : 'Edit'}
+        </Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPress={() => shareSessionAsRoutine(session)} style={{ paddingHorizontal: 8 }}>
+        <Ionicons name="share-social-outline" size={21} color={colors.text} />
+      </TouchableOpacity>
+    </View>
+  ) : null;
+  useHeaderActions(navigation, [session, colors, editingSets], headerExtra);
 
   const reload = useCallback(() => {
     let mounted = true;

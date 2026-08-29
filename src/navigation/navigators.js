@@ -42,6 +42,7 @@ import WorkoutTemplatesScreen from '../screens/WorkoutTemplatesScreen';
 import WorkoutTemplateEditorScreen from '../screens/WorkoutTemplateEditorScreen';
 import AssignWorkoutPickerScreen from '../screens/AssignWorkoutPickerScreen';
 import ActiveWorkoutMiniBar from '../components/ActiveWorkoutMiniBar';
+import HeaderActions from '../components/HeaderActions';
 import NotificationCenterScreen from '../screens/NotificationCenterScreen';
 import TagManagerScreen from '../screens/TagManagerScreen';
 import SyncSettingsScreen from '../screens/SyncSettingsScreen';
@@ -181,11 +182,15 @@ function TabStack({ children, onSwitchView }) {
   const { colors } = useApp();
   return (
     <Stack.Navigator
-      screenOptions={{
+      screenOptions={({ navigation }) => ({
         headerStyle: { backgroundColor: colors.bg },
         headerTintColor: colors.text,
         contentStyle: { backgroundColor: colors.bg },
-      }}
+        // THE persistent top-bar pair — defaults onto EVERY screen in every
+        // tab, including pushed detail screens; screens with a contextual
+        // action override this and merge via useHeaderActions(extra)
+        headerRight: () => <HeaderActions navigation={navigation} />,
+      })}
     >
       {children}
       {renderDetailScreens(onSwitchView)}
@@ -357,11 +362,12 @@ export function TrainerStack({ onSwitchView }) {
   const { colors } = useApp();
   return (
     <Stack.Navigator
-      screenOptions={{
+      screenOptions={({ navigation }) => ({
         headerStyle: { backgroundColor: colors.bg },
         headerTintColor: colors.text,
         contentStyle: { backgroundColor: colors.bg },
-      }}
+        headerRight: () => <HeaderActions navigation={navigation} />,
+      })}
     >
       <Stack.Screen name={TRAINER_TABS} options={{ headerShown: false }}>
         {(props) => <TrainerTabs {...props} onSwitchView={onSwitchView} />}
