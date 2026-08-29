@@ -5,6 +5,19 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const core = require('../src/data/nutritionCore');
+const digest = require('../src/data/nutritionDigest');
+test('digest mirror: identical language rules server-side', () => {
+  const days = [
+    { dow: 'Mon', isLogged: true, calories: 2200, protein_g: 150, carbs_g: 200, fat_g: 60 },
+    { dow: 'Tue', isLogged: false, calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 },
+    { dow: 'Wed', isLogged: true, calories: 2400, protein_g: 160, carbs_g: 220, fat_g: 70 },
+  ];
+  const s = digest.buildTrendSummary(days, { calories: 2200, protein_g: 180 }, 10);
+  assert.strictEqual(s.avgCalories, 2300);
+  assert.strictEqual(s.calorieSummary, 'right on track');
+  assert.deepStrictEqual(s.notLoggedDow, ['Tue']);
+});
+
 
 test('tolerance boundaries are exact and inclusive (2400 ± 10%)', () => {
   assert.strictEqual(core.evaluateAgainstTarget(2160, 2400, 10), core.STATUS.ON_TARGET);

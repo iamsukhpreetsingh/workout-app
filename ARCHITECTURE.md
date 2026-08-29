@@ -14,7 +14,16 @@ A map for new developers: where to find things, and how the pieces fit.
 
 ```
 src/
-  features/diet/          Diet feature: domain math, AddFoodModal, plan builder UI
+  features/diet/          Diet feature (Diet TAB = log-first nutrition):
+    screens/              DietHomeScreen (daily logger), DietTrendsScreen, BuildDishScreen
+    components/           FoodSearchModal (three-layer search+barcode+recent/frequent),
+                          SetTargetsModal, AddFoodModal (legacy plan-detail flow)
+    domain/               nutritionCore.js — status/tolerance/trend calculator (mirrored in
+                          backend/src/data/nutritionCore.js + nutritionDigest.js buildTrendSummary)
+                          nutritionTargets.js — calorie/macro recommendation (mirrored as
+                          backend/src/data/nutritionTargetsCalc.js)
+    db/                   diary.js (user-scoped food_log_entries), customDishes.js,
+                          foodLog.js (LEGACY plan-scoped diary, still serves old plan screens)
     domain/               nutritionCore.js  — ONE authoritative status/tolerance/follow-through/
                           monitoring calculator (mirrored in backend/src/data/nutritionCore.js)
                           nutritionTargets.js — ONE calorie/macro recommendation calculator
@@ -44,6 +53,9 @@ routes/                    client.js / trainer.js (role-guarded) · backup.js (o
                            upserts under /user/backup/*) · auth, admin, etc. All routes
                            register via registerRoute() so the admin API explorer sees them
 data/                      One service module per domain:
+                           nutritionLog.js (global foods + Open Food Facts caching + custom
+                           dishes + user-scoped food log) · nutritionDigest.js (trend-based
+                           weekly digest, buildTrendSummary) · structureSuggestions.js
                            coachingPlans.js (diet/supplement plan trees) · foodLog.js (food
                            diary backup) · nutritionTargetsService.js (active target
                            versioning + trainer override rules) · nutritionMonitoring.js

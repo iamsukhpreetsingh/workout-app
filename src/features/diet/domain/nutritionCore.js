@@ -295,7 +295,71 @@ export function computeWeeklySummary(daySummaries) {
   };
 }
 
-// ── trainer monitoring (exception-first) ──────────────────────────────────
+// ── trend-based progress (log-first model) ────────────────────────────────
+
+// Plain-language weekly trend (Phase 6/7). days: [{ dow, isLogged, calories,
+// protein_g, carbs_g, fat_g }] oldest → newest. NOT-LOGGED DAYS ARE EXCLUDED
+// from every average — never treated as a 0-calorie day. No pass/fail
+// language anywhere: 'right on track' / 'trending low' / 'trending high' /
+// 'trending up toward target' / 'trending down toward target', computed
+// from the rolling average + whether the most recent 3 logged days are
+// moving toward or away from target. MIRRORED in
+// backend/src/data/nutritionDigest.js (buildTrendSummary) — tests in both
+// packages assert identical language on identical inputs.
+export function buildTrendSummary(days, target, tolerancePct = 10) {
+  const list = Array.isArray(days) ? days : [];
+  const logged = list.filter((d) => d.isLogged);
+  const notLoggedDow = list.filter((d) => !d.isLogged).map((d) => d.dow);
+  const loggedDays = logged.length;
+
+  const avg = (key) =>
+    loggedDays ? logged.reduce((n, d) => n + (Number(d[key]) || 0), 0) / loggedDays : null;
+  const avgCalories = avg('calories');
+  const avgProtein = avg('protein_g');
+  const avgCarbs = avg('carbs_g');
+  const avgFat = avg('fat_g');
+
+  const within = (v, t, tol) =>
+    t != null && v != null && Math.abs(v - t) <= t * (tol / 100);
+
+  let calorieSummary = null;
+  if (target?.calories && avgCalories != null) {
+    const delta = avgCalories - target.calories;
+    const last3 = logged.slice(-3);
+    const first3 = logged.slice(0, 3);
+    const recentDelta = last3.length ? last3.reduce((n, d) => n + d.calories, 0) / last3.length : null;
+    const earlyDelta =
+      first3.length && loggedDays > 3 ? first3.reduce((n, d) => n + d.calories, 0) / first3.length : null;
+    const movingToward =
+      recentDelta != null && earlyDelta != null
+        ? Math.abs(recentDelta - target.calories) < Math.abs(earlyDelta - target.calories)
+        : true;
+    if (within(avgCalories, target.calories, tolerancePct)) calorieSummary = 'right on track';
+    else if (delta < 0) calorieSummary = movingToward ? 'trending up toward target' : 'trending low';
+    else calorieSummary = movingToward ? 'trending down toward target' : 'trending high';
+  }
+
+  const notes = [];
+  if (target?.protein_g && avgProtein != null && !within(avgProtein, target.protein_g, 15) && avgProtein < target.protein_g) {
+    notes.push('Protein has been trending a little low lately');
+  }
+  if (target?.fat_g && avgFat != null && avgFat > target.fat_g * 1.2) {
+    notes.push('Fat has been trending above target lately');
+  }
+
+  return {
+    loggedDays,
+    totalDays: list.length,
+    notLoggedDow,
+    avgCalories: avgCalories != null ? Math.round(avgCalories) : null,
+    avgProtein: avgProtein != null ? Math.round(avgProtein) : null,
+    avgCarbs: avgCarbs != null ? Math.round(avgCarbs) : null,
+    avgFat: avgFat != null ? Math.round(avgFat) : null,
+    withinTolerance: within(avgCalories, target?.calories, tolerancePct),
+    calorieSummary,
+    notes,
+  };
+}
 
 // dayOutcomes: ordered oldest → newest over the monitoring window, one entry
 // per calendar day:

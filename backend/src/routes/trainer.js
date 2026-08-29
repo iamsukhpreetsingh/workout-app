@@ -754,6 +754,75 @@ registerRoute(router, {
   }
 }, [requireAuth, requireRole('trainer')]);
 
+// ---- Trend-based monitoring (log-first model): weekly digest, not
+// compliance policing ----
+const nutritionDigest = require('../data/nutritionDigest');
+const structureSuggestions = require('../data/structureSuggestions');
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/nutrition-digest',
+  description: "Trend-based weekly digest for a client: average intake over LOGGED days, target status (daily or rolling weekly_average mode), plain-language trend lines, logging gaps, and structure suggestions. No compliance percentages.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 3), 30);
+    res.json(await nutritionDigest.getTrainerWeeklyDigest(req.user.id, req.params.clientId, days));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/food-diary',
+  description: "Read-only browse of a client's actual food diary entries (what they really ate) within an optional date range.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    res.json(await nutritionDigest.getClientFoodLogForTrainer(
+      req.user.id, req.params.clientId, req.query.from, req.query.to
+    ));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+registerRoute(router, {
+  method: 'PUT',
+  path: '/clients/:clientId/nutrition-suggestions',
+  description: 'Sets the client\'s advisory structure suggestions (free-text meal-shape guidance; never a requirement, never affects target status).',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    res.json(await structureSuggestions.setStructureSuggestions(req.user.id, req.params.clientId, req.body));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/nutrition-suggestions',
+  description: "Lists the client's advisory structure suggestions (trainer view).",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
+    res.json(await structureSuggestions.getStructureSuggestions(req.params.clientId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
 
 
 

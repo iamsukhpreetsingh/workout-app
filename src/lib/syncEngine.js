@@ -619,6 +619,96 @@ const HANDLERS = {
       return p && p.synced === 0 ? [e.plan_ref] : [];
     },
   },
+
+  // food_log: the LOG-FIRST diary (migration v39) — user-scoped entries,
+  // no plan container. Stable local ids + server upserts keyed
+  // (user_id, local_entity_id) keep repeated offline syncs idempotent.
+  food_log: {
+    path: '/user/backup/food-log-entries',
+    async upsert(localId) {
+      const db = await getDb();
+      const e = await db.getFirstAsync(
+        'SELECT * FROM food_log_entries WHERE local_id = ? AND (user_id IS NULL OR user_id = ?)',
+        [localId, getCurrentUserId()]
+      );
+      if (!e) return;
+      const rows = await api(this.path, {
+        method: 'POST',
+        body: [{
+          local_entity_id: e.local_id,
+          log_date: e.log_date,
+          meal_type: e.meal_type,
+          name: e.name,
+          calories: e.calories,
+          protein_g: e.protein_g,
+          carbs_g: e.carbs_g,
+          fat_g: e.fat_g,
+          fiber_g: e.fiber_g,
+          sugar_g: e.sugar_g,
+          sodium_mg: e.sodium_mg,
+          quantity: e.quantity || 1,
+          serving_unit: e.serving_unit || 'serving',
+          food_source_type: e.food_source_type || 'manual',
+          food_source_id: e.food_source_id ?? null,
+          suggested_by_trainer: e.suggested_by_trainer === 1,
+          logged_at: new Date(e.logged_at || Date.now()).toISOString(),
+        }],
+      });
+      await db.runAsync(
+        'UPDATE food_log_entries SET synced = 1, server_id = ? WHERE local_id = ?',
+        [rows?.[0]?.id || null, localId]
+      );
+    },
+    async remove(localId) {
+      await api(`${this.path}/${encodeURIComponent(localId)}`, { method: 'DELETE' });
+    },
+    deps: null,
+  },
+
+  // custom_dish: the ingredient-based dish builder (snapshot macros inside
+  // each ingredient row). Ingredients ride INSIDE the dish payload.
+  custom_dish: {
+    path: '/user/backup/custom-dishes',
+    async upsert(localId) {
+      const db = await getDb();
+      const d = await db.getFirstAsync(
+        'SELECT * FROM custom_dishes WHERE local_id = ? AND (user_id IS NULL OR user_id = ?)',
+        [localId, getCurrentUserId()]
+      );
+      if (!d) return;
+      const ings = await db.getAllAsync(
+        'SELECT * FROM custom_dish_ingredients WHERE custom_dish_local_id = ? ORDER BY order_index',
+        [localId]
+      );
+      const rows = await api(this.path, {
+        method: 'POST',
+        body: {
+          local_entity_id: d.local_id,
+          name: d.name,
+          total_servings: d.total_servings || 1,
+          ingredients: ings.map((i) => ({
+            global_food_id: i.global_food_id || null,
+            ingredient_name: i.ingredient_name,
+            quantity: i.quantity,
+            unit: i.unit,
+            calories_snapshot: i.calories_snapshot,
+            protein_g_snapshot: i.protein_g_snapshot,
+            carbs_g_snapshot: i.carbs_g_snapshot,
+            fat_g_snapshot: i.fat_g_snapshot,
+          })),
+        },
+      });
+      await db.runAsync(
+        'UPDATE custom_dishes SET synced = 1, server_id = ? WHERE local_id = ?',
+        [rows?.[0]?.id || null, localId]
+      );
+    },
+    async remove(localId) {
+      await api(`${this.path}/${encodeURIComponent(localId)}`, { method: 'DELETE' });
+    },
+    deps: null,
+  },
+
   supplement_plan: {
     path: '/user/backup/supplement-plans',
     async upsert(localId) {
@@ -990,6 +1080,14 @@ export async function resyncQueueForCurrentUser() {
     await db.getAllAsync(
       'SELECT local_id FROM local_food_log_entries WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
     'diet_food_log', (r) => r.local_id);
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT local_id FROM food_log_entries WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'food_log', (r) => r.local_id);
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT local_id FROM custom_dishes WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'custom_dish', (r) => r.local_id);
   await enqueueAll(
     await db.getAllAsync(
       'SELECT diet_plan_local_id, date FROM local_diet_checkins WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),

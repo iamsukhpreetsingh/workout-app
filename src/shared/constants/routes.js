@@ -10,12 +10,15 @@ export const RESET_PASSWORD = 'ResetPassword';
 
 // User-view tabs
 export const TAB_HOME = 'Home';
+export const TAB_DIET = 'Diet';
 export const TAB_HISTORY = 'History';
 export const TAB_PLANS = 'Plans';
 export const TAB_PROGRESS = 'Progress';
 export const MAIN_TABS = 'Main';
 
 // User-view stack screens
+export const DIET_TRENDS = 'DietTrends';
+export const BUILD_DISH = 'BuildDish';
 export const SESSION_DETAIL = 'SessionDetail';
 export const PLAN_DETAIL = 'PlanDetail';
 export const PLAN_EDITOR = 'PlanEditor';

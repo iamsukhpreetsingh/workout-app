@@ -668,3 +668,55 @@ test('targets: weight change alters the recommendation inputs comparison', () =>
   assert.strictEqual(recommendationInputsChanged({ weight_kg: '82' }, { weight_kg: 82 }), false);
   assert.strictEqual(recommendationInputsChanged({ primary_goal: 'muscle_gain' }, { primary_goal: 'weight_loss' }), true);
 });
+
+// ---- Trend-based progress (log-first model) ----
+import { buildTrendSummary } from '../src/features/diet/domain/nutritionCore.js';
+
+test('trend: not-logged days are excluded from averages, never counted as zero', () => {
+  const days = [
+    { dow: 'Mon', isLogged: true, calories: 2200, protein_g: 150, carbs_g: 200, fat_g: 60 },
+    { dow: 'Tue', isLogged: false, calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 },
+    { dow: 'Wed', isLogged: true, calories: 2400, protein_g: 160, carbs_g: 220, fat_g: 70 },
+  ];
+  const s = buildTrendSummary(days, { calories: 2200, protein_g: 180, carbs_g: 250, fat_g: 70 }, 10);
+  // average over LOGGED days only: (2200+2400)/2 = 2300 — a zero for Tue would give 1533
+  assert.strictEqual(s.avgCalories, 2300);
+  assert.strictEqual(s.loggedDays, 2);
+  assert.deepStrictEqual(s.notLoggedDow, ['Tue']);
+  assert.strictEqual(s.withinTolerance, true);
+  assert.strictEqual(s.calorieSummary, 'right on track');
+});
+
+test('trend: declining-protein data produces the low-protein trend note', () => {
+  const days = [0, 1, 2].map((i) => ({
+    dow: ['Mon', 'Tue', 'Wed'][i],
+    isLogged: true,
+    calories: 2200,
+    protein_g: 180 - i * 30, // 180 → 150 → 120, avg 150 vs 180 target = well below
+    carbs_g: 250,
+    fat_g: 70,
+  }));
+  const s = buildTrendSummary(days, { calories: 2200, protein_g: 180 }, 10);
+  assert.ok(s.notes.some((n) => n.startsWith('Protein has been trending a little low')));
+});
+
+test('trend: no target → totals without verdict language', () => {
+  const s = buildTrendSummary([{ dow: 'Mon', isLogged: true, calories: 1800 }], null, 10);
+  assert.strictEqual(s.avgCalories, 1800);
+  assert.strictEqual(s.calorieSummary, null);
+  assert.strictEqual(s.notes.length, 0);
+});
+
+test('trend: recent 3-day improvement reads as moving toward target', () => {
+  const days = [
+    { dow: 'Mon', isLogged: true, calories: 2600, protein_g: 150, carbs_g: 200, fat_g: 60 },
+    { dow: 'Tue', isLogged: true, calories: 2700, protein_g: 150, carbs_g: 200, fat_g: 60 },
+    { dow: 'Wed', isLogged: true, calories: 2600, protein_g: 150, carbs_g: 200, fat_g: 60 },
+    { dow: 'Thu', isLogged: true, calories: 2400, protein_g: 150, carbs_g: 200, fat_g: 60 },
+    { dow: 'Fri', isLogged: true, calories: 2300, protein_g: 150, carbs_g: 200, fat_g: 60 },
+  ];
+  const s = buildTrendSummary(days, { calories: 2200 }, 10);
+  // avg 2520 → above target, but the recent 3 days (2300) sit closer to 2200
+  // than the first 3 (2633) — trending DOWN toward target, not "trending high"
+  assert.strictEqual(s.calorieSummary, 'trending down toward target');
+});

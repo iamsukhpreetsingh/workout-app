@@ -25,6 +25,7 @@ import { fmtVolume } from '../shared/utils/format';
 import { fmtDuration, relativeTime, isoDay, weeklyVolumeBuckets, TYPE_TAG } from '../features/coaching/utils/clientAnalytics';
 import OverviewPanel from '../features/coaching/components/OverviewPanel';
 import CoachingList from '../features/coaching/components/CoachingList';
+import NutritionDigestCard from '../features/coaching/components/NutritionDigestCard';
 import Segmented from '../features/coaching/components/Segmented';
 import ClientWorkoutsTab from '../features/coaching/components/ClientWorkoutsTab';
 import { ASSIGNED_PLAN_DETAIL, ASSIGN_WORKOUT, ASSIGN_WORKOUT_PICKER, COACHING_PLAN_DETAIL , DIET_PLAN_BUILDER, SUPPLEMENT_PLAN_BUILDER } from '../shared/constants/routes';
@@ -626,6 +627,10 @@ export default function ClientDetailScreen({ route, navigation }) {
           detailCache={detailCache}
           toggleExpand={toggleExpand}
         />
+      )}
+
+      {activeTab === 'diet' && (
+        <NutritionDigestCard clientId={clientId} clientName={clientName} />
       )}
 
       {activeTab === 'diet' && (

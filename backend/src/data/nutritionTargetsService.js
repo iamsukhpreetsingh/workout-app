@@ -69,7 +69,7 @@ async function getVersionForDate(userId, dateStr = todayStr()) {
   return rows[0] || null;
 }
 
-async function insertVersion(userId, { calories, protein_g, carbs_g, fat_g }, { source, note = null, recommendedSnapshot = null, createdBy = null }) {
+async function insertVersion(userId, { calories, protein_g, carbs_g, fat_g, tolerance_pct, target_mode }, { source, note = null, recommendedSnapshot = null, createdBy = null, setBy = null }) {
   if (!calories || calories <= 0 || protein_g == null || carbs_g == null || fat_g == null) {
     throw new HttpError(400, 'A complete target set is required');
   }
@@ -77,15 +77,18 @@ async function insertVersion(userId, { calories, protein_g, carbs_g, fat_g }, { 
   for (const m of [protein_g, carbs_g, fat_g]) {
     if (Number(m) < 0 || Number(m) > 1000) throw new HttpError(400, 'Macro targets must be between 0 and 1000 g');
   }
+  const mode = target_mode === 'weekly_average' ? 'weekly_average' : 'daily';
+  const tol = Number.isFinite(Number(tolerance_pct)) && Number(tolerance_pct) >= 1 && Number(tolerance_pct) <= 50
+    ? Math.round(Number(tolerance_pct)) : 10;
   const latest = await getLatestVersion(userId);
   const { rows } = await query(
     `INSERT INTO user_nutrition_targets
        (user_id, version_number, effective_from, calories, protein_g, carbs_g, fat_g,
-        target_source, override_note, recommended_snapshot, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        target_source, override_note, recommended_snapshot, created_by, target_mode, set_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
     [userId, (latest?.version_number || 0) + 1, todayStr(),
      Math.round(Number(calories)), Number(protein_g), Number(carbs_g), Number(fat_g),
-     source, note, recommendedSnapshot ? JSON.stringify(recommendedSnapshot) : null, createdBy]
+     source, note, recommendedSnapshot ? JSON.stringify(recommendedSnapshot) : null, createdBy, mode, setBy]
   );
   return rows[0];
 }
@@ -107,9 +110,23 @@ async function syncAutomaticTargetAfterProfileSave(userId) {
   const { recommendation } = await getRecommendation(userId);
   if (!recommendation) return null; // incomplete profile — nothing to sync
   const latest = await getLatestVersion(userId);
-  if (latest && latest.target_source === 'trainer_override') return null;
+  // user-set ('self') and trainer_override targets are NEVER silently
+  // overwritten by a profile change — the updated recommendation is simply
+  // recomputed and available for review
+  if (latest && (latest.target_source === 'trainer_override' || latest.target_source === 'self')) return null;
   if (latest && sameNumbers(latest, recommendation)) return null; // no change, no new version
   return insertVersion(userId, recommendation, { source: 'automatic' });
+}
+
+// USER-SET targets (Phase 5): a user without a trainer — or one who wants
+// full manual control — sets their own calorie/macro targets. Opens a new
+// version (history preserved) with source 'self'.
+async function setSelfTargets(userId, { calories, protein_g, carbs_g, fat_g, tolerance_pct, target_mode }) {
+  return insertVersion(
+    userId,
+    { calories, protein_g, carbs_g, fat_g, tolerance_pct, target_mode },
+    { source: 'self', setBy: 'self' }
+  );
 }
 
 // What the app + diet system should use. active === null means no version
@@ -132,6 +149,9 @@ async function getActiveNutritionTargets(userId, dateStr = todayStr()) {
           carbs_g: Number(active.carbs_g),
           fat_g: Number(active.fat_g),
           target_source: active.target_source,
+          set_by: active.set_by || (active.target_source === 'trainer_override' ? 'trainer' : active.target_source === 'self' ? 'self' : null),
+          target_mode: active.target_mode || 'daily',
+          tolerance_pct: active.tolerance_pct ?? 10,
           override_note: active.override_note,
           recommended_snapshot: active.recommended_snapshot,
           effective_from: active.effective_from,
@@ -182,6 +202,7 @@ module.exports = {
   getActiveNutritionTargets,
   getVersionForDate,
   syncAutomaticTargetAfterProfileSave,
+  setSelfTargets,
   setTrainerOverride,
   useTrainerRecommendation,
 };

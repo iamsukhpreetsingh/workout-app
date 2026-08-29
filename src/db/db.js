@@ -944,6 +944,84 @@ const MIGRATIONS = [
       ON local_food_log_entries(plan_ref, log_date)`);
   },
 
+  // v39: LOG-FIRST nutrition (the daily food log is the core entity for
+  // every user — targets/structure are overlays, never the container).
+  //
+  // 1. food_log_entries (user-scoped, no plan_ref) — the ONE diary table.
+  //    Prior plan-scoped rows in local_food_log_entries are MIGRATED in
+  //    place here (source vocabulary maps to food_source_type; pre-workout/
+  //    post-workout meal types map to 'other'). The old table stays as
+  //    read-only history and the old plan-scoped screens keep working.
+  // 2. custom_dishes + custom_dish_ingredients — ingredient-based dish
+  //    builder; ingredient macros are snapshots at add-time.
+  // 3. user_settings.show_meal_suggestions — client toggle for the advisory
+  //    structure-suggestions section (default on).
+  async (db) => {
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS food_log_entries (
+      local_id TEXT PRIMARY KEY,
+      user_id TEXT,
+      server_id TEXT,
+      synced INTEGER NOT NULL DEFAULT 0,
+      log_date TEXT NOT NULL,
+      meal_type TEXT NOT NULL DEFAULT 'other',
+      name TEXT NOT NULL,
+      calories REAL, protein_g REAL, carbs_g REAL, fat_g REAL,
+      fiber_g REAL, sugar_g REAL, sodium_mg REAL,
+      quantity REAL NOT NULL DEFAULT 1,
+      serving_unit TEXT NOT NULL DEFAULT 'serving',
+      food_source_type TEXT NOT NULL DEFAULT 'manual'
+        CHECK (food_source_type IN ('global_database','personal_recipe','trainer_recipe','custom_dish','manual')),
+      food_source_id TEXT,
+      suggested_by_trainer INTEGER NOT NULL DEFAULT 0,
+      logged_at INTEGER NOT NULL
+    )`);
+    await db.execAsync(`CREATE INDEX IF NOT EXISTS idx_food_diary_user_date
+      ON food_log_entries(user_id, log_date)`);
+
+    // Phase 8: carry prior plan-scoped detailed entries into the new diary.
+    // Idempotent by primary key (INSERT OR IGNORE on local_id).
+    await db.runAsync(`INSERT OR IGNORE INTO food_log_entries
+        (local_id, user_id, server_id, synced, log_date, meal_type, name,
+         calories, protein_g, carbs_g, fat_g, quantity, serving_unit,
+         food_source_type, food_source_id, logged_at)
+      SELECT local_id, user_id, server_id, synced, log_date,
+        CASE lower(COALESCE(meal_type,''))
+          WHEN 'breakfast' THEN 'breakfast' WHEN 'lunch' THEN 'lunch'
+          WHEN 'dinner' THEN 'dinner' WHEN 'snack' THEN 'snack'
+          ELSE 'other' END,
+        name, calories, protein_g, carbs_g, fat_g, quantity, 'serving',
+        'manual', planned_item_ref, logged_at
+      FROM local_food_log_entries`);
+
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS custom_dishes (
+      local_id TEXT PRIMARY KEY,
+      user_id TEXT,
+      server_id TEXT,
+      synced INTEGER NOT NULL DEFAULT 0,
+      name TEXT NOT NULL,
+      total_servings REAL NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`);
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS custom_dish_ingredients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      custom_dish_local_id TEXT NOT NULL,
+      global_food_id TEXT,
+      ingredient_name TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      unit TEXT NOT NULL DEFAULT 'g',
+      calories_snapshot REAL NOT NULL DEFAULT 0,
+      protein_g_snapshot REAL NOT NULL DEFAULT 0,
+      carbs_g_snapshot REAL NOT NULL DEFAULT 0,
+      fat_g_snapshot REAL NOT NULL DEFAULT 0,
+      order_index INTEGER NOT NULL DEFAULT 0
+    )`);
+    await db.execAsync(`CREATE INDEX IF NOT EXISTS idx_custom_dish_ingredients_dish
+      ON custom_dish_ingredients(custom_dish_local_id, order_index)`);
+
+    await addColumnSafe(db, 'user_settings', 'show_meal_suggestions', 'INTEGER NOT NULL DEFAULT 1');
+  },
+
 ];
 
 async function backfillPRs(db) {

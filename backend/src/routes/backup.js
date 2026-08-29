@@ -213,6 +213,8 @@ router.delete('/backup/diet-swaps/:itemRef/:date', requireAuth, async (req, res)
 // plan_server_id is set by the client ONLY for trainer-assigned plans and
 // drives trainer monitoring visibility (see foodLog.js).
 const foodLog = require('../data/foodLog');
+// Log-first nutrition layer (migration 040) — search, dishes, user-scoped diary
+const nutritionLog = require('../data/nutritionLog');
 
 router.post('/backup/food-log', requireAuth, async (req, res) => {
   try {
@@ -233,6 +235,61 @@ router.get('/backup/food-log', requireAuth, async (req, res) => {
 router.delete('/backup/food-log/:localId', requireAuth, async (req, res) => {
   try {
     res.json(await foodLog.deleteFoodLogEntry(req.user.id, req.params.localId));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// ── Log-first food diary (migration 040) — user-scoped, offline-first ──
+// Entries are scoped to the logging user + date, never to a plan. Upserts
+// keyed (user_id, local_entity_id) → idempotent under repeated offline syncs.
+router.post('/backup/food-log-entries', requireAuth, async (req, res) => {
+  try {
+    res.status(201).json(await nutritionLog.upsertFoodLogEntries(req.user.id, req.body));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+router.get('/backup/food-log-entries', requireAuth, async (req, res) => {
+  try {
+    res.json(await nutritionLog.listFoodLogEntries(req.user.id, req.query.since));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+router.delete('/backup/food-log-entries/:localId', requireAuth, async (req, res) => {
+  try {
+    res.json(await nutritionLog.deleteFoodLogEntry(req.user.id, req.params.localId));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// ── Custom dishes (ingredient-based dish builder, snapshot macros) ──────
+router.post('/backup/custom-dishes', requireAuth, async (req, res) => {
+  try {
+    const list = Array.isArray(req.body) ? req.body : [req.body];
+    const rows = [];
+    for (const p of list) rows.push(await nutritionLog.upsertCustomDish(req.user.id, p));
+    res.status(201).json(rows);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+router.get('/backup/custom-dishes', requireAuth, async (req, res) => {
+  try {
+    res.json(await nutritionLog.listCustomDishes(req.user.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+router.delete('/backup/custom-dishes/:localId', requireAuth, async (req, res) => {
+  try {
+    res.json(await nutritionLog.deleteCustomDish(req.user.id, req.params.localId));
   } catch (e) {
     httpError(res, e);
   }
