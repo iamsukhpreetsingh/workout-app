@@ -71,7 +71,12 @@ export default function ActivityMapsCard({ clientId, clientName, onFocusDay }) {
               return (
                 <TouchableOpacity
                   key={ri}
-                  style={[styles.cell, { backgroundColor: colors[c.colorKey] || colors.cardLight }, on && styles.cellOn]}
+                  style={[
+                    styles.cell,
+                    { backgroundColor: colors[c.colorKey] || colors.cardLight },
+                    on && styles.cellOn,
+                    day.isToday && styles.cellToday,
+                  ]}
                   onPress={() => onSelect(day)}
                 >
                   <Text style={[styles.cellSymbol, { color: c.colorKey === 'cardLight' ? colors.textDim : '#fff' }]}>
@@ -135,9 +140,29 @@ export default function ActivityMapsCard({ clientId, clientName, onFocusDay }) {
         </View>
       )}
 
-      {/* DIET MAP */}
-      <Text style={styles.mapTitle}>DIET — LAST 12 WEEKS</Text>
-      {renderGrid(dietColorOf, (day) => setSel(day.date), sel)}
+      {/* DIET MAP + metrics from the SAME daily data (§36) */}
+      <Text style={styles.mapTitle}>NUTRITION ACTIVITY — LAST 12 WEEKS</Text>
+      <View style={styles.mapMetricsRow}>
+        <View style={styles.mapSide}>
+          {renderGrid(dietColorOf, (day) => setSel(day.date), sel)}
+        </View>
+        <View style={styles.metricsCol}>
+          <Text style={styles.metricHead}>This Week</Text>
+          <Text style={[styles.metricVal, NUMS]}>{map.week.dietGreen} of {map.week.dietLogged || 0}</Text>
+          <Text style={styles.metricLabel}>logged days on target</Text>
+          <Text style={styles.metricHead}>This Month</Text>
+          <Text style={[styles.metricVal, NUMS]}>{map.month.dietGreen} of {map.month.dietLogged || 0}</Text>
+          <Text style={styles.metricLabel}>logged days on target</Text>
+          {map.month.dietAvgCalories != null && (
+            <>
+              <Text style={styles.metricHead}>Avg Calories</Text>
+              <Text style={[styles.metricVal, NUMS]}>
+                {map.month.dietAvgCalories.toLocaleString()}{map.month.dietAvgTarget ? ` / ${Number(map.month.dietAvgTarget).toLocaleString()}` : ''}
+              </Text>
+            </>
+          )}
+        </View>
+      </View>
       <View style={styles.legendRow}>
         {['green', 'yellow', 'red', 'not_logged', 'in_progress'].map((k) => (
           <View key={k} style={styles.legendItem}>
@@ -150,7 +175,10 @@ export default function ActivityMapsCard({ clientId, clientName, onFocusDay }) {
       {/* diet day detail panel */}
       {selDiet && (
         <View style={styles.detailPanel}>
-          <Text style={[styles.detailDate, NUMS]}>{selDiet.date} {selDiet.isToday ? '· Today' : ''}</Text>
+          <Text style={[styles.detailDate, NUMS]}>
+            {new Date(`${selDiet.date}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+            {selDiet.isToday ? ' · Today' : ''}
+          </Text>
           <Text style={styles.detailStatus}>
             {dietColorOf(selDiet).symbol} {dietColorOf(selDiet).label}
           </Text>
@@ -183,8 +211,22 @@ export default function ActivityMapsCard({ clientId, clientName, onFocusDay }) {
 
       {/* WORKOUT MAP — sessions are all-or-nothing in this app and plans are
           not date-scheduled: green = trained that day, grey = rest/no data */}
-      <Text style={styles.mapTitle}>WORKOUT — LAST 12 WEEKS</Text>
-      {renderGrid(workoutColorOf, (day) => setSel(day.date), sel)}
+      <Text style={styles.mapTitle}>WORKOUT ACTIVITY — LAST 12 WEEKS</Text>
+      <View style={styles.mapMetricsRow}>
+        <View style={styles.mapSide}>
+          {renderGrid(workoutColorOf, (day) => setSel(day.date), sel)}
+        </View>
+        <View style={styles.metricsCol}>
+          <Text style={styles.metricHead}>This Week</Text>
+          <Text style={[styles.metricVal, NUMS]}>{map.week.workoutSessions}</Text>
+          <Text style={styles.metricLabel}>sessions</Text>
+          <Text style={styles.metricHead}>This Month</Text>
+          <Text style={[styles.metricVal, NUMS]}>{map.month.workoutSessions}</Text>
+          <Text style={styles.metricLabel}>sessions</Text>
+          <Text style={styles.metricHead}>Workout Streak</Text>
+          <Text style={[styles.metricVal, NUMS]}>{map.streaks.workout}</Text>
+        </View>
+      </View>
       <View style={styles.legendRow}>
         {[
           { k: 'green', label: 'Workout Completed' },
@@ -202,7 +244,10 @@ export default function ActivityMapsCard({ clientId, clientName, onFocusDay }) {
         if (!d) return null;
         return (
           <View style={styles.detailPanel}>
-            <Text style={[styles.detailDate, NUMS]}>{d.date} {d.isToday ? '· Today' : ''}</Text>
+            <Text style={[styles.detailDate, NUMS]}>
+              {new Date(`${d.date}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+              {d.isToday ? ' · Today' : ''}
+            </Text>
             {d.workoutSessions > 0 ? (
               <>
                 <Text style={styles.detailStatus}>✓ Workout Completed</Text>
@@ -248,6 +293,13 @@ const makeStyles = (colors) =>
       marginTop: 14, marginBottom: 6,
     },
     gridWrap: { flexDirection: 'row', gap: 4 },
+    mapMetricsRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+    mapSide: { flex: 1, minWidth: 0 },
+    metricsCol: { width: 116, backgroundColor: colors.cardLight, borderRadius: 10, padding: 9 },
+    metricHead: { color: colors.textDim, fontSize: 9, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 6 },
+    metricVal: { color: colors.text, fontSize: 14, fontWeight: '800', marginTop: 1 },
+    metricLabel: { color: colors.textDim, fontSize: 9 },
+    cellToday: { borderWidth: 1.5, borderColor: colors.primary },
     dowCol: { justifyContent: 'space-between', height: 7 * 17 },
     dowLabel: { color: colors.textDim, fontSize: 8, fontWeight: '700', lineHeight: 17 },
     weekCol: { gap: 3 },

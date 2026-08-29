@@ -664,11 +664,27 @@ async function getClientActivityMap(trainerId, clientId, weeks = 12) {
     attention.push({ level: 'yellow', text: 'Logged most days but no green (on-target) days this week.' });
   }
 
+  // month slice (last 30 days of the window) — SAME source as the map, so
+  // the beside-the-map metrics can never disagree with it (§36)
+  const month = days.slice(-30);
+  const mLogged = month.filter((d) => d.dietLogged);
+  const mGreen = month.filter((d) => mLogged.length && d.dietColor === 'green').length;
+  const mCalAvg = mLogged.length
+    ? Math.round(mLogged.reduce((n, d) => n + d.calories, 0) / mLogged.length)
+    : null;
+
   return {
     window_days: windowDays,
     start, end,
     days,
     streaks: computeStreaks(days),
+    month: {
+      dietLogged: mLogged.length,
+      dietGreen: mGreen,
+      dietAvgCalories: mCalAvg,
+      dietAvgTarget: mLogged.some((d) => d.caloriesTarget) ? targetFor(end)?.calories ?? null : null,
+      workoutSessions: month.reduce((n, d) => n + d.workoutSessions, 0),
+    },
     week: {
       dietLogged: logged7.length,
       dietGreen: green7,
