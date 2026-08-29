@@ -24,6 +24,7 @@ class HttpError extends Error {
 }
 
 const dayStr = (d) => d.toISOString().slice(0, 10);
+const todayStr = () => dayStr(new Date());
 
 // The trend engine — pure, mirrored in the mobile domain module
 // (src/features/diet/domain/nutritionCore.js buildTrendSummary) with tests
