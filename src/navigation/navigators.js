@@ -109,9 +109,16 @@ const Stack = createNativeStackNavigator();
 // navigation stays visible on detail screens (persistent shell, §1/§2).
 // Immersive/modal screens (ACTIVE_WORKOUT live workout) stay at the ROOT
 // stack above the tabs — the deliberate exception (§3).
-function DetailScreens({ onSwitchView }) {
+// Render function (NOT a component): React Navigation only accepts Screen/
+// Group/Fragment as direct navigator children, so the pool must expand into
+// actual <Stack.Screen> elements rather than being rendered as one component.
+function SettingsScreenWrapper({ onSwitchView, ...props }) {
   const { user } = useAuth();
   const isTrainer = user?.role === 'trainer';
+  return <SettingsScreen {...props} onSwitchView={isTrainer ? onSwitchView : undefined} />;
+}
+
+function renderDetailScreens(onSwitchView) {
   return (
     <>
       <Stack.Screen name={SESSION_DETAIL} component={SessionDetailScreen} options={{ title: 'Workout' }} />
@@ -119,7 +126,7 @@ function DetailScreens({ onSwitchView }) {
       <Stack.Screen name={PLAN_EDITOR} component={PlanEditorScreen} options={{ title: 'New Routine' }} />
       <Stack.Screen name={EXERCISE_PROGRESS} component={ExerciseProgressScreen} options={{ title: 'Exercise' }} />
       <Stack.Screen name={SETTINGS}>
-        {(props) => <SettingsScreen {...props} onSwitchView={isTrainer ? onSwitchView : undefined} />}
+        {(props) => <SettingsScreenWrapper {...props} onSwitchView={onSwitchView} />}
       </Stack.Screen>
       <Stack.Screen name={SYNC_SETTINGS} component={SyncSettingsScreen} options={{ title: 'Data & Sync' }} />
       <Stack.Screen name={INTAKE_FORM} component={IntakeFormScreen} options={{ title: 'Health Profile' }} />
@@ -187,7 +194,7 @@ function TabStack({ children, onSwitchView }) {
       }}
     >
       {children}
-      <DetailScreens onSwitchView={onSwitchView} />
+      {renderDetailScreens(onSwitchView)}
     </Stack.Navigator>
   );
 }
