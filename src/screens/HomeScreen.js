@@ -17,7 +17,7 @@ import { NotificationBell } from '../components/NotificationBell';
 import { fmtVolume } from '../shared/utils/format';
 import { getSyncStatus, addSyncListener, initConnectivityListener, syncPending, getSyncSettings } from '../lib/sync';
 // import { ACTIVE_WORKOUT, MAIN_TABS, NOTIFICATION_CENTER, PLAN_DETAIL, PROFILE, SESSION_DETAIL, SETTINGS, TAB_HISTORY } from '../shared/constants/routes';
-import { ACTIVE_WORKOUT, CLIENT_ASSIGNED_DETAIL, MAIN_TABS, NOTIFICATION_CENTER, PLAN_DETAIL, PROFILE, SESSION_DETAIL, SETTINGS, TAB_HISTORY } from '../shared/constants/routes';
+import { ACTIVE_WORKOUT, CLIENT_ASSIGNED_DETAIL, HISTORY, NOTIFICATION_CENTER, PLAN_DETAIL, PROFILE, SESSION_DETAIL, SETTINGS } from '../shared/constants/routes';
 const NUMS = { fontVariant: ['tabular-nums'] };
 
 function smartWorkoutName() {
@@ -345,7 +345,7 @@ export default function HomeScreen({ navigation }) {
                 <View style={styles.sectionHeaderRow}>
                   <Text style={styles.sectionHeader}>Recent Workouts</Text>
                   <TouchableOpacity
-                    onPress={() => navigation.navigate(MAIN_TABS, { screen: TAB_HISTORY })}
+                    onPress={() => navigation.navigate(HISTORY)}
                   >
                     <Text style={styles.seeAll}>see all</Text>
                   </TouchableOpacity>

@@ -59,7 +59,7 @@ import {
   TAB_DIET,
   DIET_TRENDS,
   BUILD_DISH,
-  TAB_HISTORY,
+  HISTORY,
   TAB_PLANS,
   TAB_PROGRESS,
   MAIN_TABS,
@@ -102,7 +102,6 @@ const Stack = createNativeStackNavigator();
 const TAB_ICONS = {
   [TAB_HOME]: 'home',
   [TAB_DIET]: 'nutrition',
-  [TAB_HISTORY]: 'calendar',
   [TAB_PLANS]: 'list',
   [TAB_PROGRESS]: 'trending-up',
 };
@@ -131,7 +130,6 @@ export function Tabs() {
     >
       <Tab.Screen name={TAB_HOME} component={HomeScreen} options={{ title: 'Workout Tracker' }} />
       <Tab.Screen name={TAB_DIET} component={DietHomeScreen} />
-      <Tab.Screen name={TAB_HISTORY} component={HistoryScreen} />
       <Tab.Screen name={TAB_PLANS} component={PlansScreen} options={{ title: 'Routines' }} />
       <Tab.Screen name={TAB_PROGRESS} component={ProgressScreen} />
     </Tab.Navigator>
@@ -189,6 +187,7 @@ export function MainStack({ onSwitchView }) {
         options={{ title: 'Notifications' }}
       />
       <Stack.Screen name={DIET_PLAN_BUILDER} component={DietPlanBuilderScreen} options={{ title: 'Diet Plan' }} />
+      <Stack.Screen name={HISTORY} component={HistoryScreen} options={{ title: 'History' }} />
       <Stack.Screen name={DIET_TRENDS} component={DietTrendsScreen} options={{ title: 'Nutrition Trends' }} />
       <Stack.Screen name={BUILD_DISH} component={BuildDishScreen} options={{ title: 'Build a Dish' }} />
       <Stack.Screen

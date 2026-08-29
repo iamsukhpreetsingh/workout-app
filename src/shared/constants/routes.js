@@ -11,7 +11,7 @@ export const RESET_PASSWORD = 'ResetPassword';
 // User-view tabs
 export const TAB_HOME = 'Home';
 export const TAB_DIET = 'Diet';
-export const TAB_HISTORY = 'History';
+export const HISTORY = 'History';
 export const TAB_PLANS = 'Plans';
 export const TAB_PROGRESS = 'Progress';
 export const MAIN_TABS = 'Main';
