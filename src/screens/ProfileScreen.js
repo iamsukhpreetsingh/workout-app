@@ -4,7 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
-import { TAB_CLIENTS, EDIT_PROFILE, INTAKE_FORM, CHANGE_PASSWORD } from '../shared/constants/routes';
+import { TAB_CLIENTS, EDIT_PROFILE, INTAKE_FORM } from '../shared/constants/routes';
+import ChangePasswordCard from '../components/ChangePasswordCard';
 
 // Profile identity/info only — app preferences stay in Settings.
 export default function ProfileScreen({ navigation }) {
@@ -238,15 +239,8 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer, logout }) {
 
       {/* Account — moved from Settings (existing implementations reused) */}
       <View style={styles.card}>
-        <TouchableOpacity
-          style={styles.row}
-          onPress={() => navigation.navigate(CHANGE_PASSWORD)}
-        >
-          <Ionicons name="lock-closed-outline" size={18} color={colors.textDim} />
-          <Text style={styles.rowLabel}>Change Password</Text>
-          <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-        </TouchableOpacity>
-        <View style={styles.divider} />
+        <ChangePasswordCard defaultOpen collapsible={false} />
+        <View style={[styles.divider, { marginVertical: 8 }]} />
         <TouchableOpacity
           style={styles.row}
           onPress={() =>

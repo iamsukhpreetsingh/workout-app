@@ -16,7 +16,6 @@ export const TAB_PLANS = 'Plans';
 export const TAB_PROGRESS = 'Progress';
 export const TAB_PROFILE = 'Profile';
 export const EDIT_PROFILE = 'EditProfile';
-export const CHANGE_PASSWORD = 'ChangePassword';
 export const MAIN_TABS = 'Main';
 
 // User-view stack screens

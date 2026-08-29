@@ -50,7 +50,6 @@ import DietHomeScreen from '../features/diet/screens/DietHomeScreen';
 import DietTrendsScreen from '../features/diet/screens/DietTrendsScreen';
 import BuildDishScreen from '../features/diet/screens/BuildDishScreen';
 import EditProfileScreen from '../screens/EditProfileScreen';
-import ChangePasswordScreen from '../screens/ChangePasswordScreen';
 
 import {
   LOGIN,
@@ -63,7 +62,6 @@ import {
   DIET_TRENDS,
   BUILD_DISH,
   EDIT_PROFILE,
-  CHANGE_PASSWORD,
   HISTORY,
   TAB_PLANS,
   TAB_PROGRESS,
@@ -133,7 +131,6 @@ function renderDetailScreens(onSwitchView) {
       <Stack.Screen name={BODY} component={BodyScreen} options={{ title: 'Body' }} />
       <Stack.Screen name={PROGRESS_PHOTOS} component={ProgressPhotosScreen} options={{ title: 'Progress Photos' }} />
       <Stack.Screen name={EDIT_PROFILE} component={EditProfileScreen} options={{ title: 'Edit Profile' }} />
-      <Stack.Screen name={CHANGE_PASSWORD} component={ChangePasswordScreen} options={{ title: 'Change Password' }} />
       <Stack.Screen name={CLIENT_DETAIL} component={ClientDetailScreen} options={{ title: 'Client' }} />
       <Stack.Screen name={ASSIGN_WORKOUT} component={AssignWorkoutScreen} options={{ title: 'Assign Workout' }} />
       <Stack.Screen
