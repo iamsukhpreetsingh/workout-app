@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { api } from '../../../lib/api';
 import { useColors } from '../../../theme';
 import { logFoodEntry, getRecentAndFrequent } from '../../../db/diary';
+import { getAllergenConflicts } from '../../../lib/allergens';
 import { listDishes, dishTotals } from '../../../db/customDishes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
@@ -22,7 +23,10 @@ const LAYER_LABELS = {
 // recipes, trainer catalog, custom dishes) + barcode lookup + Recent +
 // Frequent + manual entry. Every pick passes a quantity confirm; logging is
 // local-first (works offline — search needs the network, logging never does).
-export default function FoodSearchModal({ visible, onClose, mealType, viewDate, onLogged, pickMode = false, onPickIngredient }) {
+export default function FoodSearchModal({
+  visible, onClose, mealType, viewDate, onLogged, pickMode = false, onPickIngredient,
+  trainerItems = [], trainerPlanName = null, intakeProfile = null,
+}) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [tab, setTab] = useState('search');
@@ -36,10 +40,22 @@ export default function FoodSearchModal({ visible, onClose, mealType, viewDate, 
   const [unit, setUnit] = useState('serving');
   const [manual, setManual] = useState({ name: '', calories: '', protein_g: '', carbs_g: '', fat_g: '' });
   const [searchTimer, setSearchTimer] = useState(null);
+  // From Trainer grouping — the plan's OWN meal structure, not the section
+  // the sheet was opened from (the picked item logs into the meal the user
+  // tapped Add Food in, via mealType)
+  const trainerGroups = (() => {
+    const groups = new Map();
+    for (const it of trainerItems) {
+      const key = it.meal_type || 'Meal';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(it);
+    }
+    return [...groups.entries()];
+  })();
 
   useEffect(() => {
     if (visible) {
-      setTab('search');
+      setTab(trainerItems.length > 0 ? 'trainer' : 'search');
       setQuery('');
       setBarcode('');
       setResults(null);
@@ -68,6 +84,18 @@ export default function FoodSearchModal({ visible, onClose, mealType, viewDate, 
     return () => clearTimeout(t);
   }, [query, barcode, visible, tab]);
 
+  const confirmAllergen = (item, conflicts) => {
+    Alert.alert(
+      'Allergen warning',
+      `This item contains ${conflicts.join(', ')}, which you have listed as an allergen. Log it anyway?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Log Anyway', style: 'destructive', onPress: () => openPick(item) },
+      ],
+      { cancelable: true }
+    );
+  };
+
   const openPick = (item) => {
     // ingredient-picker mode (Build a Dish): hand the item back to the caller
     if (pickMode) {
@@ -75,7 +103,7 @@ export default function FoodSearchModal({ visible, onClose, mealType, viewDate, 
       onClose();
       return;
     }
-    const perServing = item.layer === 'custom_dish';
+    const perServing = item.layer === 'custom_dish' || item.layer === 'trainer_recipe';
     setPicked(item);
     setQty(String(item.default_serving_size ?? 1));
     setUnit(perServing ? 'serving' : item.default_serving_unit || 'g');
@@ -89,7 +117,12 @@ export default function FoodSearchModal({ visible, onClose, mealType, viewDate, 
     // (recipes, dishes, catalog) is per serving
     const perPieceUnits = ['piece', 'slice', 'clove', 'scoop', 'bar', 'cup', 'tbsp', 'tsp'];
     let factor;
-    if (picked?.layer === 'global_database') {
+    if (picked?.layer === 'trainer_recipe') {
+      // trainer plan items arrive with macros ALREADY scaled to the
+      // prescribed amount (quantity_multiplier applied upstream) — the
+      // logged copy snapshots those values; the plan itself is untouched
+      factor = n;
+    } else if (picked?.layer === 'global_database') {
       factor = perPieceUnits.includes(String(unit).toLowerCase()) ? n : n / 100;
     } else {
       factor = n * (baseUnit === 'serving' ? 1 : 1) / (baseUnit === 'serving' ? 1 : base);
@@ -167,7 +200,8 @@ export default function FoodSearchModal({ visible, onClose, mealType, viewDate, 
             <View style={styles.layerChip}><Text style={styles.layerText}>{LAYER_LABELS[r.layer]}</Text></View>
           )}
         </View>
-        <Text style={[styles.rowMacro, NUMS]}>{macroText(r)}</Text>
+        <Text style={[styles.rowMacro, NUMS]}>{macroText(r) || 'Nutrition unavailable'}</Text>
+        {r._warn ? <Text style={styles.rowWarn}>{r._warn}</Text> : null}
       </View>
       <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
     </TouchableOpacity>
@@ -183,7 +217,7 @@ export default function FoodSearchModal({ visible, onClose, mealType, viewDate, 
               {[
                 { key: 'search', label: 'Search' },
                 { key: 'recent', label: 'Recent' },
-                { key: 'frequent', label: 'Frequent' },
+                ...(trainerItems.length > 0 ? [{ key: 'trainer', label: 'From Trainer' }] : []),
                 { key: 'dishes', label: 'My Dishes' },
                 { key: 'manual', label: 'Manual' },
               ].map((t) => (
@@ -234,10 +268,35 @@ export default function FoodSearchModal({ visible, onClose, mealType, viewDate, 
                   ? <Text style={styles.empty}>Foods you log will appear here for one-tap re-logging.</Text>
                   : recents.recent.map((r, i) => renderRow({ ...r, layer: r.food_source_type }, `rec${i}`))
               )}
-              {tab === 'frequent' && (
-                recents.frequent.length === 0
-                  ? <Text style={styles.empty}>Your most-logged foods will appear here.</Text>
-                  : recents.frequent.map((r, i) => renderRow({ ...r, layer: r.food_source_type }, `fre${i}`))
+              {tab === 'trainer' && (
+                trainerItems.length === 0 ? (
+                  <Text style={styles.empty}>No foods or recipes have been added to your trainer plan yet.</Text>
+                ) : (
+                  <>
+                    {trainerPlanName ? <Text style={styles.planHint}>From: {trainerPlanName}</Text> : null}
+                    {trainerGroups.map(([mealType, items]) => (
+                      <View key={mealType}>
+                        <Text style={styles.trainerMealLabel}>{String(mealType).toUpperCase()}</Text>
+                        {items.map((it) => {
+                          const conflicts = intakeProfile
+                            ? getAllergenConflicts(intakeProfile.allergens, it.allergens)
+                            : [];
+                          return renderRow(
+                            {
+                              ...it,
+                              layer: 'trainer_recipe',
+                              default_serving_size: 1,
+                              default_serving_unit: 'serving',
+                              _warn: conflicts.length ? `⚠ Contains ${conflicts.join(', ')}` : null,
+                            },
+                            it.id,
+                            () => (conflicts.length ? confirmAllergen(it, conflicts) : openPick(it))
+                          );
+                        })}
+                      </View>
+                    ))}
+                  </>
+                )
               )}
               {tab === 'dishes' && (
                 dishes.length === 0
@@ -347,6 +406,12 @@ const makeStyles = (colors) =>
     layerChip: { borderWidth: 1, borderColor: colors.blue, borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 },
     layerText: { color: colors.blue, fontSize: 9, fontWeight: '800' },
     empty: { color: colors.textDim, fontSize: 13, textAlign: 'center', paddingVertical: 24, lineHeight: 19 },
+    planHint: { color: colors.primary, fontSize: 11, fontWeight: '700', marginBottom: 8 },
+    trainerMealLabel: {
+      color: colors.textDim, fontSize: 10, fontWeight: '800',
+      letterSpacing: 1, marginTop: 8, marginBottom: 4,
+    },
+    rowWarn: { color: colors.red, fontSize: 10, fontWeight: '700', marginTop: 2 },
     macroRow: { flexDirection: 'row', gap: 8 },
     macroCell: { flex: 1 },
     macroLabel: { color: colors.textDim, fontSize: 11, marginBottom: 4, textAlign: 'center' },

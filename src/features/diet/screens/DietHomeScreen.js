@@ -6,6 +6,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../../../lib/api';
+import { fetchAndCacheTrainerContent } from '../../../lib/trainerCache';
+import { getAllergenConflicts } from '../../../lib/allergens';
+import { CLIENT_DIET_PLAN_DETAIL } from '../../../shared/constants/routes';
 import { useColors } from '../../../theme';
 import { todayLocalISO, isFutureDate } from '../../../lib/checkinDates';
 import { listEntriesForDate, deleteFoodEntry, updateFoodEntry } from '../../../db/diary';
@@ -51,6 +54,12 @@ export default function DietHomeScreen({ navigation }) {
   const [editEntry, setEditEntry] = useState(null); // entry being quantity-edited
   const [editQty, setEditQty] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  // trainer-assigned plan overlay (plan = recommendation, diary = reality).
+  // hasTrainer drives State A/B/C: trainer clients see THEIR PLAN card;
+  // users without a trainer keep the advisory suggestions section.
+  const [hasTrainer, setHasTrainer] = useState(false);
+  const [trainerPlan, setTrainerPlan] = useState(null);
+  const [intakeProfile, setIntakeProfile] = useState(null);
 
   const reloadEntries = useCallback(async () => {
     try {
@@ -72,6 +81,26 @@ export default function DietHomeScreen({ navigation }) {
       getSettings()
         .then((s) => setShowSuggestions(s.show_meal_suggestions !== 0))
         .catch(() => {});
+      // State A/B/C: does this user have an active trainer relationship?
+      api('/client/trainer')
+        .then((rel) => {
+          const active = rel?.status === 'active';
+          setHasTrainer(active);
+          if (!active) setTrainerPlan(null);
+        })
+        .catch(() => setHasTrainer(false));
+      // trainer-assigned plan — cached via sync_cache so it renders offline
+      // (same pattern as the Routines tab's diet list)
+      fetchAndCacheTrainerContent('trainer:diet-plans', () => api('/client/diet-plans'))
+        .then((rows) => {
+          const assigned = (rows || []).filter((p) => p.created_by === 'trainer');
+          setTrainerPlan(assigned[0] || null);
+        })
+        .catch(() => {});
+      // client's own allergen profile — gates warnings on trainer foods
+      api('/client/intake-profile')
+        .then((p) => setIntakeProfile(p && p.completed_at ? p : null))
+        .catch(() => setIntakeProfile(null));
     }, [reloadEntries])
   );
 
@@ -104,6 +133,44 @@ export default function DietHomeScreen({ navigation }) {
   const targetKcal = target ? Number(target.calories) || 0 : 0;
   const remaining = targetKcal ? targetKcal - totals.calories : null;
   const pct = targetKcal ? Math.min(100, Math.max(0, Math.round((totals.calories / targetKcal) * 100))) : 0;
+
+  // trainer-plan items flattened from the plan's first day (the full plan
+  // view handles multi-day rotation via its day tabs; the Diet card previews
+  // day 1 grouped by meal). Macros are scaled by quantity_multiplier — the
+  // prescribed amounts — and stay SNAPSHOTS: logging copies them into the
+  // diary and never touches the plan.
+  const trainerPlanItems = useMemo(() => {
+    if (!trainerPlan) return [];
+    const day = (trainerPlan.days || [])[0];
+    const out = [];
+    for (const m of day?.meals || []) {
+      for (const it of m.items || []) {
+        const mult = it.quantity_multiplier || 1;
+        out.push({
+          id: String(it.id),
+          meal_type: m.meal_type,
+          name: it.name,
+          calories: it.calories != null ? Math.round(it.calories * mult) : null,
+          protein_g: it.protein_g != null ? Math.round(it.protein_g * mult * 10) / 10 : null,
+          carbs_g: it.carbs_g != null ? Math.round(it.carbs_g * mult * 10) / 10 : null,
+          fat_g: it.fat_g != null ? Math.round(it.fat_g * mult * 10) / 10 : null,
+          serving_size: it.serving_size || null,
+          allergens: it.allergens || [],
+        });
+      }
+    }
+    return out;
+  }, [trainerPlan]);
+
+  const trainerPlanGroups = useMemo(() => {
+    const groups = new Map();
+    for (const it of trainerPlanItems) {
+      const key = it.meal_type || 'Meal';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(it);
+    }
+    return [...groups.entries()];
+  }, [trainerPlanItems]);
 
   const confirmDelete = (e) =>
     Alert.alert('Remove food', `Remove "${e.name}"?`, [
@@ -212,7 +279,60 @@ export default function DietHomeScreen({ navigation }) {
       </View>
 
       {/* structure suggestions — advisory only, collapsible, dismissible */}
-      {showSuggestions && suggestions.length > 0 && (
+      {/* YOUR TRAINER'S PLAN (trainer clients) — the prescription overlay.
+          Plan = what the trainer recommends; the diary above = what the
+          client actually ate; the target = the outcome. Never merged. */}
+      {hasTrainer && (
+        <View style={styles.trainerPlanCard}>
+          <View style={styles.trainerPlanHead}>
+            <Ionicons name="clipboard-outline" size={14} color={colors.primary} />
+            <Text style={styles.trainerPlanTitle}>YOUR TRAINER'S PLAN</Text>
+          </View>
+          {trainerPlan ? (
+            <>
+              <Text style={styles.trainerPlanName}>
+                {trainerPlan.name}
+                {trainerPlan.trainer_name ? ` · Assigned by ${trainerPlan.trainer_name}` : ' · Assigned by your trainer'}
+              </Text>
+              {trainerPlanItems.length === 0 ? (
+                <Text style={styles.trainerPlanEmpty}>No meals are scheduled in this plan yet.</Text>
+              ) : (
+                trainerPlanGroups.map(([mealType, items]) => (
+                  <View key={mealType} style={styles.trainerMeal}>
+                    <Text style={styles.trainerMealType}>{String(mealType).toUpperCase()}</Text>
+                    {items.map((it) => (
+                      <View key={it.id} style={styles.trainerItemRow}>
+                        <Text style={styles.trainerItemName} numberOfLines={1}>{it.name}</Text>
+                        <Text style={[styles.trainerItemKcal, NUMS]}>
+                          {it.calories != null ? `${Math.round(it.calories)} kcal` : '—'}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ))
+              )}
+              <TouchableOpacity
+                style={styles.viewPlanBtn}
+                onPress={() => navigation.navigate(CLIENT_DIET_PLAN_DETAIL, {
+                  planId: trainerPlan.id,
+                  self: false,
+                  plan: { name: trainerPlan.name, trainer_name: trainerPlan.trainer_name },
+                })}
+              >
+                <Text style={styles.viewPlanText}>View Full Plan →</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <Text style={styles.trainerPlanEmpty}>
+              No diet plan has been assigned yet. Your trainer can assign a diet plan that will appear here.
+            </Text>
+          )}
+        </View>
+      )}
+
+      {/* advisory suggestions — normal users only (trainer clients see their
+          assigned plan above instead of generic suggestions) */}
+      {!hasTrainer && showSuggestions && suggestions.length > 0 && (
         <View style={styles.suggestionCard}>
           <TouchableOpacity style={styles.suggestionHead} onPress={() => setSuggestionsOpen((v) => !v)}>
             <Ionicons name="bulb-outline" size={14} color={colors.yellow} />
@@ -285,6 +405,9 @@ export default function DietHomeScreen({ navigation }) {
         mealType={addForMeal || 'other'}
         viewDate={viewDate}
         onLogged={() => reloadEntries()}
+        trainerItems={hasTrainer ? trainerPlanItems : []}
+        trainerPlanName={trainerPlan?.name || null}
+        intakeProfile={intakeProfile}
       />
 
       {/* quantity edit — every logged item is adjustable/removable */}
@@ -352,6 +475,21 @@ const makeStyles = (colors) =>
       borderWidth: 1, borderColor: colors.border,
     },
     actionText: { color: colors.primary, fontWeight: '700', fontSize: 12 },
+    trainerPlanCard: {
+      backgroundColor: colors.card, borderRadius: 12, padding: 12, marginTop: 12,
+      borderWidth: 1, borderColor: colors.primary,
+    },
+    trainerPlanHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    trainerPlanTitle: { color: colors.primary, fontSize: 11, fontWeight: '800', letterSpacing: 1, flex: 1 },
+    trainerPlanName: { color: colors.text, fontSize: 13, fontWeight: '800', marginTop: 6 },
+    trainerPlanEmpty: { color: colors.textDim, fontSize: 12, marginTop: 6, lineHeight: 17 },
+    trainerMeal: { marginTop: 8 },
+    trainerMealType: { color: colors.textDim, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+    trainerItemRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3, paddingLeft: 8 },
+    trainerItemName: { color: colors.text, fontSize: 13, flex: 1, marginRight: 8 },
+    trainerItemKcal: { color: colors.textDim, fontSize: 11 },
+    viewPlanBtn: { alignSelf: 'flex-end', paddingVertical: 8, paddingHorizontal: 4 },
+    viewPlanText: { color: colors.primary, fontWeight: '800', fontSize: 12 },
     suggestionCard: {
       backgroundColor: colors.card, borderRadius: 12, padding: 12, marginTop: 12,
       borderWidth: 1, borderColor: colors.border,
