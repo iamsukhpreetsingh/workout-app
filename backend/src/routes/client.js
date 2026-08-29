@@ -569,6 +569,62 @@ registerRoute(router, {
   }
 });
 
+// ---- Trainer nutrition notes (client side) ----
+// The client can read the trainer's notes and mark them read; per-note read
+// state lets the app surface new notes without a notification system.
+const dietNotes = require('../data/dietNotes');
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/diet-notes',
+  description: "Lists the client's trainer nutrition notes (newest first, with trainer name and read state).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await dietNotes.listNotesForClient(req.user.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/diet-notes/:id/read',
+  description: "Marks one of the client's trainer notes as read.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await dietNotes.markNoteRead(req.user.id, req.params.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// ---- Active nutrition targets (client side) ----
+// The ONE authoritative target service (profile → recommendation →
+// versioned active target). The diet system consumes this; no screen
+// re-derives targets from the profile.
+const nutritionTargetsService = require('../data/nutritionTargetsService');
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/nutrition-targets',
+  description: "Returns the caller's active nutrition target (with its source: automatic or trainer override), the current app recommendation, and whether the profile supports a calculation.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await nutritionTargetsService.getActiveNutritionTargets(req.user.id, req.query.date));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
 registerRoute(router, {
   method: 'POST',
   path: '/my-dishes',

@@ -206,6 +206,38 @@ router.delete('/backup/diet-swaps/:itemRef/:date', requireAuth, async (req, res)
   }
 });
 
+// ── Food diary (outcome-first nutrition tracking) ───────────────────────
+// The raw food log is the SOURCE OF TRUTH for daily nutrition; no
+// precomputed adherence is ever stored. Upserts keyed (user_id,
+// local_entity_id) → an offline entry synced repeatedly can never duplicate.
+// plan_server_id is set by the client ONLY for trainer-assigned plans and
+// drives trainer monitoring visibility (see foodLog.js).
+const foodLog = require('../data/foodLog');
+
+router.post('/backup/food-log', requireAuth, async (req, res) => {
+  try {
+    res.status(201).json(await foodLog.upsertFoodLogEntries(req.user.id, req.body));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+router.get('/backup/food-log', requireAuth, async (req, res) => {
+  try {
+    res.json(await foodLog.listFoodLogEntries(req.user.id, req.query.since));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+router.delete('/backup/food-log/:localId', requireAuth, async (req, res) => {
+  try {
+    res.json(await foodLog.deleteFoodLogEntry(req.user.id, req.params.localId));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
 // ── Supplement plans (nested) ───────────────────────────────────────────
 router.post('/backup/supplement-plans', requireAuth, async (req, res) => {
   try {

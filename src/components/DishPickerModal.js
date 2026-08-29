@@ -326,6 +326,7 @@ export default function DishPickerModal({
         <DishForm
           visible={quickCreate}
           dish={{}}
+          self={self}
           onClose={() => setQuickCreate(false)}
           onSave={async (item) => {
             // Save to My Dishes / trainer catalog, then attach

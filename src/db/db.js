@@ -888,6 +888,62 @@ const MIGRATIONS = [
     }
   },
 
+  // v38: outcome-first nutrition tracking (detailed mode) — three new
+  // concepts, additive only (Simple-mode history is untouched):
+  //
+  // 1. local_diet_plans gains tracking_mode ('simple' default — every
+  //    existing plan stays Simple) + tolerance_pct (±% around targets).
+  // 2. local_diet_plan_versions — immutable target snapshots with an
+  //    effective_from date. Editing a plan's targets opens a NEW version;
+  //    historical diaries keep being evaluated against the version that was
+  //    effective on their date (historical results are never rewritten).
+  // 3. local_food_log_entries — the raw food diary ("what I actually ate"),
+  //    the source of truth for daily nutrition. source is the four-value
+  //    model: planned / swapped / extra / free_logged. Entries carry the
+  //    plan ref (local id OR server uuid for assigned plans) and the plan
+  //    version that was effective when logged.
+  async (db) => {
+    await addColumnSafe(db, 'local_diet_plans', 'tracking_mode', "TEXT NOT NULL DEFAULT 'simple'");
+    await addColumnSafe(db, 'local_diet_plans', 'tolerance_pct', 'INTEGER NOT NULL DEFAULT 10');
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS local_diet_plan_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      diet_plan_local_id TEXT NOT NULL,
+      version_number INTEGER NOT NULL,
+      effective_from TEXT NOT NULL,
+      daily_calorie_target INTEGER,
+      daily_protein_target INTEGER,
+      daily_carbs_target INTEGER,
+      daily_fat_target INTEGER,
+      tolerance_pct INTEGER,
+      tracking_mode TEXT,
+      created_at INTEGER NOT NULL,
+      UNIQUE(diet_plan_local_id, version_number)
+    )`);
+    await db.execAsync(`CREATE INDEX IF NOT EXISTS idx_diet_plan_versions_plan
+      ON local_diet_plan_versions(diet_plan_local_id, effective_from)`);
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS local_food_log_entries (
+      local_id TEXT PRIMARY KEY,
+      user_id TEXT,
+      server_id TEXT,
+      synced INTEGER NOT NULL DEFAULT 0,
+      plan_ref TEXT,
+      plan_version_id INTEGER,
+      log_date TEXT NOT NULL,
+      meal_type TEXT,
+      source TEXT NOT NULL CHECK (source IN ('planned','swapped','extra','free_logged')),
+      planned_item_ref TEXT,
+      name TEXT NOT NULL,
+      calories REAL, protein_g REAL, carbs_g REAL, fat_g REAL,
+      serving_size TEXT,
+      quantity REAL NOT NULL DEFAULT 1,
+      logged_at INTEGER NOT NULL
+    )`);
+    await db.execAsync(`CREATE INDEX IF NOT EXISTS idx_food_log_user_date
+      ON local_food_log_entries(user_id, log_date)`);
+    await db.execAsync(`CREATE INDEX IF NOT EXISTS idx_food_log_plan_date
+      ON local_food_log_entries(plan_ref, log_date)`);
+  },
+
 ];
 
 async function backfillPRs(db) {

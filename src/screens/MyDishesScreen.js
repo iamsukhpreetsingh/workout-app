@@ -350,6 +350,7 @@ export default function MyDishesScreen({ navigation }) {
       <DishForm
         visible={!!editing}
         dish={editing || {}}
+        self
         onClose={() => setEditing(null)}
         onSave={save}
         onDelete={editing?.local_id ? confirmDelete : null}

@@ -604,6 +604,156 @@ registerRoute(router, {
   }
 }, [requireAuth, requireRole('trainer')]);
 
+// ---- Outcome-first nutrition monitoring (exception-first, Phase D) ----
+// Day-by-day target outcomes + prioritized alerts. Only trainer-assigned
+// plans are ever evaluated (plan_server_id filter in the data layer).
+const nutritionMonitoring = require('../data/nutritionMonitoring');
+const foodLogData = require('../data/foodLog');
+const dietNotes = require('../data/dietNotes');
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/diet-monitoring',
+  description: "Exception-first monitoring of a client's diet outcomes: daily target statuses, week metrics, and prioritized alerts (missing logging, repeated under/over target, plan-may-need-review, successful flexibility).",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 3), 28);
+    res.json(await nutritionMonitoring.getMonitoringForClient(req.user.id, req.params.clientId, days));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/diet-monitoring/overview',
+  description: "Diet status for every active client at a glance: who is on track, who needs attention, who has insufficient data.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    res.json(await nutritionMonitoring.getOverviewForTrainer(req.user.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+// Trainer day detail — the client's RAW food diary for a date range,
+// read-only. Permission rule unchanged: only trainer-assigned plans
+// (plan_server_id) are ever returned.
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/diet-food-log',
+  description: "Read-only view of a client's synced food diary for assigned plans within a date range (from/to as YYYY-MM-DD).",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
+    res.json(await foodLogData.listClientFoodLogs(
+      req.user.id, req.params.clientId, req.query.plan_id || null, req.query.from, req.query.to
+    ));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+// Trainer notes — lightweight, one-way, client-visible (with read receipt).
+registerRoute(router, {
+  method: 'POST',
+  path: '/clients/:clientId/diet-notes',
+  description: 'Leaves a nutrition note for a client (optionally tied to a plan and/or date).',
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    res.status(201).json(await dietNotes.createNote(req.user.id, req.params.clientId, req.body || {}));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/diet-notes',
+  description: "Lists the trainer's notes for a client.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    res.json(await dietNotes.listNotesForTrainer(req.user.id, req.params.clientId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+// ---- Client nutrition profile + active targets (trainer side) ----
+// The trainer sees the app's recommendation computed from the client's
+// profile and decides: keep the automatic target or override it. Overrides
+// open a new target VERSION (history is never rewritten) and retain the
+// recommendation + an optional reason for reference.
+const nutritionTargetsService = require('../data/nutritionTargetsService');
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/clients/:clientId/nutrition-targets',
+  description: "Returns a client's nutrition profile, the app's calculated recommendation, and the active target with its source (automatic / trainer_override) plus any drift between them.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    if (!(await requireReadableAssociation(req, res, req.params.clientId))) return;
+    res.json(await nutritionTargetsService.getActiveNutritionTargets(req.params.clientId, req.query.date));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/clients/:clientId/nutrition-targets/override',
+  description: "Overrides the client's automatically calculated targets with trainer-defined calories/macros (opens a new target version; the recommendation is retained; an optional note explains the change).",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    const { calories, protein_g, carbs_g, fat_g, note } = req.body || {};
+    res.status(201).json(
+      await nutritionTargetsService.setTrainerOverride(req.user.id, req.params.clientId, {
+        calories, protein_g, carbs_g, fat_g, note,
+      })
+    );
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/clients/:clientId/nutrition-targets/use-recommendation',
+  description: "Replaces any trainer override with the app's automatically calculated recommendation for the client (opens a new target version).",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    res.status(201).json(
+      await nutritionTargetsService.useTrainerRecommendation(req.user.id, req.params.clientId)
+    );
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
 
 
 

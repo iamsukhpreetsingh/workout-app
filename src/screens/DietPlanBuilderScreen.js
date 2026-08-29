@@ -43,12 +43,41 @@ export default function DietPlanBuilderScreen({ route, navigation }) {
   const [name, setName] = useState('');
   const [notes, setNotes] = useState('');
   const [targets, setTargets] = useState({ cal: '', pro: '', car: '', fat: '' });
+  const [trackingMode, setTrackingMode] = useState('simple');
+  const [tolerance, setTolerance] = useState('10');
   const [days, setDays] = useState([]);
   const [busy, setBusy] = useState(false);
   const [collapsed, setCollapsed] = useState(new Set());
 
   const [picker, setPicker] = useState(null); // { mealKey, mealType }
   const [catalog, setCatalog] = useState(null);
+
+  // Active/recommended nutrition targets (§14): plans default to the
+  // user's targets from their nutrition profile — the trainer can accept
+  // them with one tap or override by editing the fields below.
+  const [recommended, setRecommended] = useState(null); // { targets, source, who }
+
+  useEffect(() => {
+    if (editPlanId) return;
+    const fetchTargets = self
+      ? api('/client/nutrition-targets')
+      : api(`/trainer/clients/${clientId}/nutrition-targets`);
+    fetchTargets
+      .then((t) => {
+        const active = t?.active || t?.recommendation;
+        if (!active) return;
+        setRecommended({
+          targets: {
+            cal: String(active.calories ?? ''),
+            pro: String(active.protein_g ?? ''),
+            car: String(active.carbs_g ?? ''),
+            fat: String(active.fat_g ?? ''),
+          },
+          source: t?.active?.target_source || 'automatic',
+        });
+      })
+      .catch(() => {});
+  }, [self, clientId, editPlanId]);
 
 
 
@@ -126,6 +155,8 @@ const planConflicts = (() => {
           car: pl.daily_carbs_target != null ? String(pl.daily_carbs_target) : '',
           fat: pl.daily_fat_target != null ? String(pl.daily_fat_target) : '',
         });
+        setTrackingMode(pl.tracking_mode === 'detailed' ? 'detailed' : 'simple');
+        setTolerance(pl.tolerance_pct != null ? String(pl.tolerance_pct) : '10');
         setDays(
           (pl.days || []).map((d, di) => ({
             key: `e${di}`,
@@ -296,6 +327,8 @@ const planConflicts = (() => {
         daily_protein_target: targets.pro === '' ? null : Number(targets.pro),
         daily_carbs_target: targets.car === '' ? null : Number(targets.car),
         daily_fat_target: targets.fat === '' ? null : Number(targets.fat),
+        tracking_mode: trackingMode,
+        tolerance_pct: trackingMode === 'detailed' ? Math.max(1, Math.min(50, Number(tolerance) || 10)) : 10,
         days: days.map((d) => ({
           day_label: d.day_label.trim() || 'Day',
           meals: d.meals.map((m) => ({
@@ -461,7 +494,25 @@ const planConflicts = (() => {
         multiline
       />
 
-      {/* optional daily targets */}
+      {/* optional daily targets — prefilled from the nutrition profile's
+          recommended targets with one tap */}
+      <Text style={styles.groupLabel}>Daily Targets (optional)</Text>
+      {recommended && (
+        <View style={styles.recoCard}>
+          <Ionicons name="calculator-outline" size={14} color={colors.primary} />
+          <Text style={styles.recoText}>
+            {recommended.source === 'trainer_override'
+              ? `Trainer-set targets${self ? '' : ` for ${clientName || 'client'}`}`
+              : `Automatically calculated from ${self ? 'your' : `${clientName || 'the'}'s`} profile`}
+          </Text>
+          <TouchableOpacity
+            style={styles.recoBtn}
+            onPress={() => setTargets((t) => ({ ...t, ...recommended.targets }))}
+          >
+            <Text style={styles.recoBtnText}>Use These</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       <Text style={styles.groupLabel}>Daily Targets (optional)</Text>
       <View style={styles.macroRow}>
         {[
@@ -483,6 +534,43 @@ const planConflicts = (() => {
           </View>
         ))}
       </View>
+
+      {/* tracking style — Simple stays a yes/no check-in; Detailed is the
+          outcome-first food diary. Existing plans default to Simple. */}
+      <Text style={styles.groupLabel}>Tracking Style</Text>
+      <View style={styles.modeRow}>
+        {[
+          { key: 'simple', label: 'Simple' },
+          { key: 'detailed', label: 'Detailed' },
+        ].map((m) => (
+          <TouchableOpacity
+            key={m.key}
+            style={[styles.modeBtn, trackingMode === m.key && styles.modeBtnOn]}
+            onPress={() => setTrackingMode(m.key)}
+          >
+            <Text style={[styles.modeBtnText, trackingMode === m.key && { color: '#fff' }]}>{m.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      <Text style={styles.modeHint}>
+        {trackingMode === 'simple'
+          ? 'A daily yes/no check-in — did you follow your diet?'
+          : 'Log the food you actually eat and see how it lands against your daily targets.'}
+      </Text>
+      {trackingMode === 'detailed' && (
+        <View style={styles.toleranceRow}>
+          <Text style={styles.toleranceLabel}>Target tolerance</Text>
+          <TextInput
+            style={[styles.input, styles.toleranceInput, NUMS]}
+            keyboardType="numeric"
+            value={tolerance}
+            onChangeText={(v) => setTolerance(v.replace(/[^0-9]/g, ''))}
+            placeholder="10"
+            placeholderTextColor={colors.textDim}
+          />
+          <Text style={styles.toleranceUnit}>%</Text>
+        </View>
+      )}
 
       {/* days */}
       {days.map((d) => (
@@ -568,6 +656,31 @@ const makeStyles = (colors) =>
     macroCell: { flex: 1 },
     macroLabel: { color: colors.textDim, fontSize: 11, marginBottom: 4, textAlign: 'center' },
     macroInput: { textAlign: 'center', paddingVertical: 9 },
+
+    modeRow: { flexDirection: 'row', gap: 8, marginBottom: 6 },
+    modeBtn: {
+      flex: 1, alignItems: 'center', paddingVertical: 11,
+      borderRadius: 12, backgroundColor: colors.cardLight, borderWidth: 1.5, borderColor: 'transparent',
+    },
+    modeBtnOn: { backgroundColor: colors.primary },
+    modeBtnText: { color: colors.textDim, fontWeight: '800', fontSize: 13 },
+    modeHint: { color: colors.textDim, fontSize: 12, marginBottom: 8 },
+    toleranceRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+    toleranceLabel: { color: colors.text, fontSize: 13, flex: 1 },
+    toleranceInput: { width: 70, textAlign: 'center', marginBottom: 0, paddingVertical: 9 },
+    toleranceUnit: { color: colors.textDim, fontSize: 13 },
+
+    recoCard: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      backgroundColor: colors.cardLight, borderRadius: 11,
+      paddingHorizontal: 11, paddingVertical: 9, marginBottom: 8,
+    },
+    recoText: { color: colors.textDim, fontSize: 12, flex: 1 },
+    recoBtn: {
+      borderWidth: 1.2, borderColor: colors.primary, borderRadius: 9,
+      paddingHorizontal: 10, paddingVertical: 5,
+    },
+    recoBtnText: { color: colors.primary, fontSize: 11, fontWeight: '800' },
 
     dayCard: {
       backgroundColor: colors.card, borderRadius: 14, padding: 12, marginTop: 12,

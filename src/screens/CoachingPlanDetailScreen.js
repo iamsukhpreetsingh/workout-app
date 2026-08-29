@@ -1,14 +1,27 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Alert, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Alert, StyleSheet, ActivityIndicator, Modal, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
 import { getAllergenConflicts } from '../lib/allergens';
+import { STATUS_META } from '../features/diet/domain/nutritionCore';
 
+const NUMS = { fontVariant: ['tabular-nums'] };
 
-// Trainer view of a diet/supplement plan: item list + adherence strip
-// (last 28 days, neutral for no check-in) + archive action.
+const STATUS_COLORS = {
+  on_target: 'green',
+  under_target: 'orange',
+  over_target: 'red',
+  in_progress: 'blue',
+  simple_followed: 'green',
+  simple_missed: 'orange',
+  not_logged: 'cardLight',
+};
+
+// Trainer view of a diet/supplement plan. Diet: exception-first monitoring
+// (status, prioritized alerts, 7-day OUTCOME strip with drill-down, notes)
+// on top of the read-only plan chart. Supplements keep the check-in strip.
 export default function CoachingPlanDetailScreen({ route, navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
@@ -19,16 +32,40 @@ export default function CoachingPlanDetailScreen({ route, navigation }) {
   const [busy, setBusy] = useState(false);
   const [clientProfile, setClientProfile] = useState(null); // client's intake profile
   const [contextOpen, setContextOpen] = useState(false); // Client Context section
+  // diet monitoring: daily outcome statuses + prioritized alerts
+  const [monitoring, setMonitoring] = useState(null);
+  const [dayDetail, setDayDetail] = useState(null); // { date, entries, summary }
+  const [note, setNote] = useState('');
+  const [notes, setNotes] = useState([]);
+  const [noteBusy, setNoteBusy] = useState(false);
+  // nutrition targets: active + app recommendation + trainer override form
+  const [targetsData, setTargetsData] = useState(null);
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const [overrideForm, setOverrideForm] = useState({ cal: '', pro: '', car: '', fat: '' });
+  const [overrideNote, setOverrideNote] = useState('');
+  const [targetsBusy, setTargetsBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [p, cis, prof] = await Promise.all([
+      const [p, cis, prof, mon, noteRows, tgts] = await Promise.all([
         api(`/trainer/clients/${clientId}/${seg}/${planId}`),
         api(`/trainer/clients/${clientId}/${seg}/${planId}/checkins`).catch(() => []),
         api(`/trainer/clients/${clientId}/intake-profile`).catch(() => null),
+        kind === 'diet'
+          ? api(`/trainer/clients/${clientId}/diet-monitoring?days=7`).catch(() => null)
+          : Promise.resolve(null),
+        kind === 'diet'
+          ? api(`/trainer/clients/${clientId}/diet-notes`).catch(() => [])
+          : Promise.resolve([]),
+        kind === 'diet'
+          ? api(`/trainer/clients/${clientId}/nutrition-targets`).catch(() => null)
+          : Promise.resolve(null),
       ]);
       setPlan(p);
       setCheckins(cis);
+      setMonitoring(mon);
+      setNotes(noteRows || []);
+      setTargetsData(tgts);
       // BUGFIX: this previously referenced an undefined `profile`, throwing
       // inside the try and surfacing "Could not load plan" on every open
       setClientProfile(prof && prof.completed_at ? prof : null);
@@ -38,9 +75,89 @@ export default function CoachingPlanDetailScreen({ route, navigation }) {
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     }
-  }, [clientId, seg, planId, navigation]);
+  }, [clientId, seg, planId, navigation, kind]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const openDay = async (date) => {
+    try {
+      const entries = await api(
+        `/trainer/clients/${clientId}/diet-food-log?from=${date}&to=${date}${monitoring?.plan_id ? `&plan_id=${monitoring.plan_id}` : ''}`
+      );
+      setDayDetail({ date, entries: entries || [] });
+    } catch {
+      Alert.alert('Could not load day', 'Please try again.');
+    }
+  };
+
+  const sendNote = async () => {
+    if (!note.trim() || noteBusy) return;
+    setNoteBusy(true);
+    try {
+      await api(`/trainer/clients/${clientId}/diet-notes`, {
+        method: 'POST',
+        body: { note: note.trim(), plan_id: planId },
+      });
+      setNote('');
+      const rows = await api(`/trainer/clients/${clientId}/diet-notes`).catch(() => []);
+      setNotes(rows || []);
+    } catch (e) {
+      Alert.alert('Could not send note', e.message || 'Please try again.');
+    } finally {
+      setNoteBusy(false);
+    }
+  };
+
+  const reloadTargets = async () => {
+    const t = await api(`/trainer/clients/${clientId}/nutrition-targets`).catch(() => null);
+    setTargetsData(t);
+  };
+
+  const useRecommendation = async () => {
+    setTargetsBusy(true);
+    try {
+      await api(`/trainer/clients/${clientId}/nutrition-targets/use-recommendation`, { method: 'POST' });
+      await reloadTargets();
+      setOverrideOpen(false);
+    } catch (e) {
+      Alert.alert('Could not apply recommendation', e.message || 'Please try again.');
+    } finally {
+      setTargetsBusy(false);
+    }
+  };
+
+  const saveOverride = async () => {
+    if (targetsBusy) return;
+    const f = overrideForm;
+    const calories = Number(f.cal);
+    if (!calories || calories < 1000 || calories > 6000) {
+      return Alert.alert('Invalid calories', 'Enter a calorie target between 1000 and 6000.');
+    }
+    const macros = [f.pro, f.car, f.fat].map((v) => Number(v));
+    if (macros.some((v) => !isFinite(v) || v < 0 || v > 1000)) {
+      return Alert.alert('Invalid macros', 'Protein, carbs and fat must be between 0 and 1000 g.');
+    }
+    setTargetsBusy(true);
+    try {
+      await api(`/trainer/clients/${clientId}/nutrition-targets/override`, {
+        method: 'POST',
+        body: {
+          calories,
+          protein_g: macros[0],
+          carbs_g: macros[1],
+          fat_g: macros[2],
+          note: overrideNote.trim() || null,
+        },
+      });
+      await reloadTargets();
+      setOverrideOpen(false);
+      setOverrideNote('');
+    } catch (e) {
+      Alert.alert('Could not save targets', e.message || 'Please try again.');
+    } finally {
+      setTargetsBusy(false);
+    }
+  };
 
 
   // every client allergen present ANYWHERE in the plan — drives the
@@ -230,9 +347,100 @@ export default function CoachingPlanDetailScreen({ route, navigation }) {
         </View>
       )}
 
-      {/* adherence strip — neutral for days with no check-in */}
-      <Text style={styles.groupLabel}>Adherence — last 4 weeks</Text>
+      {/* DIET — exception-first monitoring: status, prioritized alerts, and
+          a 7-day OUTCOME strip (target outcome is the primary daily
+          indicator; plan follow-through is secondary). Supplements keep the
+          simple check-in strip below. */}
+      {kind === 'diet' && monitoring ? (
+        <View style={styles.card}>
+          <Text style={styles.groupLabel}>This week</Text>
+          {(() => {
+            const m = monitoring;
+            const hasIssue = (m.alerts || []).some((a) => a.level !== 'info');
+            const statusColor = hasIssue ? colors.red : colors.green;
+            const statusIcon = hasIssue ? 'warning' : 'checkmark-circle';
+            const statusText = !m.has_plan
+              ? 'No assigned diet plan'
+              : hasIssue
+              ? 'Needs attention'
+              : 'No major issues';
+            return (
+              <>
+                <View style={styles.statusRow}>
+                  <Ionicons name={statusIcon} size={16} color={statusColor} />
+                  <Text style={[styles.statusText, { color: statusColor }]}>{statusText}</Text>
+                </View>
+                <View style={styles.weekGrid}>
+                  <View style={styles.weekCell}>
+                    <Text style={[styles.weekVal, NUMS]}>{m.metrics.daysOnTarget} / {m.metrics.daysTracked || '–'}</Text>
+                    <Text style={styles.weekLabel}>Target hit</Text>
+                  </View>
+                  <View style={styles.weekCell}>
+                    <Text style={[styles.weekVal, NUMS]}>{m.metrics.daysTracked} / 7</Text>
+                    <Text style={styles.weekLabel}>Food logged</Text>
+                  </View>
+                  <View style={styles.weekCell}>
+                    <Text style={[styles.weekVal, NUMS]}>{m.metrics.planFollowedDays} / 7</Text>
+                    <Text style={styles.weekLabel}>Plan followed</Text>
+                  </View>
+                  <View style={styles.weekCell}>
+                    <Text style={[styles.weekVal, NUMS]}>
+                      {m.avgCalories != null ? m.avgCalories.toLocaleString() : '–'}
+                      {m.avgCaloriesTarget ? ` / ${m.avgCaloriesTarget.toLocaleString()}` : ''}
+                    </Text>
+                    <Text style={styles.weekLabel}>Avg calories</Text>
+                  </View>
+                </View>
+
+                {/* prioritized alerts — high first, then medium, informational */}
+                {(m.alerts || []).length > 0 && (
+                  <View style={styles.alertsWrap}>
+                    {m.alerts.map((a) => (
+                      <View key={a.key} style={[styles.alertRow, a.level === 'high' && styles.alertHigh, a.level === 'medium' && styles.alertMedium]}>
+                        <Ionicons
+                          name={a.level === 'info' ? 'information-circle' : 'warning'}
+                          size={13}
+                          color={a.level === 'info' ? colors.blue : a.level === 'medium' ? colors.orange : colors.red}
+                        />
+                        <Text style={styles.alertText}>{a.message}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {/* 7-day outcome strip — tap a day for its diary */}
+                <View style={styles.outcomeStrip}>
+                  {m.days.map((d) => {
+                    const colorKey = STATUS_COLORS[d.status] || 'cardLight';
+                    const meta = STATUS_META[d.status === 'simple_followed' ? 'on_target' : d.status === 'simple_missed' ? 'under_target' : d.status] || STATUS_META.not_logged;
+                    return (
+                      <TouchableOpacity key={d.date} style={styles.outcomeCell} onPress={() => openDay(d.date)}>
+                        <Text style={styles.outcomeDow}>
+                          {new Date(`${d.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'narrow' })}
+                        </Text>
+                        <View style={[styles.outcomeDot, { backgroundColor: colors[colorKey] || colors.cardLight }]}>
+                          <Text style={[styles.outcomeDotText, d.status === 'not_logged' && { color: colors.textDim }]}>
+                            {d.status === 'not_logged' ? '—' : meta.symbol}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <Text style={styles.outcomeLegend}>
+                  {m.metrics.daysTracked} / 7 days tracked ·{' '}
+                  {m.metrics.daysUnder} under · {m.metrics.daysOver} over
+                </Text>
+              </>
+            );
+          })()}
+        </View>
+      ) : null}
+
+      {/* adherence strip (supplements) — neutral for days with no check-in */}
+      {kind !== 'diet' && (
       <View style={styles.card}>
+        <Text style={styles.groupLabel}>Adherence — last 4 weeks</Text>
         <View style={styles.stripRow}>
           {days.map((d) => (
             <View
@@ -251,6 +459,192 @@ export default function CoachingPlanDetailScreen({ route, navigation }) {
           {followed} / {checkedIn} check-in days followed · grey = no check-in
         </Text>
       </View>
+      )}
+
+      {/* Nutrition targets: active (with source) vs app recommendation —
+          the trainer accepts the recommendation by default and overrides
+          only when necessary (§5–§9) */}
+      {kind === 'diet' && targetsData && (
+        <View style={styles.card}>
+          <Text style={styles.groupLabel}>Nutrition targets</Text>
+          {targetsData.active ? (
+            <Text style={[styles.targetActiveLine, NUMS]}>
+              {`${Number(targetsData.active.calories).toLocaleString()} kcal/day · `}
+              <Text style={{ fontWeight: '800', color: targetsData.active.target_source === 'trainer_override' ? colors.blue : colors.green }}>
+                {targetsData.active.target_source === 'trainer_override' ? 'Trainer target' : 'Automatically calculated'}
+              </Text>
+            </Text>
+          ) : (
+            <Text style={styles.targetActiveLine}>No nutrition targets set yet.</Text>
+          )}
+
+          <View style={styles.recoBlock}>
+            <Text style={styles.recoBlockLabel}>Recommended by app</Text>
+            {targetsData.profile_complete && targetsData.recommendation ? (
+              <Text style={[styles.recoBlockValue, NUMS]}>
+                {`${targetsData.recommendation.calories.toLocaleString()} kcal · ${targetsData.recommendation.protein_g}P · ${targetsData.recommendation.carbs_g}C · ${targetsData.recommendation.fat_g}F`}
+              </Text>
+            ) : (
+              <Text style={styles.recoBlockValue}>Client profile incomplete — no recommendation.</Text>
+            )}
+          </View>
+
+          {targetsData.recommendation_drift && (
+            <View style={[styles.alertRow, styles.alertMedium]}>
+              <Ionicons name="information-circle" size={13} color={colors.orange} />
+              <Text style={styles.alertText}>
+                Client profile changed — the new recommendation differs from the current target.
+              </Text>
+            </View>
+          )}
+          {targetsData.active?.override_note ? (
+            <Text style={styles.overrideNote}>“{targetsData.active.override_note}”</Text>
+          ) : null}
+
+          {overrideOpen ? (
+            <View style={{ marginTop: 10 }}>
+              <View style={styles.overrideRow}>
+                {[
+                  ['cal', 'Cal'],
+                  ['pro', 'P (g)'],
+                  ['car', 'C (g)'],
+                  ['fat', 'F (g)'],
+                ].map(([k, label]) => (
+                  <View key={k} style={styles.overrideCell}>
+                    <Text style={styles.overrideLabel}>{label}</Text>
+                    <TextInput
+                      style={[styles.overrideInput, NUMS]}
+                      keyboardType="numeric"
+                      value={overrideForm[k]}
+                      onChangeText={(v) => setOverrideForm((f) => ({ ...f, [k]: v.replace(/[^0-9.]/g, '') }))}
+                      placeholder="—"
+                      placeholderTextColor={colors.textDim}
+                    />
+                  </View>
+                ))}
+              </View>
+              <TextInput
+                style={styles.overrideNoteInput}
+                placeholder="Reason (optional) — e.g. Reduced calories for the next 2 weeks"
+                placeholderTextColor={colors.textDim}
+                value={overrideNote}
+                onChangeText={setOverrideNote}
+                multiline
+              />
+              <TouchableOpacity style={styles.targetBtn} onPress={saveOverride} disabled={targetsBusy}>
+                <Text style={styles.targetBtnText}>{targetsBusy ? 'Saving…' : 'Save Custom Targets'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.targetSecondaryBtn} onPress={() => setOverrideOpen(false)}>
+                <Text style={styles.targetSecondaryText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.targetActionsRow}>
+              <TouchableOpacity
+                style={[styles.targetBtn, { flex: 1 }]}
+                onPress={useRecommendation}
+                disabled={targetsBusy || !targetsData.profile_complete}
+              >
+                <Text style={styles.targetBtnText}>Use App Recommendation</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.targetSecondaryBtn}
+                onPress={() => {
+                  // prefill from the active target or the recommendation
+                  const src = targetsData.active || targetsData.recommendation;
+                  setOverrideForm({
+                    cal: src?.calories != null ? String(src.calories) : '',
+                    pro: src?.protein_g != null ? String(src.protein_g) : '',
+                    car: src?.carbs_g != null ? String(src.carbs_g) : '',
+                    fat: src?.fat_g != null ? String(src.fat_g) : '',
+                  });
+                  setOverrideOpen(true);
+                }}
+              >
+                <Text style={styles.targetSecondaryText}>Set Custom Targets</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* trainer note — lightweight, one-way, client-visible */}
+      {kind === 'diet' && (
+        <View style={styles.card}>
+          <Text style={styles.groupLabel}>Trainer note</Text>
+          <TextInput
+            style={styles.noteInput}
+            placeholder="e.g. Try adding the afternoon snack from your plan tomorrow."
+            placeholderTextColor={colors.textDim}
+            value={note}
+            onChangeText={setNote}
+            multiline
+          />
+          <TouchableOpacity style={styles.noteSendBtn} onPress={sendNote} disabled={noteBusy || !note.trim()}>
+            <Ionicons name="paper-plane-outline" size={13} color={note.trim() ? colors.primary : colors.textDim} />
+            <Text style={[styles.noteSendText, { color: note.trim() ? colors.primary : colors.textDim }]}>
+              {noteBusy ? 'Sending…' : 'Send note to client'}
+            </Text>
+          </TouchableOpacity>
+          {notes.length > 0 && (
+            <View style={{ marginTop: 8 }}>
+              {notes.slice(0, 5).map((n) => (
+                <View key={n.id} style={styles.noteHistoryRow}>
+                  <Text style={styles.noteHistoryText} numberOfLines={2}>“{n.note}”</Text>
+                  <Text style={styles.noteHistoryMeta}>
+                    {new Date(n.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                    {n.read_at ? ' · read' : ''}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* trainer day detail — read-only food diary for one date */}
+      <Modal visible={!!dayDetail} transparent animationType="slide" onRequestClose={() => setDayDetail(null)}>
+        <View style={styles.dayWrap}>
+          <View style={styles.daySheet}>
+            <View style={styles.dayHeaderRow}>
+              <Text style={styles.dayTitle}>
+                {clientName || 'Client'} ·{' '}
+                {dayDetail ? new Date(`${dayDetail.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : ''}
+              </Text>
+              <TouchableOpacity hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} onPress={() => setDayDetail(null)}>
+                <Ionicons name="close" size={20} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+            {dayDetail && (
+              <ScrollView style={{ flex: 1 }}>
+                {dayDetail.entries.length === 0 ? (
+                  <Text style={styles.dayEmpty}>No food logged this day.</Text>
+                ) : (
+                  dayDetail.entries.map((e) => (
+                    <View key={e.id} style={styles.dayEntryRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.dayEntryName}>{e.name}</Text>
+                        <Text style={[styles.dayEntryMeta, NUMS]}>
+                          {[
+                            String(e.meal_type || 'Anytime').toUpperCase(),
+                            e.calories != null ? `${Math.round(e.calories)} kcal` : null,
+                            e.protein_g != null ? `${Math.round(e.protein_g)}P` : null,
+                            e.quantity && e.quantity !== 1 ? `${e.quantity}x` : null,
+                            e.source === 'planned' ? 'As planned' : e.source === 'swapped' ? 'Swapped' : e.source === 'extra' ? 'Added' : 'Logged manually',
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </Text>
+                      </View>
+                    </View>
+                  ))
+                )}
+                <Text style={styles.dayReadonly}>Read-only — the client owns this diary.</Text>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       <TouchableOpacity style={styles.archiveBtn} onPress={confirmArchive} disabled={busy}>
         <Ionicons name="archive-outline" size={16} color={colors.red} />
@@ -321,6 +715,94 @@ const makeStyles = (colors) =>
     stripNo: { backgroundColor: colors.red, opacity: 0.75 },
     stripText: { color: '#fff', fontSize: 10, fontWeight: '700' },
     stripLegend: { color: colors.textDim, fontSize: 11, marginTop: 10 },
+
+    // monitoring
+    statusRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 10 },
+    statusText: { fontSize: 15, fontWeight: '800' },
+    weekGrid: { flexDirection: 'row', gap: 6 },
+    weekCell: { flex: 1, backgroundColor: colors.cardLight, borderRadius: 10, padding: 8 },
+    weekVal: { color: colors.text, fontSize: 12, fontWeight: '800' },
+    weekLabel: { color: colors.textDim, fontSize: 9, marginTop: 2 },
+    alertsWrap: { marginTop: 10, gap: 5 },
+    alertRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 7,
+      borderRadius: 9, paddingHorizontal: 10, paddingVertical: 7,
+      borderWidth: 1, borderColor: colors.border,
+    },
+    alertHigh: { borderColor: colors.red, backgroundColor: colors.card },
+    alertMedium: { borderColor: colors.orange },
+    alertText: { color: colors.text, fontSize: 12, flex: 1 },
+    outcomeStrip: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 14 },
+    outcomeCell: { alignItems: 'center', gap: 4, flex: 1 },
+    outcomeDow: { color: colors.textDim, fontSize: 10, fontWeight: '700' },
+    outcomeDot: {
+      width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center',
+    },
+    outcomeDotText: { color: '#fff', fontSize: 12, fontWeight: '800' },
+    outcomeLegend: { color: colors.textDim, fontSize: 11, marginTop: 8 },
+    targetActiveLine: { color: colors.text, fontSize: 13, marginBottom: 8 },
+    recoBlock: {
+      backgroundColor: colors.cardLight, borderRadius: 10, padding: 10,
+    },
+    recoBlockLabel: {
+      color: colors.textDim, fontSize: 10, fontWeight: '800',
+      textTransform: 'uppercase', letterSpacing: 0.5,
+    },
+    recoBlockValue: { color: colors.text, fontSize: 13, fontWeight: '700', marginTop: 3 },
+    overrideNote: { color: colors.textDim, fontSize: 12, fontStyle: 'italic', marginTop: 8 },
+    overrideRow: { flexDirection: 'row', gap: 8 },
+    overrideCell: { flex: 1 },
+    overrideLabel: { color: colors.textDim, fontSize: 10, marginBottom: 3, textAlign: 'center' },
+    overrideInput: {
+      backgroundColor: colors.cardLight, color: colors.text, borderRadius: 8,
+      paddingHorizontal: 8, paddingVertical: 8, textAlign: 'center', fontSize: 14,
+    },
+    overrideNoteInput: {
+      backgroundColor: colors.cardLight, color: colors.text, borderRadius: 10,
+      paddingHorizontal: 11, paddingVertical: 9, minHeight: 48, fontSize: 12,
+      marginTop: 8, textAlignVertical: 'top',
+    },
+    targetActionsRow: { flexDirection: 'row', gap: 8, marginTop: 12, alignItems: 'center' },
+    targetBtn: {
+      backgroundColor: colors.primary, borderRadius: 11, paddingVertical: 11,
+      alignItems: 'center', paddingHorizontal: 12,
+    },
+    targetBtnText: { color: '#fff', fontWeight: '800', fontSize: 12 },
+    targetSecondaryBtn: {
+      borderWidth: 1.2, borderColor: colors.border, borderRadius: 11,
+      paddingVertical: 11, paddingHorizontal: 12, alignItems: 'center',
+    },
+    targetSecondaryText: { color: colors.textDim, fontWeight: '700', fontSize: 12 },
+    noteInput: {
+      backgroundColor: colors.cardLight, color: colors.text, borderRadius: 10,
+      paddingHorizontal: 12, paddingVertical: 10, minHeight: 56, fontSize: 13,
+      textAlignVertical: 'top',
+    },
+    noteSendBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+      paddingVertical: 10, marginTop: 4,
+    },
+    noteSendText: { fontWeight: '700', fontSize: 13 },
+    noteHistoryRow: {
+      borderTopWidth: 1, borderTopColor: colors.border, paddingVertical: 7, gap: 2,
+    },
+    noteHistoryText: { color: colors.text, fontSize: 12, fontStyle: 'italic' },
+    noteHistoryMeta: { color: colors.textDim, fontSize: 10 },
+    dayWrap: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+    daySheet: {
+      backgroundColor: colors.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+      padding: 18, height: '70%',
+    },
+    dayHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+    dayTitle: { color: colors.text, fontSize: 16, fontWeight: '800' },
+    dayEmpty: { color: colors.textDim, fontSize: 13, textAlign: 'center', paddingVertical: 24 },
+    dayEntryRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      backgroundColor: colors.card, borderRadius: 11, padding: 11, marginBottom: 5,
+    },
+    dayEntryName: { color: colors.text, fontSize: 14, fontWeight: '700' },
+    dayEntryMeta: { color: colors.textDim, fontSize: 11, marginTop: 1 },
+    dayReadonly: { color: colors.textDim, fontSize: 11, textAlign: 'center', paddingVertical: 14, fontStyle: 'italic' },
 
     archiveBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,

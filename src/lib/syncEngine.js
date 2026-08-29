@@ -653,6 +653,59 @@ const HANDLERS = {
       return p && p.synced === 0 ? [s.plan_ref] : [];
     },
   },
+  // diet_food_log: the raw food diary ("what I actually ate"). One row per
+  // logged food; entity id is the entry's stable local id so repeated syncs
+  // upsert idempotently server-side (UNIQUE(user_id, local_entity_id)) —
+  // an offline entry synced twice can never become a duplicate. plan_ref
+  // follows the diet_swap convention: local plan id for self-authored
+  // plans, server uuid for assigned plans (plan_server_id drives the
+  // trainer's monitoring visibility; self-authored logs stay private).
+  diet_food_log: {
+    path: '/user/backup/food-log',
+    async upsert(localId) {
+      const db = await getDb();
+      const e = await db.getFirstAsync(
+        'SELECT * FROM local_food_log_entries WHERE local_id = ? AND (user_id IS NULL OR user_id = ?)',
+        [localId, getCurrentUserId()]
+      );
+      if (!e) return; // deleted meanwhile — clean no-op
+      const rows = await api(this.path, {
+        method: 'POST',
+        body: [{
+          local_entity_id: e.local_id,
+          plan_ref: e.plan_ref || null,
+          plan_server_id: e.plan_ref && !/^(dp_|mig_)/.test(String(e.plan_ref)) ? e.plan_ref : null,
+          plan_version_id: e.plan_version_id ?? null,
+          log_date: e.log_date,
+          meal_type: e.meal_type ?? null,
+          source: e.source,
+          planned_item_ref: e.planned_item_ref ?? null,
+          name: e.name,
+          calories: e.calories,
+          protein_g: e.protein_g,
+          carbs_g: e.carbs_g,
+          fat_g: e.fat_g,
+          serving_size: e.serving_size ?? null,
+          quantity: e.quantity || 1,
+          logged_at: new Date(e.logged_at || Date.now()).toISOString(),
+        }],
+      });
+      await db.runAsync(
+        'UPDATE local_food_log_entries SET synced = 1, server_id = ? WHERE local_id = ?',
+        [rows?.[0]?.id || null, localId]
+      );
+    },
+    async remove(localId) {
+      await api(`${this.path}/${encodeURIComponent(localId)}`, { method: 'DELETE' });
+    },
+    async deps(localId) {
+      const db = await getDb();
+      const e = await db.getFirstAsync('SELECT plan_ref FROM local_food_log_entries WHERE local_id = ?', [localId]);
+      if (!e || !e.plan_ref || !/^(dp_|mig_)/.test(String(e.plan_ref))) return []; // assigned plan — no local parent
+      const p = await db.getFirstAsync('SELECT synced FROM local_diet_plans WHERE local_id = ?', [e.plan_ref]);
+      return p && p.synced === 0 ? [e.plan_ref] : [];
+    },
+  },
   supplement_plan: {
     path: '/user/backup/supplement-plans',
     async upsert(localId) {
@@ -1106,6 +1159,10 @@ export async function resyncQueueForCurrentUser() {
     await db.getAllAsync(
       'SELECT local_id FROM local_diet_plans WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
     'diet_plan', (r) => r.local_id);
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT local_id FROM local_food_log_entries WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'diet_food_log', (r) => r.local_id);
   await enqueueAll(
     await db.getAllAsync(
       'SELECT diet_plan_local_id, date FROM local_diet_checkins WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),

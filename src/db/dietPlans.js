@@ -12,6 +12,7 @@ import { getDb } from './db';
 import { getCurrentUserId } from './userId';
 import { api } from '../lib/api';
 import { enqueueUpsert, enqueueDelete } from '../lib/syncEngine';
+import { todayLocalISO } from '../lib/checkinDates';
 
 const parse = (v) => {
   if (Array.isArray(v)) return v;
@@ -78,11 +79,12 @@ export async function ensureDietPlansLoaded() {
         `INSERT OR IGNORE INTO local_diet_plans
            (local_id, server_id, user_id, synced, name, notes, tags,
             daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
-            created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            tracking_mode, tolerance_pct, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [p.local_entity_id, p.id, userId, 1, p.name, p.notes ?? null, arr(p.tags),
          p.daily_calorie_target ?? null, p.daily_protein_target ?? null,
          p.daily_carbs_target ?? null, p.daily_fat_target ?? null,
+         p.tracking_mode ?? 'simple', p.tolerance_pct ?? 10,
          Date.now(), Date.now()]
       );
       for (const d of p.days || []) {
@@ -212,6 +214,8 @@ async function attachDays(db, plans) {
     p.days = days;
     p.id = p.local_id;
     p.tags = parse(p.tags);
+    p.tracking_mode = p.tracking_mode || 'simple';
+    p.tolerance_pct = p.tolerance_pct != null ? p.tolerance_pct : 10;
     p.trainer_name = null; // self-authored by definition
     p.created_at = p.created_at ? new Date(p.created_at).toISOString() : new Date().toISOString();
     // backend semantics: diet list counts MEAL SLOTS
@@ -252,8 +256,60 @@ export async function createDietPlan(payload) {
   const localId = newLocalId();
   const now = Date.now();
   await writePlanTree(db, userId, localId, payload, now);
+  await openPlanVersion(db, localId, payload, 1);
   await enqueueUpsert('diet_plan', localId);
   return localId;
+}
+
+// ── plan versioning (§33): targets are snapshotted per effective_from date ─
+// A diary entry must always be evaluated against the targets that were in
+// force on ITS date, so editing targets never rewrites historical results.
+function versionTargets(payload) {
+  const p = payload || {};
+  return {
+    daily_calorie_target: p.daily_calorie_target ?? null,
+    daily_protein_target: p.daily_protein_target ?? null,
+    daily_carbs_target: p.daily_carbs_target ?? null,
+    daily_fat_target: p.daily_fat_target ?? null,
+    tolerance_pct: p.tolerance_pct ?? 10,
+    tracking_mode: p.tracking_mode || 'simple',
+  };
+}
+
+async function openPlanVersion(db, planLocalId, payload, versionNumber) {
+  const t = versionTargets(payload);
+  await db.runAsync(
+    `INSERT OR REPLACE INTO local_diet_plan_versions
+       (diet_plan_local_id, version_number, effective_from,
+        daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
+        tolerance_pct, tracking_mode, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [planLocalId, versionNumber, todayLocalISO(),
+     t.daily_calorie_target, t.daily_protein_target, t.daily_carbs_target, t.daily_fat_target,
+     t.tolerance_pct, t.tracking_mode, Date.now()]
+  );
+}
+
+// The version effective on `dateStr` (latest effective_from <= date), falling
+// back to the plan row itself when no versions exist (legacy plans).
+export async function getPlanVersionForDate(planLocalId, dateStr) {
+  const db = await getDb();
+  const row = await db.getFirstAsync(
+    `SELECT * FROM local_diet_plan_versions
+     WHERE diet_plan_local_id = ? AND effective_from <= ?
+     ORDER BY version_number DESC LIMIT 1`,
+    [planLocalId, String(dateStr)]
+  );
+  return row || null;
+}
+
+export async function listDietPlanVersions(planLocalId) {
+  const db = await getDb();
+  return db.getAllAsync(
+    `SELECT * FROM local_diet_plan_versions WHERE diet_plan_local_id = ?
+     ORDER BY version_number ASC`,
+    [planLocalId]
+  );
 }
 
 // export async function updateDietPlan(localId, payload) {
@@ -325,9 +381,13 @@ export async function updateDietPlan(localId, payload) {
   const db = await getDb();
   const userId = getCurrentUserId();
   if (!userId) return;
-  // capture created_at so an edit doesn't reset the plan's creation date
+  // capture created_at so an edit doesn't reset the plan's creation date,
+  // and the previous targets so a target/tolerance/mode change can open a
+  // new plan VERSION instead of rewriting history
   const existing = await db.getFirstAsync(
-    'SELECT created_at FROM local_diet_plans WHERE local_id = ? AND user_id = ?',
+    `SELECT created_at, daily_calorie_target, daily_protein_target, daily_carbs_target,
+            daily_fat_target, tolerance_pct, tracking_mode
+     FROM local_diet_plans WHERE local_id = ? AND user_id = ?`,
     [localId, userId]
   );
   const createdAt = existing?.created_at || Date.now();
@@ -338,7 +398,29 @@ export async function updateDietPlan(localId, payload) {
   await deletePlanTree(db, localId);
   await db.runAsync('DELETE FROM local_diet_plans WHERE local_id = ?', [localId]);
   await writePlanTree(db, userId, localId, payload, Date.now(), createdAt);
+  await maybeOpenNewVersion(db, localId, existing, payload);
   await enqueueUpsert('diet_plan', localId);
+}
+
+// Targets/tolerance/tracking-mode UNCHANGED → nothing to do (structure-only
+// edits keep the current version). CHANGED → a new version becomes effective
+// from TODAY; every earlier diary date keeps evaluating against the old one.
+async function maybeOpenNewVersion(db, localId, existing, payload) {
+  const t = versionTargets(payload);
+  const same =
+    existing &&
+    Number(existing.daily_calorie_target ?? -1) === Number(t.daily_calorie_target ?? -1) &&
+    Number(existing.daily_protein_target ?? -1) === Number(t.daily_protein_target ?? -1) &&
+    Number(existing.daily_carbs_target ?? -1) === Number(t.daily_carbs_target ?? -1) &&
+    Number(existing.daily_fat_target ?? -1) === Number(t.daily_fat_target ?? -1) &&
+    Number(existing.tolerance_pct ?? 10) === Number(t.tolerance_pct) &&
+    (existing.tracking_mode || 'simple') === t.tracking_mode;
+  if (same) return;
+  const max = await db.getFirstAsync(
+    'SELECT MAX(version_number) AS v FROM local_diet_plan_versions WHERE diet_plan_local_id = ?',
+    [localId]
+  );
+  await openPlanVersion(db, localId, payload, (max?.v || 0) + 1);
 }
 
 // payload shape: exactly what DietPlanBuilderScreen.save() builds today
@@ -351,11 +433,12 @@ async function writePlanTree(db, userId, planLocalId, payload, now, createdAt) {
     `INSERT OR REPLACE INTO local_diet_plans
        (local_id, user_id, synced, name, notes, tags,
         daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
-        created_at, updated_at)
-     VALUES (?,?,0,?,?,?,?,?,?,?,?,?)`,
+        tracking_mode, tolerance_pct, created_at, updated_at)
+     VALUES (?,?,0,?,?,?,?,?,?,?,?,?,?,?)`,
     [planLocalId, userId, String(p.name || 'Diet Plan').trim(), p.notes ?? null, arr(p.tags),
      p.daily_calorie_target ?? null, p.daily_protein_target ?? null,
-     p.daily_carbs_target ?? null, p.daily_fat_target ?? null, createdAt ?? now, now]
+     p.daily_carbs_target ?? null, p.daily_fat_target ?? null,
+     p.tracking_mode || 'simple', p.tolerance_pct ?? 10, createdAt ?? now, now]
   );
   for (let di = 0; di < (p.days || []).length; di++) {
     const d = p.days[di] || {};
@@ -440,6 +523,11 @@ export async function deleteDietPlan(localId) {
     'SELECT server_id FROM local_diet_plans WHERE local_id = ? AND user_id = ?', [localId, userId]);
   await deletePlanTree(db, localId);
   await db.runAsync('DELETE FROM local_diet_checkins WHERE diet_plan_local_id = ?', [localId]);
+  // diary entries for the plan are historical records — the SERVER cleans up
+  // its backup copies on the plan delete endpoint; locally they are removed
+  // with the plan (the food-log rows were queued-upserts keyed to this plan)
+  await db.runAsync('DELETE FROM local_food_log_entries WHERE plan_ref = ? AND user_id = ?', [localId, userId]);
+  await db.runAsync('DELETE FROM local_diet_plan_versions WHERE diet_plan_local_id = ?', [localId]);
   await db.runAsync('DELETE FROM local_diet_plans WHERE local_id = ? AND user_id = ?', [localId, userId]);
   await enqueueDelete('diet_plan', localId, !!row?.server_id);
 }

@@ -182,18 +182,24 @@ async function upsertDietPlan(userId, p) {
     const { rows } = await client.query(
       `INSERT INTO backup_diet_plans
          (user_id, local_entity_id, name, notes, tags,
-          daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
+          tracking_mode, tolerance_pct)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        ON CONFLICT (user_id, local_entity_id) DO UPDATE SET
          name = EXCLUDED.name, notes = EXCLUDED.notes, tags = EXCLUDED.tags,
          daily_calorie_target = EXCLUDED.daily_calorie_target,
          daily_protein_target = EXCLUDED.daily_protein_target,
          daily_carbs_target = EXCLUDED.daily_carbs_target,
-         daily_fat_target = EXCLUDED.daily_fat_target, updated_at = now()
+         daily_fat_target = EXCLUDED.daily_fat_target,
+         tracking_mode = EXCLUDED.tracking_mode,
+         tolerance_pct = EXCLUDED.tolerance_pct, updated_at = now()
        RETURNING *`,
       [userId, String(p.local_entity_id), p.name, p.notes ?? null, p.tags || [],
        p.daily_calorie_target ?? null, p.daily_protein_target ?? null,
-       p.daily_carbs_target ?? null, p.daily_fat_target ?? null]
+       p.daily_carbs_target ?? null, p.daily_fat_target ?? null,
+       p.tracking_mode === 'detailed' ? 'detailed' : 'simple',
+       Number.isFinite(Number(p.tolerance_pct)) && Number(p.tolerance_pct) >= 1 && Number(p.tolerance_pct) <= 50
+         ? Math.round(Number(p.tolerance_pct)) : 10]
     );
     const pid = String(p.local_entity_id);
     await client.query('DELETE FROM backup_diet_plan_days WHERE user_id = $1 AND diet_plan_local_id = $2', [userId, pid]);
@@ -253,6 +259,8 @@ async function upsertDietPlan(userId, p) {
 
 async function deleteDietPlan(userId, localId) {
   await query('DELETE FROM backup_diet_checkins WHERE user_id = $1 AND diet_plan_local_id = $2', [userId, String(localId)]);
+  // the client's deleteDietPlan removes diary rows locally; cascade here too
+  await query('DELETE FROM backup_food_log_entries WHERE user_id = $1 AND plan_ref = $2', [userId, String(localId)]);
   await query('DELETE FROM backup_diet_plans WHERE user_id = $1 AND local_entity_id = $2', [userId, String(localId)]);
   return { ok: true };
 }

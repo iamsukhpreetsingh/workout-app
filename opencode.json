@@ -1,12 +1,21 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "amazon-bedrock": {
-      "options": {
-        "region": "us-east-1",
-        "profile": "bedrock-profile"
-      }
+  "providers": [
+    {
+      "id": "tokenrouter",
+      "name": "TokenRouter",
+      "baseURL": "https://api.tokenrouter.com/v1",
+      "apiKey": "sk-pI94TeHjxijFuH0qWyusipPolaD9Ky2ijrLJM84CY8zIaOSD",
+      "models": [
+        {
+          "id": "moonshotai/kimi-k3-free",
+          "name": "Kimi K3 (TokenRouter)"
+        }
+      ]
     }
-  },
-  "model": "amazon-bedrock/minimax.minimax-m2.5"
+  ],
+  "defaultModel": {
+    "provider": "tokenrouter",
+    "model": "moonshotai/kimi-k3-free"
+  }
 }
