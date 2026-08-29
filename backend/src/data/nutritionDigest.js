@@ -14,6 +14,7 @@
 const { query } = require('../db/pool');
 const core = require('./nutritionCore');
 const coaching = require('./coachingPlans');
+const { assertActiveAssociation } = require('./assignedPlans');
 const nutritionTargetsService = require('./nutritionTargetsService');
 const { getStructureSuggestions } = require('./structureSuggestions');
 
@@ -378,7 +379,7 @@ async function getNutritionPrefs(trainerId, clientId) {
 }
 
 async function setNutritionPrefs(trainerId, clientId, { target_miss_notifications }) {
-  await coaching.assertActiveAssociation(trainerId, clientId);
+  await assertActiveAssociation(trainerId, clientId);
   const { rows } = await query(
     `INSERT INTO trainer_nutrition_prefs (trainer_id, client_id, target_miss_notifications)
      VALUES ($1,$2,$3)
