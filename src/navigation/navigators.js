@@ -130,7 +130,6 @@ function renderDetailScreens(onSwitchView) {
       </Stack.Screen>
       <Stack.Screen name={SYNC_SETTINGS} component={SyncSettingsScreen} options={{ title: 'Data & Sync' }} />
       <Stack.Screen name={INTAKE_FORM} component={IntakeFormScreen} options={{ title: 'Health Profile' }} />
-      <Stack.Screen name={PROFILE} component={ProfileScreen} options={{ title: 'Profile' }} />
       <Stack.Screen name={BODY} component={BodyScreen} options={{ title: 'Body' }} />
       <Stack.Screen name={PROGRESS_PHOTOS} component={ProgressPhotosScreen} options={{ title: 'Progress Photos' }} />
       <Stack.Screen name={EDIT_PROFILE} component={EditProfileScreen} options={{ title: 'Edit Profile' }} />

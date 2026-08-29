@@ -17,7 +17,7 @@ import { NotificationBell } from '../components/NotificationBell';
 import { fmtVolume } from '../shared/utils/format';
 import { getSyncStatus, addSyncListener, initConnectivityListener, syncPending, getSyncSettings } from '../lib/sync';
 // import { ACTIVE_WORKOUT, MAIN_TABS, NOTIFICATION_CENTER, PLAN_DETAIL, PROFILE, SESSION_DETAIL, SETTINGS, TAB_HISTORY } from '../shared/constants/routes';
-import { ACTIVE_WORKOUT, CLIENT_ASSIGNED_DETAIL, HISTORY, NOTIFICATION_CENTER, PLAN_DETAIL, PROFILE, SESSION_DETAIL, SETTINGS } from '../shared/constants/routes';
+import { ACTIVE_WORKOUT, CLIENT_ASSIGNED_DETAIL, HISTORY, NOTIFICATION_CENTER, PLAN_DETAIL, SESSION_DETAIL, SETTINGS } from '../shared/constants/routes';
 const NUMS = { fontVariant: ['tabular-nums'] };
 
 function smartWorkoutName() {
@@ -103,7 +103,7 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
-  // Contextual greeting; shared settings + profile icons (all screens)
+  // Contextual greeting; shared settings icon (profile lives in the tab bar)
   React.useLayoutEffect(() => {
     navigation.setOptions({
       title: greeting(),
@@ -112,9 +112,6 @@ export default function HomeScreen({ navigation }) {
           <NotificationBell onPress={() => navigation.navigate(NOTIFICATION_CENTER)} />
           <TouchableOpacity onPress={() => navigation.navigate(SETTINGS)} style={{ padding: 8 }}>
             <Ionicons name="settings-outline" size={22} color={colors.text} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => navigation.navigate(PROFILE)} style={{ padding: 8 }}>
-            <Ionicons name="person-circle-outline" size={22} color={colors.text} />
           </TouchableOpacity>
         </View>
       ),
