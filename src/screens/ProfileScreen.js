@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
+import { useHeaderActions } from '../components/HeaderActions';
 import { TAB_CLIENTS, EDIT_PROFILE, INTAKE_FORM } from '../shared/constants/routes';
 import ChangePasswordCard from '../components/ChangePasswordCard';
 
@@ -12,6 +13,7 @@ export default function ProfileScreen({ navigation }) {
   const colors = useColors();
   const { user, logout } = useAuth();
   const styles = makeStyles(colors);
+  useHeaderActions(navigation);
   if (!user) return null;
 
   const isTrainer = user.role === 'trainer';

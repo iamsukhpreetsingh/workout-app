@@ -13,7 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
-import { NotificationBell } from '../components/NotificationBell';
+import { useHeaderActions } from '../components/HeaderActions';
 import { CLIENT_DETAIL, NOTIFICATION_CENTER } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
@@ -87,15 +87,7 @@ export default function TrainerClientsScreen({ navigation }) {
   // the code always visible) — the old header icon generated codes whose
   // display only rendered in the zero-clients empty state.
 
-  React.useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <NotificationBell onPress={() => navigation.navigate(NOTIFICATION_CENTER)} />
-        </View>
-      ),
-    });
-  }, [navigation, colors]);
+  useHeaderActions(navigation);
 
   const refresh = async () => {
     setRefreshing(true);

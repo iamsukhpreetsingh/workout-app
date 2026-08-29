@@ -103,20 +103,11 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
-  // Contextual greeting; shared settings icon (profile lives in the tab bar)
+  // Contextual greeting; shared notification + settings actions (all screens)
+  useHeaderActions(navigation);
   React.useLayoutEffect(() => {
-    navigation.setOptions({
-      title: greeting(),
-      headerRight: () => (
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <NotificationBell onPress={() => navigation.navigate(NOTIFICATION_CENTER)} />
-          <TouchableOpacity onPress={() => navigation.navigate(SETTINGS)} style={{ padding: 8 }}>
-            <Ionicons name="settings-outline" size={22} color={colors.text} />
-          </TouchableOpacity>
-        </View>
-      ),
-    });
-  }, [navigation, colors]);
+    navigation.setOptions({ title: greeting() });
+  }, [navigation]);
 
   useFocusEffect(
     useCallback(() => {

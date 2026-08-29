@@ -23,11 +23,11 @@ export default function HeaderActions({ navigation: navOverride, extra }) {
 }
 
 // Registers this pair as a screen's headerRight (call from useLayoutEffect)
-export function useHeaderActions(navigation, deps = []) {
+export function useHeaderActions(navigation, deps = [], extra = null) {
   const colors = useColors();
   React.useLayoutEffect(() => {
     navigation.setOptions({
-      headerRight: () => <HeaderActions navigation={navigation} />,
+      headerRight: () => <HeaderActions navigation={navigation} extra={extra} />,
     });
-  }, [navigation, colors, ...deps]);
+  }, [navigation, colors, ...deps, extra]);
 }

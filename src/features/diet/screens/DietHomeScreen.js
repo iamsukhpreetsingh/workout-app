@@ -6,6 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../../../lib/api';
+import { useHeaderActions } from '../../../components/HeaderActions';
 import { fetchAndCacheTrainerContent } from '../../../lib/trainerCache';
 import { getAllergenConflicts } from '../../../lib/allergens';
 import { CLIENT_DIET_PLAN_DETAIL } from '../../../shared/constants/routes';
@@ -43,6 +44,7 @@ const SECTIONS = [
 export default function DietHomeScreen({ navigation }) {
   const colors = useColors();
   const styles = makeStyles(colors);
+  useHeaderActions(navigation);
   const [viewDate, setViewDate] = useState(todayLocalISO());
   const [entries, setEntries] = useState([]);
   const [target, setTarget] = useState(null); // active nutrition target overlay

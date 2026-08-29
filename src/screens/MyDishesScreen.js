@@ -8,6 +8,7 @@ import { listRecipes, createRecipe, updateRecipe, deleteRecipe } from '../db/rec
 import CatalogSearch from '../components/CatalogSearch';
 import DishForm from '../components/DishForm';
 import { useColors } from '../theme';
+import { useHeaderActions } from '../components/HeaderActions';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -23,14 +24,13 @@ export default function MyDishesScreen({ navigation }) {
   const [tagFilter, setTagFilter] = useState(null);
   const [editing, setEditing] = useState(null);
 
+  useHeaderActions(navigation, [], (
+    <TouchableOpacity onPress={() => setEditing({})} style={{ padding: 8 }}>
+      <Ionicons name="add" size={22} color={colors.primary} />
+    </TouchableOpacity>
+  ));
   React.useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity onPress={() => setEditing({})} style={{ padding: 8 }}>
-          <Ionicons name="add" size={22} color={colors.primary} />
-        </TouchableOpacity>
-      ),
-    });
+    navigation.setOptions({});
   }, [navigation, colors]);
 
   const load = useCallback(async () => {

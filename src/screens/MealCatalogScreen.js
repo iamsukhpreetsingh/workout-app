@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
+import { useHeaderActions } from '../components/HeaderActions';
 import DishForm from '../components/DishForm';
 import CatalogSearch from '../components/CatalogSearch';
 import TagEditorModal from '../components/TagEditorModal';
@@ -34,14 +35,13 @@ export default function MealCatalogScreen({ navigation }) {
   const [editing, setEditing] = useState(null); // null | {} | item
   const [showTagEditor, setShowTagEditor] = useState(false);
 
+  useHeaderActions(navigation, [], (
+    <TouchableOpacity onPress={() => setEditing({})} style={{ padding: 8 }}>
+      <Ionicons name="add" size={22} color={colors.primary} />
+    </TouchableOpacity>
+  ));
   React.useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity onPress={() => setEditing({})} style={{ padding: 8 }}>
-          <Ionicons name="add" size={22} color={colors.primary} />
-        </TouchableOpacity>
-      ),
-    });
+    navigation.setOptions({});
   }, [navigation, colors]);
 
   const load = useCallback(async () => {

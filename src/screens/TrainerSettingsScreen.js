@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Share, ActivityIn
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../store/AuthContext';
 import { useColors } from '../theme';
+import { useHeaderActions } from '../components/HeaderActions';
 import { api } from '../lib/api';
 import ChangePasswordCard from '../components/ChangePasswordCard';
 
@@ -10,6 +11,7 @@ import ChangePasswordCard from '../components/ChangePasswordCard';
 // switcher, logout. Deliberately minimal; app preferences live in User
 // View's Settings.
 export default function TrainerSettingsScreen({ navigation, onSwitchView }) {
+  useHeaderActions(navigation);
   const colors = useColors();
   const styles = makeStyles(colors);
   const { user, logout } = useAuth();
