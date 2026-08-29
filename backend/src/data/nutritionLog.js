@@ -9,7 +9,7 @@
 // user-scoped food log entries (recent/frequent derivations).
 const { query, transaction } = require('../db/pool');
 const { FOOD_SEED } = require('./foodSeed');
-const coaching = require('./coachingPlans');
+const trainerClients = require('./trainerClients');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -152,6 +152,16 @@ async function openFoodFactsBarcode(barcode) {
 async function searchFoods(userId, { q, barcode } = {}) {
   const results = [];
 
+  // self-heal: if the global database has never been seeded (migration
+  // 040 applied but `npm run migrate-diet` not run yet), seed on first
+  // search — idempotent, so this is always safe
+  const { rows: seedCheck } = await query(
+    `SELECT COUNT(*)::int AS c FROM global_foods WHERE source = 'seed' LIMIT 1`
+  );
+  if (!seedCheck[0]?.c) {
+    await seedGlobalFoods().catch(() => {});
+  }
+
   if (barcode) {
     // barcode is exact-match: global DB first (incl. previously cached
     // OFF products), then a live OFF product lookup cached on success
@@ -199,7 +209,7 @@ async function searchFoods(userId, { q, barcode } = {}) {
   })));
 
   // layer 3: the active trainer's catalog (inspirational, loggable content)
-  const trainer = await coaching.getActiveTrainerForClient(userId).catch(() => null);
+  const trainer = await trainerClients.getActiveTrainerForClient(userId).catch(() => null);
   if (trainer) {
     const { rows: trainerRows } = await query(
       `SELECT id, name, calories, protein_g, carbs_g, fat_g, serving_size
