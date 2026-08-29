@@ -795,6 +795,23 @@ registerRoute(router, {
 // ---- Trainer day / week / month monitoring (read-only) ----
 registerRoute(router, {
   method: 'GET',
+  path: '/clients/:clientId/activity-map',
+  description: "GitHub-style activity-map summaries for the Overview tab: per-day diet color (green=calories+macros on target, yellow=partial attention, red=target miss, grey=not logged, in_progress=today) evaluated against the target version effective on each date, per-day workout sessions, streaks (logging/target/workout), week summary and attention items. ?weeks=4..52 (default 12). Two aggregate queries — never the raw per-exercise history.",
+  requiresAuth: true,
+  allowedRoles: ['trainer'],
+  category: 'Nutrition',
+}, async (req, res) => {
+  try {
+    res.json(await nutritionDigest.getClientActivityMap(
+      req.user.id, req.params.clientId, parseInt(req.query.weeks, 10) || 12
+    ));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole('trainer')]);
+
+registerRoute(router, {
+  method: 'GET',
   path: '/clients/:clientId/nutrition-day',
   description: "One client day, full detail: Target Hit / Under / Over / Not Logged status (against the target version effective on that date), per-macro status with remaining/excess, and the grouped read-only food log. ?date=YYYY-MM-DD.",
   requiresAuth: true,

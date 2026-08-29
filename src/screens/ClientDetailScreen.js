@@ -26,6 +26,7 @@ import { fmtDuration, relativeTime, isoDay, weeklyVolumeBuckets, TYPE_TAG } from
 import OverviewPanel from '../features/coaching/components/OverviewPanel';
 import CoachingList from '../features/coaching/components/CoachingList';
 import NutritionDigestCard from '../features/coaching/components/NutritionDigestCard';
+import ActivityMapsCard from '../features/coaching/components/ActivityMapsCard';
 import Segmented from '../features/coaching/components/Segmented';
 import ClientWorkoutsTab from '../features/coaching/components/ClientWorkoutsTab';
 import { ASSIGNED_PLAN_DETAIL, ASSIGN_WORKOUT, ASSIGN_WORKOUT_PICKER, COACHING_PLAN_DETAIL , DIET_PLAN_BUILDER, SUPPLEMENT_PLAN_BUILDER } from '../shared/constants/routes';
@@ -66,7 +67,8 @@ export default function ClientDetailScreen({ route, navigation }) {
 
   // content
   const [cTab, setCTab] = useState('workouts');
-  const [activeTab, setActiveTab] = useState('overview'); // overview | analytics | workouts | diet | supplements
+  const [activeTab, setActiveTab] = useState('overview');
+  const [focusDate, setFocusDate] = useState(null); // map day → tab deep-link // overview | analytics | workouts | diet | supplements
   const [activity, setActivity] = useState([]);
   const [summaries, setSummaries] = useState([]);
   const [assignedPlans, setAssignedPlans] = useState([]);
@@ -493,6 +495,14 @@ export default function ClientDetailScreen({ route, navigation }) {
       </ScrollView>
 
       {activeTab === 'overview' && (
+        <ActivityMapsCard
+          clientId={clientId}
+          clientName={clientName}
+          onFocusDay={(date, tab) => { setFocusDate(date); setActiveTab(tab); }}
+        />
+      )}
+
+      {activeTab === 'overview' && (
         <OverviewPanel
           styles={styles}
           colors={colors}
@@ -630,7 +640,7 @@ export default function ClientDetailScreen({ route, navigation }) {
       )}
 
       {activeTab === 'diet' && (
-        <NutritionDigestCard clientId={clientId} clientName={clientName} />
+        <NutritionDigestCard clientId={clientId} clientName={clientName} focusDate={focusDate} />
       )}
 
       {activeTab === 'diet' && (

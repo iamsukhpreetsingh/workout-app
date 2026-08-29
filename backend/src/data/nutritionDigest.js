@@ -12,6 +12,7 @@
 //    away from target?);
 //  - shows logging gaps explicitly ("Not logged: Tue").
 const { query } = require('../db/pool');
+const core = require('./nutritionCore');
 const coaching = require('./coachingPlans');
 const nutritionTargetsService = require('./nutritionTargetsService');
 const { getStructureSuggestions } = require('./structureSuggestions');
@@ -25,6 +26,13 @@ class HttpError extends Error {
 
 const dayStr = (d) => d.toISOString().slice(0, 10);
 const todayStr = () => dayStr(new Date());
+// UTC-anchored day arithmetic for the activity-map window (date-only math,
+// never local-timezone shifted)
+const shiftDays = (iso, n) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return dayStr(d);
+};
 
 // The trend engine — pure, mirrored in the mobile domain module
 // (src/features/diet/domain/nutritionCore.js buildTrendSummary) with tests
@@ -440,8 +448,241 @@ async function evaluateMissedTargetNotifications(userId, dates) {
   }
 }
 
+
+// ── GitHub-style activity maps (trainer Overview) ────────────────────────
+// Compact daily summaries for the consistency maps — TWO AGGREGATE QUERIES
+// over the window, never the client's raw per-exercise history (§36).
+// Diet color is the NUTRITION OUTCOME (calories + configured macros against
+// the target version effective on each date); plan adherence is computed
+// but stays secondary. Workout color reflects what this app actually knows:
+// sessions are all-or-nothing and plans are not date-scheduled, so a day is
+// GREEN (session completed) or GREY (rest/no session) — a "missed scheduled
+// workout" state cannot exist and is never fabricated.
+
+// Pure: day color from calorie/macro statuses. Kept separate for tests.
+//   green  = calories AND every configured macro within tolerance
+//   yellow = calories within tolerance but ≥1 configured macro outside
+//   red    = calories outside tolerance
+//   grey   = nothing logged; in_progress = logged but today (still happening)
+function dietDayColor({ isLogged, isToday, calorieStatus, macroStatuses }) {
+  if (!isLogged) return 'not_logged';
+  if (isToday) return 'in_progress';
+  if (calorieStatus == null) return 'no_target';
+  if (calorieStatus !== 'on_target') return 'red';
+  const macroMiss = Object.values(macroStatuses || {}).some((st) => st != null && st !== 'on_target');
+  return macroMiss ? 'yellow' : 'green';
+}
+
+function computeStreaks(days) {
+  // trailing streaks over the window; today (still in progress) never breaks
+  // a streak — evaluation starts from the most recent COMPLETED day
+  const completed = [...days].filter((d) => !d.isToday);
+  let logging = 0;
+  for (let i = completed.length - 1; i >= 0; i--) {
+    if (completed[i].dietLogged) logging += 1;
+    else break;
+  }
+  let target = 0;
+  for (let i = completed.length - 1; i >= 0; i--) {
+    if (completed[i].dietColor === 'green') target += 1;
+    else break;
+  }
+  let workout = 0;
+  for (let i = completed.length - 1; i >= 0; i--) {
+    if (completed[i].workoutSessions > 0) workout += 1;
+    else break;
+  }
+  return { logging, target, workout };
+}
+
+async function getClientActivityMap(trainerId, clientId, weeks = 12) {
+  await coaching.assertReadableAssociation(trainerId, clientId);
+  const windowDays = Math.min(Math.max(Number(weeks) || 12, 4), 52) * 7;
+  const today = dayStr(new Date());
+  const end = shiftDays(today, 0);
+  const start = shiftDays(end, -(windowDays - 1));
+
+  // target VERSIONS over the window — each day is evaluated against the
+  // version effective on ITS date (§33/§34)
+  const { rows: versions } = await query(
+    `SELECT * FROM user_nutrition_targets
+     WHERE user_id = $1 AND effective_from <= $2::date
+     ORDER BY effective_from ASC, version_number ASC`,
+    [clientId, end]
+  );
+  const targetFor = (date) => {
+    let t = null;
+    for (const v of versions) {
+      if (String(v.effective_from).slice(0, 10) <= date) t = v;
+      else break;
+    }
+    return t
+      ? {
+          calories: t.calories, protein_g: Number(t.protein_g),
+          carbs_g: Number(t.carbs_g), fat_g: Number(t.fat_g),
+          tolerance_pct: t.tolerance_pct ?? 10,
+        }
+      : null;
+  };
+
+  const [dietAgg, workoutAgg, entryRefs] = await Promise.all([
+    query(
+      `SELECT log_date,
+              SUM(calories) AS calories, SUM(protein_g) AS protein_g,
+              SUM(carbs_g) AS carbs_g, SUM(fat_g) AS fat_g
+       FROM food_log_entries
+       WHERE user_id = $1 AND log_date >= $2::date AND log_date <= $3::date
+       GROUP BY log_date`,
+      [clientId, start, end]
+    ),
+    query(
+      `SELECT performed_at::date AS workout_day,
+              COUNT(*)::int AS sessions,
+              MAX(name) AS name,
+              MAX(duration_seconds) AS duration_seconds,
+              SUM(total_volume) AS total_volume,
+              MAX(exercise_count) AS exercise_count
+       FROM session_summaries
+       WHERE client_id = $1 AND performed_at >= $2::date AND performed_at < ($3::date + INTERVAL '1 day')
+       GROUP BY workout_day`,
+      [clientId, start, end]
+    ),
+    // light columns only — plan adherence (secondary signal) needs refs/names
+    query(
+      `SELECT log_date, food_source_id, name FROM food_log_entries
+       WHERE user_id = $1 AND log_date >= $2::date AND log_date <= $3::date`,
+      [clientId, start, end]
+    ),
+  ]);
+
+  const dietByDate = new Map(dietAgg.rows.map((r) => [String(r.log_date).slice(0, 10), r]));
+  const workoutByDate = new Map(workoutAgg.rows.map((r) => [String(r.workout_day).slice(0, 10), r]));
+  const refsByDate = new Map();
+  for (const r of entryRefs.rows) {
+    const d = String(r.log_date).slice(0, 10);
+    if (!refsByDate.has(d)) refsByDate.set(d, []);
+    refsByDate.get(d).push(r);
+  }
+
+  // planned items of the active assigned plan (first-day approximation, same
+  // as the monitoring service) for the SECONDARY follow-through signal
+  let plannedItems = [];
+  const plans = await coaching.listActiveForClient('diet', trainerId, clientId).catch(() => []);
+  if (plans[0]) {
+    const full = await coaching.getPlanWithItems('diet', plans[0].id).catch(() => null);
+    const firstDay = (full?.days || [])[0];
+    for (const m of firstDay?.meals || []) {
+      for (const it of m.items || []) plannedItems.push({ id: String(it.id), name: it.name });
+    }
+  }
+
+  const days = [];
+  const cur = new Date(`${start}T00:00:00Z`);
+  while (dayStr(cur) <= end) {
+    const date = dayStr(cur);
+    const d = dietByDate.get(date);
+    const w = workoutByDate.get(date);
+    const isLogged = !!d;
+    const isToday = date === today;
+    const target = targetFor(date);
+    const tol = target?.tolerance_pct ?? 10;
+    const cal = d ? Math.round(Number(d.calories) || 0) : 0;
+    const macros = {
+      protein_g: d ? Math.round(Number(d.protein_g) || 0) : 0,
+      carbs_g: d ? Math.round(Number(d.carbs_g) || 0) : 0,
+      fat_g: d ? Math.round(Number(d.fat_g) || 0) : 0,
+    };
+    const calorieStatus = isLogged && target?.calories
+      ? core.evaluateAgainstTarget(cal, target.calories, tol)
+      : null;
+    const macroStatuses = {};
+    for (const [k, label] of [['protein_g', 'Protein'], ['carbs_g', 'Carbs'], ['fat_g', 'Fat']]) {
+      if (target?.[k] > 0 && isLogged) {
+        macroStatuses[label] = core.evaluateAgainstTarget(macros[k], target[k], tol);
+      }
+    }
+    // secondary plan follow-through (never drives color)
+    let planFollowed = null;
+    const refs = refsByDate.get(date) || [];
+    if (isLogged && plannedItems.length) {
+      const loggedNames = new Set(refs.map((r) => String(r.name || '').trim().toLowerCase()));
+      // food_source_id carries the plan-item reference in the log-first table
+      const loggedRefs = new Set(refs.map((r) => String(r.food_source_id ?? '')));
+      const done = plannedItems.filter(
+        (p) => loggedRefs.has(p.id) || loggedNames.has(p.name.toLowerCase())
+      ).length;
+      planFollowed = { completed: done, total: plannedItems.length };
+    }
+    days.push({
+      date,
+      dow: new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
+      isToday,
+      dietLogged: isLogged,
+      dietColor: dietDayColor({ isLogged, isToday, calorieStatus, macroStatuses }),
+      calories: cal,
+      caloriesTarget: target?.calories ?? null,
+      protein_g: macros.protein_g, carbs_g: macros.carbs_g, fat_g: macros.fat_g,
+      proteinTarget: target?.protein_g ?? null,
+      carbsTarget: target?.carbs_g ?? null,
+      fatTarget: target?.fat_g ?? null,
+      calorieStatus,
+      macroStatuses,
+      planFollowed,
+      workoutSessions: w ? Number(w.sessions) : 0,
+      workoutName: w?.name || null,
+      workoutMinutes: w?.duration_seconds != null ? Math.round(Number(w.duration_seconds) / 60) : null,
+      workoutVolume: w?.total_volume != null ? Math.round(Number(w.total_volume)) : null,
+      workoutExercises: w?.exercise_count ?? null,
+    });
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+
+  // compact summaries + attention (§14/§28/§29)
+  const last7 = days.slice(-7);
+  const prev7 = days.slice(-14, -7);
+  const logged7 = last7.filter((d) => d.dietLogged);
+  const green7 = last7.filter((d) => d.dietColor === 'green').length;
+  const red7 = last7.filter((d) => d.dietColor === 'red').length;
+  const yellow7 = last7.filter((d) => d.dietColor === 'yellow').length;
+  const macroMissDates = last7
+    .filter((d) => d.dietColor === 'yellow' && d.calorieStatus === 'on_target')
+    .map((d) => d.date)
+    .slice(-3);
+  const sessions7 = last7.reduce((n, d) => n + d.workoutSessions, 0);
+  const sessionsPrev7 = prev7.reduce((n, d) => n + d.workoutSessions, 0);
+  const attention = [];
+  if (red7 > 0) {
+    attention.push({ level: 'red', text: `${red7} calorie target miss${red7 > 1 ? 'es' : ''} in the last 7 days.` });
+  }
+  if (macroMissDates.length >= 2) {
+    attention.push({ level: 'yellow', text: `Protein/macros below target on: ${macroMissDates.map((d) => d.slice(5)).join(', ')}.` });
+  }
+  if (sessionsPrev7 >= 2 && sessions7 <= sessionsPrev7 / 2) {
+    attention.push({ level: 'yellow', text: `Workout consistency dropped: ${sessions7} sessions this week vs ${sessionsPrev7} last week.` });
+  }
+  if (green7 === 0 && logged7.length >= 4) {
+    attention.push({ level: 'yellow', text: 'Logged most days but no green (on-target) days this week.' });
+  }
+
+  return {
+    window_days: windowDays,
+    start, end,
+    days,
+    streaks: computeStreaks(days),
+    week: {
+      dietLogged: logged7.length,
+      dietGreen: green7,
+      dietYellow: yellow7,
+      dietRed: red7,
+      workoutSessions: sessions7,
+    },
+    attention,
+  };
+}
+
 module.exports = {
   buildTrendSummary, getWeeklyDigest, getTrainerWeeklyDigest, getClientFoodLogForTrainer,
   resolveTargetForDate, getClientDailyNutrition, getClientNutritionHistory, summarizeHistory,
   missDirection, getNutritionPrefs, setNutritionPrefs, evaluateMissedTargetNotifications,
+  dietDayColor, computeStreaks, getClientActivityMap,
 };

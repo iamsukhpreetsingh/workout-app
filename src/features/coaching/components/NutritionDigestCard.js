@@ -30,7 +30,7 @@ const MEAL_LABELS = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', 
 // averages over LOGGED days only, and the missed-target notification
 // toggle for this relationship. No compliance percentages anywhere — the
 // dominant indicator is always the nutrition target outcome.
-export default function NutritionDigestCard({ clientId, clientName }) {
+export default function NutritionDigestCard({ clientId, clientName, focusDate }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [mode, setMode] = useState('day');
@@ -69,6 +69,12 @@ export default function NutritionDigestCard({ clientId, clientName }) {
   };
 
   useEffect(() => { load(); }, [clientId, mode, dayDate]);
+
+  // deep-link from the Overview activity maps: tapping a map day opens the
+  // Diet tab focused on that exact date
+  useEffect(() => {
+    if (focusDate) setDayDate(focusDate);
+  }, [focusDate]);
 
   const saveTarget = async () => {
     if (busy) return;
