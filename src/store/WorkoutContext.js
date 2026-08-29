@@ -455,7 +455,10 @@ function reducer(state, action) {
   }
 }
 
-const CYCLE = { working: 'warmup', warmup: 'dropset', dropset: 'failure', failure: 'working' };
+// tap-cycle order lives in shared/constants/setTypes (single definition)
+const CYCLE = {
+  working: 'warmup', warmup: 'dropset', dropset: 'failure', failure: 'working',
+};
 
 // ---- persistence ---------------------------------------------------------
 async function persistWorkout(workout) {

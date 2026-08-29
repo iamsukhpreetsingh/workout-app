@@ -11,11 +11,9 @@ import { useColors } from '../theme';
 import { fmtDate } from '../shared/utils/format';
 import { formatDuration, groupLabels } from '../store/WorkoutContext';
 
+import { TYPE_TAG, TYPE_COLOR, nextSetType } from '../shared/constants/setTypes';
+
 const NUMS = { fontVariant: ['tabular-nums'] };
-const SET_TYPES = ['working', 'warmup', 'dropset', 'failure'];
-const TYPE_TAG = { working: 'W', warmup: 'WU', dropset: 'DS', failure: 'F' };
-// Left-edge set-type color tags — subtle, numbers stay the content
-const TYPE_COLOR = { working: 'primary', warmup: 'textDim', dropset: 'orange', failure: 'red' };
 
 export default function SessionDetailScreen({ route, navigation }) {
   const colors = useColors();
@@ -27,6 +25,11 @@ export default function SessionDetailScreen({ route, navigation }) {
   const [editingName, setEditingName] = useState(false);
   const [editedName, setEditedName] = useState('');
   const [detailEx, setDetailEx] = useState(null);
+  // §9: retroactive set-type editing IS a supported feature, but it must be
+  // EXPLICIT — a single accidental tap on a historical set previously mutated
+  // the completed workout (and triggered PR recompute + re-sync). View mode
+  // is read-only; the header 'Edit' toggle enters the intentional workflow.
+  const [editingSets, setEditingSets] = useState(false);
   const inputRef = useRef(null);
 
   // Share the performed workout structure (no notes/RPE/timestamps)
@@ -34,12 +37,23 @@ export default function SessionDetailScreen({ route, navigation }) {
     navigation.setOptions({
       headerRight: () =>
         session ? (
-          <TouchableOpacity onPress={() => shareSessionAsRoutine(session)} style={{ paddingHorizontal: 8 }}>
-            <Ionicons name="share-social-outline" size={21} color={colors.text} />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity
+              onPress={() => setEditingSets((v) => !v)}
+              style={{ paddingHorizontal: 10 }}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+            >
+              <Text style={{ color: editingSets ? colors.primary : colors.text, fontWeight: '800', fontSize: 14 }}>
+                {editingSets ? 'Done' : 'Edit'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => shareSessionAsRoutine(session)} style={{ paddingHorizontal: 8 }}>
+              <Ionicons name="share-social-outline" size={21} color={colors.text} />
+            </TouchableOpacity>
+          </View>
         ) : null,
     });
-  }, [navigation, session, colors]);
+  }, [navigation, session, colors, editingSets]);
 
   const reload = useCallback(() => {
     let mounted = true;
@@ -87,8 +101,8 @@ export default function SessionDetailScreen({ route, navigation }) {
   );
 
   const cycleType = (set) => {
-    const next = SET_TYPES[(SET_TYPES.indexOf(set.set_type) + 1) % SET_TYPES.length];
-    updateSetType(set.id, next).then(reload);
+    if (!editingSets) return; // read-only in view mode — never mutate from a stray tap
+    updateSetType(set.id, nextSetType(set.set_type)).then(reload);
   };
 
   // Confirm-before-destructive — unchanged behavior
@@ -135,6 +149,17 @@ export default function SessionDetailScreen({ route, navigation }) {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 20, paddingBottom: 48 }}>
+      {/* explicit historical-edit indicator (§9): entering edit mode must be
+          obvious — a completed workout is an immutable snapshot otherwise */}
+      {editingSets && (
+        <View style={styles.editBanner}>
+          <Ionicons name="create-outline" size={13} color={colors.orange} />
+          <Text style={styles.editBannerText}>
+            Editing a completed workout — tapping a set cycles its type and recalculates
+            volume & PRs. Changes sync to your trainer.
+          </Text>
+        </View>
+      )}
       {/* Identity: display-weight name, muted date/time */}
       <View style={styles.nameRow}>
         {editingName ? (
@@ -239,7 +264,9 @@ export default function SessionDetailScreen({ route, navigation }) {
             <TouchableOpacity
               key={s.id}
               style={[styles.setRow, s.set_type === 'warmup' && styles.warmupRow]}
-              onPress={cycleType.bind(null, s)}
+              onPress={editingSets ? cycleType.bind(null, s) : undefined}
+              disabled={!editingSets}
+              activeOpacity={editingSets ? 0.6 : 1}
             >
               {/* set-type left-edge tag keeps columns as straight lines */}
               <View style={styles.typeCell}>
@@ -296,6 +323,12 @@ export default function SessionDetailScreen({ route, navigation }) {
 const makeStyles = (colors) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.bg },
+    editBanner: {
+      flexDirection: 'row', alignItems: 'center', gap: 7,
+      borderWidth: 1.2, borderColor: colors.orange, borderRadius: 11,
+      paddingHorizontal: 11, paddingVertical: 9, marginBottom: 10,
+    },
+    editBannerText: { color: colors.orange, fontSize: 11, fontWeight: '600', flex: 1, lineHeight: 15 },
     dim: { color: colors.textDim, padding: 16 },
 
     nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
