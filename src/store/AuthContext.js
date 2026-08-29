@@ -8,6 +8,7 @@ import { syncExerciseCatalog } from '../lib/exerciseCatalog';
 import { getSyncSettings } from '../lib/sync';
 import { hasUnsyncedBackupData } from '../lib/localOnly';
 import { Alert } from 'react-native';
+import { setImageTokenGetter } from '../lib/progressPhotos';
 
 // Hard auth gate for the whole app. authStatus:
 //   'checking'        → splash while restoring the session
@@ -60,8 +61,7 @@ export function AuthProvider({ children }) {
     
     // Pull data from cloud after successful login
     try {
-      const result = await pullFromCloud();
-      console.log('[AUTH] Pulled from cloud:', result);
+      await pullFromCloud();
     } catch (e) {
       console.log('[AUTH] Pull from cloud failed (non-fatal):', e.message);
     }
@@ -125,21 +125,40 @@ export function AuthProvider({ children }) {
   }, []);
 
   // Wire the api wrapper to our tokens
+  // useEffect(() => {
+
   useEffect(() => {
-    registerTokenHooks({
-      getAccessToken: async () => (await readJson(KEY_ACCESS)) || null,
-      getRefreshToken: async () => (await readJson(KEY_REFRESH)) || null,
-      onRefreshed: async (access, refresh) => {
-        await writeJson(KEY_ACCESS, access);
-        await writeJson(KEY_REFRESH, refresh);
-      },
-      onAuthFailed: () => {
-        clearTokens();
-        setUser(null);
-        setAuthStatus('unauthenticated');
-      },
-    });
-  }, []);
+
+  registerTokenHooks({
+
+    getAccessToken: async () => (await readJson(KEY_ACCESS)) || null,
+
+    getRefreshToken: async () => (await readJson(KEY_REFRESH)) || null,
+
+    onRefreshed: async (access, refresh) => {
+
+      await writeJson(KEY_ACCESS, access);
+
+      await writeJson(KEY_REFRESH, refresh);
+
+    },
+
+    onAuthFailed: () => {
+
+      clearTokens();
+
+      setUser(null);
+
+      setAuthStatus('unauthenticated');
+
+    },
+
+  });
+
+  // authorized progress-photo image fetches share the same token source
+  setImageTokenGetter(async () => (await readJson(KEY_ACCESS)) || null);
+
+}, []);
 
   const login = useCallback(
     async (email, password) => {

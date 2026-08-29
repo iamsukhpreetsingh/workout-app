@@ -25,6 +25,9 @@ import { fmtVolume } from '../shared/utils/format';
 import { fmtDuration, relativeTime, isoDay, weeklyVolumeBuckets, TYPE_TAG } from '../features/coaching/utils/clientAnalytics';
 import OverviewPanel from '../features/coaching/components/OverviewPanel';
 import CoachingList from '../features/coaching/components/CoachingList';
+import NutritionDigestCard from '../features/coaching/components/NutritionDigestCard';
+import ActivityMapsCard from '../features/coaching/components/ActivityMapsCard';
+import ClientInfoPanel from '../features/coaching/components/ClientInfoPanel';
 import Segmented from '../features/coaching/components/Segmented';
 import ClientWorkoutsTab from '../features/coaching/components/ClientWorkoutsTab';
 import { ASSIGNED_PLAN_DETAIL, ASSIGN_WORKOUT, ASSIGN_WORKOUT_PICKER, COACHING_PLAN_DETAIL , DIET_PLAN_BUILDER, SUPPLEMENT_PLAN_BUILDER } from '../shared/constants/routes';
@@ -65,7 +68,8 @@ export default function ClientDetailScreen({ route, navigation }) {
 
   // content
   const [cTab, setCTab] = useState('workouts');
-  const [activeTab, setActiveTab] = useState('overview'); // overview | analytics | workouts | diet | supplements
+  const [activeTab, setActiveTab] = useState('overview');
+  const [focusDate, setFocusDate] = useState(null); // map day → tab deep-link // overview | analytics | workouts | diet | supplements
   const [activity, setActivity] = useState([]);
   const [summaries, setSummaries] = useState([]);
   const [assignedPlans, setAssignedPlans] = useState([]);
@@ -206,6 +210,13 @@ export default function ClientDetailScreen({ route, navigation }) {
         method: 'PATCH',
         body: { enabled: value },
       });
+      // one control governs all monitoring notifications for this client —
+      // mirror the value to the nutrition target-miss preference
+      await api(`/trainer/clients/${clientId}/nutrition-notifications`, {
+        method: 'PUT',
+        body: { target_miss_notifications: value },
+      }).catch(() => {});
+      setNutritionNotifPref(value);
     } catch (e) {
       setNotificationPref(previousValue);
       Alert.alert('Error', 'Failed to update notification preference');
@@ -214,6 +225,9 @@ export default function ClientDetailScreen({ route, navigation }) {
     }
   };
 
+  // Nutrition target-miss notification pref (per-relationship; kept in
+  // sync with the master toggle so ONE bell governs all client notifications)
+  const [nutritionNotifPref, setNutritionNotifPref] = useState(false);
   // Notification preference for this client (fetched from the roster on
   // every focus; defaults to true when unavailable)
   const loadNotificationPref = useCallback(async () => {
@@ -223,6 +237,8 @@ export default function ClientDetailScreen({ route, navigation }) {
       if (client && client.trainer_notifications_enabled !== undefined) {
         setNotificationPref(client.trainer_notifications_enabled);
       }
+      const np = await api(`/trainer/clients/${clientId}/nutrition-notifications`).catch(() => null);
+      if (np) setNutritionNotifPref(np.target_miss_notifications === true);
     } catch (e) {
       // Ignore - use default
     }
@@ -457,7 +473,27 @@ export default function ClientDetailScreen({ route, navigation }) {
             {lastActive ? `Last workout ${relativeTime(lastActive).toLowerCase()}` : 'No workouts yet'}
           </Text>
         </View>
+        {!readOnly && (
+          <TouchableOpacity
+            style={styles.notifBell}
+            onPress={() => handleNotificationToggle(!notificationPref)}
+            disabled={loadingPref}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons
+              name={notificationPref ? 'notifications' : 'notifications-off'}
+              size={20}
+              color={notificationPref ? colors.primary : colors.textDim}
+            />
+            <Text style={[styles.notifBellText, { color: notificationPref ? colors.primary : colors.textDim }]}>
+              {notificationPref ? 'ON' : 'OFF'}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
+
+      {/* expandable client information (collapsed by default) */}
+      <ClientInfoPanel clientId={clientId} />
 
       {readOnly ? (
         <View style={styles.archiveBanner}>
@@ -492,6 +528,14 @@ export default function ClientDetailScreen({ route, navigation }) {
       </ScrollView>
 
       {activeTab === 'overview' && (
+        <ActivityMapsCard
+          clientId={clientId}
+          clientName={clientName}
+          onFocusDay={(date, tab) => { setFocusDate(date); setActiveTab(tab); }}
+        />
+      )}
+
+      {activeTab === 'overview' && (
         <OverviewPanel
           styles={styles}
           colors={colors}
@@ -504,9 +548,6 @@ export default function ClientDetailScreen({ route, navigation }) {
           supplementPlans={supplementPlans}
           activity={activity}
           onLoadActivity={loadActivity}
-          notificationPref={notificationPref}
-          onNotificationToggle={handleNotificationToggle}
-          loadingNotificationPref={loadingPref}
           progResolved={progResolved}
           progOverride={progOverride}
           onProgSave={saveProgOverride}
@@ -629,6 +670,10 @@ export default function ClientDetailScreen({ route, navigation }) {
       )}
 
       {activeTab === 'diet' && (
+        <NutritionDigestCard clientId={clientId} clientName={clientName} focusDate={focusDate} />
+      )}
+
+      {activeTab === 'diet' && (
         <CoachingList
           kind="diet"
           plans={dietPlans}
@@ -699,7 +744,9 @@ const makeStyles = (colors) =>
     centerWrap: { alignItems: 'center', justifyContent: 'center', padding: 32 },
     error: { color: colors.red, fontSize: 12, marginBottom: 10 },
 
-    heroRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 16 },
+    heroRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 12 },
+    notifBell: { alignItems: 'center', paddingHorizontal: 6 },
+    notifBellText: { fontSize: 9, fontWeight: '800', marginTop: 1 },
     avatar: {
       width: 52, height: 52, borderRadius: 26, backgroundColor: colors.primary,
       alignItems: 'center', justifyContent: 'center',

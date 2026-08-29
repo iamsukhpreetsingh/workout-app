@@ -45,7 +45,7 @@ export default function TrainerSettingsScreen({ navigation, onSwitchView }) {
     if (!invite) return;
     try {
       await Share.share({
-        message: `Join me as your trainer on Workout Tracker! Invite code: ${invite.code}`,
+        message: `Join me as your trainer on Workout Tracker! Invite code: ${invite.code} (valid until ${new Date(invite.expires_at).toLocaleDateString()})`,
         title: 'Trainer invite code',
       });
     } catch {
@@ -72,10 +72,12 @@ export default function TrainerSettingsScreen({ navigation, onSwitchView }) {
         </View>
       </View>
 
-      {/* Invite code — lives here (not the Clients header) so the code is
-          always visible with an explicit generate/share, never a silent
-          empty-state-only card */}
-      <View style={styles.card}>
+      {/* Invite code — COLUMN layout (its own style, NOT the row-oriented
+          profile card style). The old shared `card` style forced
+          flexDirection: 'row', squeezing the code/buttons/hint into one
+          horizontal strip — the data was there but rendered as an unreadable
+          sliver. */}
+      <View style={styles.inviteCard}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
           <Text style={styles.inviteTitle}>Invite Code</Text>
           <TouchableOpacity onPress={loadInvite} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -158,6 +160,11 @@ const makeStyles = (colors) =>
     badgeText: { color: colors.blue, fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
     card: {
       flexDirection: 'row', alignItems: 'center', gap: 14,
+      backgroundColor: colors.card, borderRadius: 14, padding: 16, marginBottom: 12,
+    },
+    // invite card: COLUMN layout — header row, code, meta, buttons, hint all
+    // stack vertically (the shared row-style `card` mangled them)
+    inviteCard: {
       backgroundColor: colors.card, borderRadius: 14, padding: 16, marginBottom: 12,
     },
     avatar: {

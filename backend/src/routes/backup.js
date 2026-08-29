@@ -206,6 +206,105 @@ router.delete('/backup/diet-swaps/:itemRef/:date', requireAuth, async (req, res)
   }
 });
 
+// ── Food diary (outcome-first nutrition tracking) ───────────────────────
+// The raw food log is the SOURCE OF TRUTH for daily nutrition; no
+// precomputed adherence is ever stored. Upserts keyed (user_id,
+// local_entity_id) → an offline entry synced repeatedly can never duplicate.
+// plan_server_id is set by the client ONLY for trainer-assigned plans and
+// drives trainer monitoring visibility (see foodLog.js).
+const foodLog = require('../data/foodLog');
+// Log-first nutrition layer (migration 040) — search, dishes, user-scoped diary
+const nutritionLog = require('../data/nutritionLog');
+
+router.post('/backup/food-log', requireAuth, async (req, res) => {
+  try {
+    res.status(201).json(await foodLog.upsertFoodLogEntries(req.user.id, req.body));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+router.get('/backup/food-log', requireAuth, async (req, res) => {
+  try {
+    res.json(await foodLog.listFoodLogEntries(req.user.id, req.query.since));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+router.delete('/backup/food-log/:localId', requireAuth, async (req, res) => {
+  try {
+    res.json(await foodLog.deleteFoodLogEntry(req.user.id, req.params.localId));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// ── Log-first food diary (migration 040) — user-scoped, offline-first ──
+// Entries are scoped to the logging user + date, never to a plan. Upserts
+// keyed (user_id, local_entity_id) → idempotent under repeated offline syncs.
+router.post('/backup/food-log-entries', requireAuth, async (req, res) => {
+  try {
+    const rows = await nutritionLog.upsertFoodLogEntries(req.user.id, req.body);
+    // fire-and-forget missed-target evaluation for every COMPLETED day this
+    // sync touched — idempotent per (trainer, client, date, direction), and
+    // gated on the trainer's per-client preference, so a day logged in
+    // several updates throughout the day can never spam notifications
+    const dates = [...new Set(rows.map((r) => String(r.log_date).slice(0, 10)))];
+    if (dates.length) {
+      const { evaluateMissedTargetNotifications } = require('../data/nutritionDigest');
+      evaluateMissedTargetNotifications(req.user.id, dates).catch(() => {});
+    }
+    res.status(201).json(rows);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+router.get('/backup/food-log-entries', requireAuth, async (req, res) => {
+  try {
+    res.json(await nutritionLog.listFoodLogEntries(req.user.id, req.query.since));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+router.delete('/backup/food-log-entries/:localId', requireAuth, async (req, res) => {
+  try {
+    res.json(await nutritionLog.deleteFoodLogEntry(req.user.id, req.params.localId));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// ── Custom dishes (ingredient-based dish builder, snapshot macros) ──────
+router.post('/backup/custom-dishes', requireAuth, async (req, res) => {
+  try {
+    const list = Array.isArray(req.body) ? req.body : [req.body];
+    const rows = [];
+    for (const p of list) rows.push(await nutritionLog.upsertCustomDish(req.user.id, p));
+    res.status(201).json(rows);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+router.get('/backup/custom-dishes', requireAuth, async (req, res) => {
+  try {
+    res.json(await nutritionLog.listCustomDishes(req.user.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+router.delete('/backup/custom-dishes/:localId', requireAuth, async (req, res) => {
+  try {
+    res.json(await nutritionLog.deleteCustomDish(req.user.id, req.params.localId));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
 // ── Supplement plans (nested) ───────────────────────────────────────────
 router.post('/backup/supplement-plans', requireAuth, async (req, res) => {
   try {

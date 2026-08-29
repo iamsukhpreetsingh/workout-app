@@ -26,7 +26,9 @@ async function ensureBootstrapAdmin() {
     'INSERT INTO admin_users (email, password_hash, name, role) VALUES ($1,$2,$3,$4)',
     [email, hash, 'Super Admin', 'super_admin']
   );
-  console.log(`[ADMIN] bootstrap super admin created: ${email} / ${password} — change this password immediately`);
+  // NEVER log the generated password — an operator who needs it must read
+  // it from the env they set; the log only records that the account exists
+  console.log(`[ADMIN] bootstrap super admin created for ${email} — change the bootstrap password immediately`);
 }
 
 function signAccess(admin) {

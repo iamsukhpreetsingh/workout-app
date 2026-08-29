@@ -5,3 +5,5 @@
 - Prefers multi-step forms with one focus area per screen, a progress indicator, and Back/Next navigation over a single giant scrolling form. Confidence: 0.8
 - Prefers validating user input server-side against fixed allowed value lists, rejecting anything else with a clear error. Confidence: 0.7
 - Prefers persisting partial form progress (at minimum locally) so users don't lose already-entered data if they close the app mid-form. Confidence: 0.7
+- Treats cross-user / multi-tenant data leakage as a "very critical bug" and expects strict user-scoping on every read/write path (backend API, local DB queries, sync layer) — not just on one layer. When debugging such bugs, wants the assistant to trace the full stack (frontend → local DB → sync → backend API) rather than assume any single layer is correct. Confidence: 0.9
+- Wants bugs investigated to root cause with verifiable code references (specific functions, file paths, exact query strings) before a fix is proposed — not just a description of what changed. Confidence: 0.85

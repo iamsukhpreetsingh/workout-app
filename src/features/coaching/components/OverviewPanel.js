@@ -2,7 +2,7 @@
 // Week/month stat cards + the one place all three assign actions live
 // together + a merged recent-activity feed.
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, Switch, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../../../lib/api';
 import ProgressionStrategyEditor from '../../../components/ProgressionStrategyEditor';
@@ -26,7 +26,6 @@ const NUMS = { fontVariant: ['tabular-nums'] };
 export default function OverviewPanel({
   styles, colors, navigation, clientId, clientName, readOnly,
   summaries, activity, onLoadActivity,
-  notificationPref, onNotificationToggle, loadingNotificationPref,
   progResolved, progOverride, onProgSave, onProgClear, progBusy,
 }) {
   // Editing state lives HERE — it's pure UI state for this card, and this
@@ -74,36 +73,28 @@ export default function OverviewPanel({
 
   return (
     <View>
-      <View style={styles.statRow}>
-        <View style={styles.statCard}>
-          <Text style={[styles.statBig, NUMS]}>{wk.count}</Text>
-          <Text style={styles.statLabel}>workouts this week</Text>
-          <Text style={[styles.statVol, NUMS]}>{fmtVolume(wk.vol)} vol</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={[styles.statBig, NUMS]}>{mo.count}</Text>
-          <Text style={styles.statLabel}>workouts this month</Text>
-          <Text style={[styles.statVol, NUMS]}>{fmtVolume(mo.vol)} vol</Text>
-        </View>
-      </View>
-
-      <Text style={styles.groupLabel}>Notifications</Text>
-      {!readOnly && (
-        <View style={[styles.qaRow, { marginBottom: 12 }]}>
-          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8 }}>
-            <Text style={styles.qaText}>Notify me about this client</Text>
-            <Switch
-              value={notificationPref}
-              onValueChange={onNotificationToggle}
-              disabled={loadingNotificationPref}
-              trackColor={{ false: colors.border, true: colors.primary }}
-              thumbColor="#fff"
-            />
+      <Text style={styles.groupLabel}>Shared Progress Photos</Text>
+      <TouchableOpacity
+        style={styles.card}
+        activeOpacity={0.8}
+        onPress={() => navigation.navigate('TrainerProgressPhotos', { clientId, clientName })}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Ionicons name="images-outline" size={18} color={colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>
+              View Shared Progress Photos
+            </Text>
+            <Text style={{ color: colors.textDim, fontSize: 12, marginTop: 2 }}>
+              Only photos {clientName || 'this client'} marked "Share with Trainer"
+            </Text>
           </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
         </View>
-      )}
+      </TouchableOpacity>
 
-            <Text style={styles.groupLabel}>Progression Strategy</Text>
+
+      <Text style={styles.groupLabel}>Progression Strategy</Text>
       <View style={styles.card}>
         {progEditing ? (
           <View>

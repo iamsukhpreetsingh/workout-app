@@ -29,6 +29,7 @@ module.exports = {
   expo: {
     name: "Workout Tracker",
     slug: "workout-tracker",
+    scheme: "workouttracker",
     version: "1.0.0",
     orientation: "portrait",
     userInterfaceStyle: "dark",
@@ -43,10 +44,24 @@ module.exports = {
       package: "com.anonymous.workouttracker",
       permissions: ["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"]
     },
-    plugins: [
+    // plugins: [
+    //   "expo-font",
+    //   "expo-secure-store",
+    //   "./plugins/withAndroidNetworkSecurity"
+    // ],
+      "plugins": [
       "expo-font",
       "expo-secure-store",
-      "./plugins/withAndroidNetworkSecurity"
+      "./plugins/withAndroidNetworkSecurity",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allows you to take progress photos.",
+          "photosPermission": "Allows you to choose progress photos from your library.",
+          "isCameraEnabled": true,
+          "isLibraryEnabled": true
+        }
+      ]
     ],
     extra: {
       eas: {

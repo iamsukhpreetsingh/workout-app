@@ -5,6 +5,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import { useColors } from '../theme';
 import { api } from '../lib/api';
+import { listRecipes } from '../db/recipes';
 
 const PRESET_ALLERGENS = ['nuts', 'dairy', 'gluten', 'shellfish', 'eggs', 'soy'];
 const MEAL_SLOTS = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Pre-Workout', 'Post-Workout'];
@@ -75,7 +76,7 @@ function calorieMismatch(form) {
 // Add/Edit dish form (modal). Only the name is required — every other
 // field (incl. all migration-018 additions) is optional so a minimal dish
 // saves exactly as fast as before.
-function DishForm({ visible, dish, onClose, onSave, onUseOnce, onDelete }) {
+function DishForm({ visible, dish, onClose, onSave, onUseOnce, onDelete, self = false }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [form, setForm] = useState(() => initForm(dish));
@@ -85,12 +86,28 @@ function DishForm({ visible, dish, onClose, onSave, onUseOnce, onDelete }) {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [recipeTags, setRecipeTags] = useState([]);
 
-  // Load recipe tags from API
+  // Tag suggestions for the tag picker. self=true (client "My Dishes"
+  // contexts) must NEVER hit /trainer/tags/recipe — it's a trainer-only
+  // endpoint and returned 403 for every client (surfaced loudly once the
+  // Detailed-mode Add Food flow started opening this form for clients).
+  // Clients get suggestions from their own local catalog instead; the
+  // fetch is also gated on `visible` so hidden forms don't pre-request.
   useEffect(() => {
+    if (!visible) return;
+    if (self) {
+      listRecipes()
+        .then((rows) => {
+          const set = new Set();
+          (rows || []).forEach((r) => (r.tags || []).forEach((t) => set.add(t)));
+          setRecipeTags([...set]);
+        })
+        .catch(() => setRecipeTags([]));
+      return;
+    }
     api('/trainer/tags/recipe')
       .then((tags) => setRecipeTags(tags?.map(t => t.name) || []))
       .catch(() => setRecipeTags([]));
-  }, []);
+  }, [visible, self]);
 
   React.useEffect(() => {
     if (visible) {

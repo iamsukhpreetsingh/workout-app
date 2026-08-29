@@ -339,6 +339,34 @@ export interface MealCatalogItem {
   created_at: string;
 }
 export const getMealCatalog = () => api<MealCatalogItem[]>('/nutrition/meal-catalog');
+
+// ── Global Foods module (log-first nutrition) ────────────────────────────
+export interface GlobalFood {
+  id: string;
+  name: string;
+  brand: string | null;
+  calories: number | null;
+  protein_g: number | null;
+  carbs_g: number | null;
+  fat_g: number | null;
+  fiber_g: number | null;
+  sugar_g: number | null;
+  sodium_mg: number | null;
+  default_serving_size: number | null;
+  default_serving_unit: string | null;
+  source: 'seed' | 'open_food_facts' | 'admin_added';
+  verified: boolean;
+  cuisine_tags: string[];
+  usage_count: number;
+}
+export const getGlobalFoods = (q = '') =>
+  api<GlobalFood[]>(`/nutrition/global-foods${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+export const saveGlobalFood = (body: Record<string, any>) =>
+  api<GlobalFood>('/nutrition/global-foods', { method: 'POST', body });
+export const verifyGlobalFood = (id: string) =>
+  api<GlobalFood>(`/nutrition/global-foods/${id}/verify`, { method: 'POST' });
+export const deleteGlobalFood = (id: string) =>
+  api<{ ok: boolean }>(`/nutrition/global-foods/${id}`, { method: 'DELETE' });
 export interface RecipeRow extends Omit<MealCatalogItem, 'trainer_id' | 'trainer_name' | 'trainer_email' | 'plan_usage_count'> {
   author_id: string;
   author_name: string;

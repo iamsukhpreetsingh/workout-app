@@ -258,6 +258,21 @@ export default function SettingsScreen({ onSwitchView }) {
       </View>
 
       <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <View style={styles.rowBetween}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Meal suggestions</Text>
+          <Switch
+            value={settings.show_meal_suggestions !== 0}
+            onValueChange={(v) => save({ show_meal_suggestions: v ? 1 : 0 })}
+            trackColor={{ true: colors.primary, false: colors.cardLight }}
+          />
+        </View>
+        <Text style={[styles.hint, { color: colors.textDim }]}>
+          Show advisory meal-shape suggestions on the Diet tab. Turning this off keeps your
+          targets and logging fully active.
+        </Text>
+      </View>
+
+      <View style={[styles.card, { backgroundColor: colors.card }]}>
         <Text style={[styles.cardTitle, { color: colors.text }]}>Plate Calculator</Text>
         <Text style={[styles.label, { color: colors.textDim }]}>Bar weight ({settings.weight_unit || 'kg'})</Text>
         <TextInput

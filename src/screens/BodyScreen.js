@@ -6,24 +6,17 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
-  Platform,
-  Modal,
-  Image,
-  Dimensions,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
-import { getBodyWeightHistory, logBodyMetric, BODY_METRIC_TYPES, getTodayBodyMetric, getAllBodyMetricsForDate, addProgressPhoto, getProgressPhotos, deleteProgressPhoto, getPhotoFilePath } from '../services/bodyService';
+import { getBodyWeightHistory, logBodyMetric, BODY_METRIC_TYPES, getTodayBodyMetric, getAllBodyMetricsForDate } from '../services/bodyService';
 import { getSettings } from '../services/settingsService';
 import { syncPendingMeasurements } from '../lib/syncService';
 import LineChart from '../components/LineChart';
 import { useColors } from '../theme';
 import LoadError from '../shared/components/LoadError';
 import { kgToLb, lbToKg } from '../shared/utils/units';
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+import { PROGRESS_PHOTOS } from '../shared/constants/routes';
 
 export default function BodyScreen({ navigation }) {
   const colors = useColors();
@@ -32,14 +25,10 @@ export default function BodyScreen({ navigation }) {
   const [metricType, setMetricType] = useState('weight');
   const [measurements, setMeasurements] = useState({});
   const [chartData, setChartData] = useState([]);
-  const [photos, setPhotos] = useState([]);
   const [settings, setSettings] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
   const [lastWeightPrompt, setLastWeightPrompt] = useState(null);
-  const [viewPhoto, setViewPhoto] = useState(null);
-  const [compareMode, setCompareMode] = useState(false);
-  const [selectedPhotos, setSelectedPhotos] = useState([]);
   const [measureDate, setMeasureDate] = useState(new Date());
 
   const styles = {
@@ -84,32 +73,9 @@ export default function BodyScreen({ navigation }) {
     dateLabel: { color: colors.text, fontSize: 14, fontWeight: '600', minWidth: 120, textAlign: 'center' },
     todayBtn: { backgroundColor: colors.cardLight, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
     todayBtnText: { color: colors.primary, fontSize: 12, fontWeight: '600' },
-    addPhotoBtn: { backgroundColor: colors.primary, padding: 16, borderRadius: 12, alignItems: 'center', marginBottom: 16 },
-    addPhotoText: { color: '#fff', fontWeight: '700' },
-    empty: { color: colors.textDim, textAlign: 'center', marginTop: 40 },
-    photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    photoThumb: { width: '31%', aspectRatio: 1, backgroundColor: colors.card, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
-    photoDate: { color: colors.textDim, fontSize: 10, position: 'absolute', bottom: 4 },
-    photoIcon: { fontSize: 28 },
-    hint: { color: colors.textDim, fontSize: 12, marginTop: 12, textAlign: 'center' },
-    photoActions: { flexDirection: 'row', gap: 8, marginBottom: 16 },
-    compareBtn: { flex: 1, backgroundColor: colors.card, padding: 16, borderRadius: 12, alignItems: 'center' },
-    compareBtnOn: { backgroundColor: colors.blue },
-    compareBtnText: { color: colors.text, fontWeight: '700' },
-    compareBtnTextOn: { color: '#fff' },
-    photoThumbSelected: { borderWidth: 2, borderColor: colors.blue },
-    selectBadge: { position: 'absolute', top: 4, right: 4, backgroundColor: colors.blue, width: 20, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-    selectBadgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-    modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
-    modalClose: { position: 'absolute', top: 50, right: 20, zIndex: 10, padding: 10 },
-    modalCloseText: { color: '#fff', fontSize: 24 },
-    modalScroll: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
-    fullImage: { width: SCREEN_WIDTH - 40, height: SCREEN_WIDTH - 40 },
-    modalCaption: { color: '#fff', marginTop: 16, fontSize: 14 },
-    compareContainer: { flex: 1, flexDirection: 'row', gap: 8, padding: 20, paddingTop: 60 },
-    comparePanel: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    compareImage: { width: '100%', height: '80%' },
-    compareLabel: { color: '#fff', marginTop: 8, fontSize: 12 },
+    launcherCard: { backgroundColor: colors.card, borderRadius: 12, padding: 20, marginBottom: 12, alignItems: 'center' },
+    launcherTitle: { color: colors.text, fontSize: 16, fontWeight: '700', marginTop: 8 },
+    launcherSub: { color: colors.textDim, fontSize: 12, marginTop: 4, textAlign: 'center' },
   };
 
   const loadData = useCallback(async () => {
@@ -127,9 +93,6 @@ export default function BodyScreen({ navigation }) {
 
       const today = await getTodayBodyMetric('weight');
       setLastWeightPrompt(today ? null : new Date().toDateString());
-
-      const p = await getProgressPhotos();
-      setPhotos(p);
       setLoadError(false);
     } catch (e) {
       console.warn('[BodyScreen] load failed:', e?.message || e);
@@ -172,56 +135,6 @@ export default function BodyScreen({ navigation }) {
     await logBodyMetric(dateStr, metricType, val, unit);
     loadData();
     Alert.alert('Saved', `Logged ${val} ${unit} for ${measureDate.toLocaleDateString()}`);
-  };
-
-  const handleAddPhoto = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!status.granted) {
-      Alert.alert('Permission needed', 'Please allow access to your photos');
-      return;
-    }
-
-    Alert.alert('Add Photo', 'Choose source', [
-      {
-        text: 'Camera',
-        onPress: async () => {
-          const result = await ImagePicker.launchCameraAsync({
-            allowsEditing: true,
-            quality: 0.8,
-          });
-          if (!result.canceled) {
-            const today = new Date().toISOString().split('T')[0];
-            await addProgressPhoto(today, result.assets[0].uri, 'front');
-            loadData();
-          }
-        },
-      },
-      {
-        text: 'Library',
-        onPress: async () => {
-          const result = await ImagePicker.launchImageLibraryAsync({
-            allowsEditing: true,
-            quality: 0.8,
-          });
-          if (!result.canceled) {
-            const today = new Date().toISOString().split('T')[0];
-            await addProgressPhoto(today, result.assets[0].uri, 'front');
-            loadData();
-          }
-        },
-      },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  };
-
-  const handleDeletePhoto = (id) => {
-    Alert.alert('Delete Photo', 'Are you sure?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-        await deleteProgressPhoto(id);
-        loadData();
-      }},
-    ]);
   };
 
   const unit = settings?.unit || 'kg';
@@ -326,116 +239,18 @@ export default function BodyScreen({ navigation }) {
       )}
 
       {segment === 'photos' && (
-        <>
-          <View style={styles.photoActions}>
-            <TouchableOpacity style={styles.addPhotoBtn} onPress={handleAddPhoto}>
-              <Text style={styles.addPhotoText}>+ Add Photo</Text>
-            </TouchableOpacity>
-            {photos.length >= 2 && (
-              <TouchableOpacity
-                style={[styles.compareBtn, compareMode && styles.compareBtnOn]}
-                onPress={() => {
-                  if (compareMode && selectedPhotos.length === 2) {
-                    setViewPhoto({ type: 'compare', photos: selectedPhotos });
-                  }
-                  setCompareMode(!compareMode);
-                  setSelectedPhotos([]);
-                }}
-              >
-                <Text style={[styles.compareBtnText, compareMode && styles.compareBtnTextOn]}>
-                  {compareMode ? `Select 2 (${selectedPhotos.length})` : 'Compare'}
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {photos.length === 0 ? (
-            <Text style={styles.empty}>No photos yet. Add your first progress photo!</Text>
-          ) : (
-            <View style={styles.photoGrid}>
-              {photos.slice(0, 12).map((photo) => {
-                const isSelected = selectedPhotos.some(p => p.id === photo.id);
-                return (
-                  <TouchableOpacity
-                    key={photo.id}
-                    style={[styles.photoThumb, isSelected && styles.photoThumbSelected]}
-                    onPress={() => {
-                      if (compareMode) {
-                        setSelectedPhotos(prev => {
-                          if (prev.some(p => p.id === photo.id)) {
-                            return prev.filter(p => p.id !== photo.id);
-                          }
-                          if (prev.length >= 2) return [prev[1], photo];
-                          return [...prev, photo];
-                        });
-                      } else {
-                        setViewPhoto({ type: 'single', photo });
-                      }
-                    }}
-                    onLongPress={() => handleDeletePhoto(photo.id)}
-                  >
-                    {isSelected && <View style={styles.selectBadge}><Ionicons name="checkmark" size={12} color="#fff" /></View>}
-                    <Text style={styles.photoDate}>
-                      {new Date(photo.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                    </Text>
-                    <Ionicons name="image-outline" size={28} color={colors.textDim} />
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
-          <Text style={styles.hint}>
-            {compareMode ? 'Tap 2 photos to compare' : 'Long press a photo to delete'}
+        <TouchableOpacity
+          style={styles.launcherCard}
+          onPress={() => navigation.navigate(PROGRESS_PHOTOS)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="images-outline" size={30} color={colors.primary} />
+          <Text style={styles.launcherTitle}>Progress Photos</Text>
+          <Text style={styles.launcherSub}>
+            Track your transformation over time — add, compare and share photos by date.
           </Text>
-        </>
+        </TouchableOpacity>
       )}
-
-      <Modal visible={!!viewPhoto} animationType="fade" transparent>
-        <View style={styles.modalBg}>
-          <TouchableOpacity style={styles.modalClose} onPress={() => setViewPhoto(null)}>
-            <Ionicons name="close" size={26} color="#fff" />
-          </TouchableOpacity>
-          {viewPhoto?.type === 'single' && (
-            <ScrollView contentContainerStyle={styles.modalScroll}>
-              <Image
-                source={{ uri: `file://${PHOTOS_DIR}${viewPhoto.photo.file_path}` }}
-                style={styles.fullImage}
-                resizeMode="contain"
-              />
-              <Text style={styles.modalCaption}>
-                {new Date(viewPhoto.photo.date).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
-                {viewPhoto.photo.angle ? ` · ${viewPhoto.photo.angle}` : ''}
-              </Text>
-            </ScrollView>
-          )}
-          {viewPhoto?.type === 'compare' && (
-            <View style={styles.compareContainer}>
-              <View style={styles.comparePanel}>
-                <Image
-                  source={{ uri: `file://${PHOTOS_DIR}${viewPhoto.photos[0].file_path}` }}
-                  style={styles.compareImage}
-                  resizeMode="contain"
-                />
-                <Text style={styles.compareLabel}>
-                  {new Date(viewPhoto.photos[0].date).toLocaleDateString()}
-                </Text>
-              </View>
-              <View style={styles.comparePanel}>
-                <Image
-                  source={{ uri: `file://${PHOTOS_DIR}${viewPhoto.photos[1].file_path}` }}
-                  style={styles.compareImage}
-                  resizeMode="contain"
-                />
-                <Text style={styles.compareLabel}>
-                  {new Date(viewPhoto.photos[1].date).toLocaleDateString()}
-                </Text>
-              </View>
-            </View>
-          )}
-        </View>
-      </Modal>
     </ScrollView>
   );
 }
-
-const PHOTOS_DIR = `${FileSystem?.documentDirectory || ''}progress_photos/`;

@@ -12,12 +12,12 @@ import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
 import { fetchAndCacheTrainerContent } from '../lib/trainerCache';
 import { listPins, removePin, removeStalePins, MAX_PINNED_ROUTINES } from '../db/pins';
-import { startAssignedPlan } from '../lib/startAssigned';
+// import { startAssignedPlan } from '../lib/startAssigned';
 import { NotificationBell } from '../components/NotificationBell';
 import { fmtVolume } from '../shared/utils/format';
 import { getSyncStatus, addSyncListener, initConnectivityListener, syncPending, getSyncSettings } from '../lib/sync';
-import { ACTIVE_WORKOUT, MAIN_TABS, NOTIFICATION_CENTER, PLAN_DETAIL, PROFILE, SESSION_DETAIL, SETTINGS, TAB_HISTORY } from '../shared/constants/routes';
-
+// import { ACTIVE_WORKOUT, MAIN_TABS, NOTIFICATION_CENTER, PLAN_DETAIL, PROFILE, SESSION_DETAIL, SETTINGS, TAB_HISTORY } from '../shared/constants/routes';
+import { ACTIVE_WORKOUT, CLIENT_ASSIGNED_DETAIL, HISTORY, NOTIFICATION_CENTER, PLAN_DETAIL, PROFILE, SESSION_DETAIL, SETTINGS } from '../shared/constants/routes';
 const NUMS = { fontVariant: ['tabular-nums'] };
 
 function smartWorkoutName() {
@@ -59,7 +59,8 @@ function PinnedGridCard({ item, styles, colors, onStart, onUnpin }) {
           <Text style={[styles.pinMeta, NUMS]}>{item.exerciseCount} ex</Text>
         </View>
       </View>
-      <Ionicons name="play-circle" size={22} color={fromTrainer ? colors.blue : colors.primary} />
+      {/* <Ionicons name="play-circle" size={22} color={fromTrainer ? colors.blue : colors.primary} /> */}
+            <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
     </TouchableOpacity>
   );
 }
@@ -206,23 +207,24 @@ export default function HomeScreen({ navigation }) {
     }, [isClient])
   );
 
-  // Pinned cards start DIRECTLY — no detail-screen step
-  const startPinned = async (item) => {
-    if (workout) {
-      navigation.navigate(ACTIVE_WORKOUT);
-      return;
-    }
-    try {
-      if (item.source === 'self') {
-        const plan = await getPlan(item.id);
-        beginWorkout(plan.name, plan.id, plan.exercises);
-      } else {
-        await startAssignedPlan(item.plan, { dispatch, navigation });
-      }
-    } catch (e) {
-      Alert.alert('Could not start workout', e.message || 'Please try again.');
-    }
-  };
+
+    // Pinned cards open the DETAIL screen (preview first, Start from there) —
+  // consistent with every other plan list in the app. If a workout is
+  // already in progress, a tap continues it instead (same as the main CTA).
+  const openPinned = (item) => {
+  // Only continue the active workout if this pinned routine
+  // is the same routine that is currently in progress.
+  if (workout && String(workout.planId) === String(item.id)) {
+    navigation.navigate(ACTIVE_WORKOUT);
+    return;
+  }
+
+  // Otherwise open the tapped routine's detail screen.
+  navigation.navigate(
+    item.source === 'self' ? PLAN_DETAIL : CLIENT_ASSIGNED_DETAIL,
+    { planId: item.id }
+  );
+};
 
   const unpinFromHome = (item) =>
     Alert.alert('Unpin routine', `Remove "${item.name}" from your pinned strip?`, [
@@ -326,9 +328,9 @@ export default function HomeScreen({ navigation }) {
                 {/* 2 × 3 grid (cap is MAX_PINNED_ROUTINES = 6) */}
                 {chunkPairs(pinnedItems).map(([a, b]) => (
                   <View key={a.key} style={styles.pinRow}>
-                    <PinnedGridCard item={a} styles={styles} colors={colors} onStart={startPinned} onUnpin={unpinFromHome} />
+                    <PinnedGridCard item={a} styles={styles} colors={colors} onStart={openPinned} onUnpin={unpinFromHome} />
                     {b ? (
-                      <PinnedGridCard item={b} styles={styles} colors={colors} onStart={startPinned} onUnpin={unpinFromHome} />
+                      <PinnedGridCard item={b} styles={styles} colors={colors} onStart={openPinned} onUnpin={unpinFromHome} />
                     ) : (
                       <View style={{ flex: 1 }} />
                     )}
@@ -343,7 +345,7 @@ export default function HomeScreen({ navigation }) {
                 <View style={styles.sectionHeaderRow}>
                   <Text style={styles.sectionHeader}>Recent Workouts</Text>
                   <TouchableOpacity
-                    onPress={() => navigation.navigate(MAIN_TABS, { screen: TAB_HISTORY })}
+                    onPress={() => navigation.navigate(HISTORY)}
                   >
                     <Text style={styles.seeAll}>see all</Text>
                   </TouchableOpacity>

@@ -10,12 +10,15 @@ export const RESET_PASSWORD = 'ResetPassword';
 
 // User-view tabs
 export const TAB_HOME = 'Home';
-export const TAB_HISTORY = 'History';
+export const TAB_DIET = 'Diet';
+export const HISTORY = 'History';
 export const TAB_PLANS = 'Plans';
 export const TAB_PROGRESS = 'Progress';
 export const MAIN_TABS = 'Main';
 
 // User-view stack screens
+export const DIET_TRENDS = 'DietTrends';
+export const BUILD_DISH = 'BuildDish';
 export const SESSION_DETAIL = 'SessionDetail';
 export const PLAN_DETAIL = 'PlanDetail';
 export const PLAN_EDITOR = 'PlanEditor';
@@ -37,6 +40,9 @@ export const COACHING_PLAN_BUILDER = 'CoachingPlanBuilder';
 export const COACHING_PLAN_DETAIL = 'CoachingPlanDetail';
 export const ASSIGNED_PLAN_DETAIL = 'AssignedPlanDetail';
 export const ACTIVE_WORKOUT = 'ActiveWorkout';
+export const PROGRESS_PHOTOS = 'ProgressPhotos';
+export const TRAINER_PROGRESS_PHOTOS = 'TrainerProgressPhotos';
+
 
 // Trainer view
 export const TRAINER_TABS = 'TrainerMain';

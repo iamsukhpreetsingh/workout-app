@@ -69,58 +69,7 @@ async function touchLastSynced() {
   await db.runAsync('UPDATE sync_settings SET last_synced_at = ? WHERE id = 1', [Date.now()]);
 }
 
-// // ── queue writes ─────────────────────────────────────────────────────────
-// // Dedup-in-place: an existing pending row for the same entity is updated,
-// // never duplicated. Editing the same plan 5 times = 1 queue row.
-// export async function enqueueUpsert(entityType, localId, dependsOn = null) {
-//   const db = await getDb();
-//   if (!getCurrentUserId()) return;
-//   const now = Date.now();
-//   const existing = await db.getFirstAsync(
-//     `SELECT id FROM sync_queue WHERE entity_type = ? AND entity_id = ? AND status IN ('PENDING','SYNCING','FAILED')`,
-//     [entityType, String(localId)]
-//   );
-//   if (existing) {
-//     await db.runAsync(
-//       `UPDATE sync_queue SET operation = 'UPDATE', status = 'PENDING', retry_count = 0,
-//          last_error = NULL, updated_at = ?, last_attempt_at = NULL,
-//          depends_on_entity_type = ?, depends_on_local_id = ?
-//        WHERE id = ?`,
-//       [now, dependsOn ? dependsOn.entityType : null, dependsOn ? String(dependsOn.localId) : null, existing.id]
-//     );
-//     return;
-//   }
-//   await db.runAsync(
-//     `INSERT INTO sync_queue (operation_id, entity_type, entity_id, operation, payload,
-//        created_at, updated_at, status, depends_on_entity_type, depends_on_local_id)
-//      VALUES (?, ?, ?, 'CREATE', NULL, ?, ?, 'PENDING', ?, ?)`,
-//     [
-//       `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-//       entityType, String(localId), now, now,
-//       dependsOn ? dependsOn.entityType : null,
-//       dependsOn ? String(dependsOn.localId) : null,
-//     ]
-//   );
-// }
 
-// // hadServerBackup: the caller checks (BEFORE deleting the local row) whether
-// // this entity was ever backed up (server_id set). Never-backed-up deletes
-// // are clean local removals — no queue row, no server call.
-// export async function enqueueDelete(entityType, localId, hadServerBackup) {
-//   const db = await getDb();
-//   await db.runAsync(
-//     `DELETE FROM sync_queue WHERE entity_type = ? AND entity_id = ? AND operation != 'DELETE'`,
-//     [entityType, String(localId)]
-//   );
-//   if (!hadServerBackup) return; // never synced — nothing to tell the server
-//   const now = Date.now();
-//   await db.runAsync(
-//     `INSERT INTO sync_queue (operation_id, entity_type, entity_id, operation, payload,
-//        created_at, updated_at, status)
-//      VALUES (?, ?, ?, 'DELETE', NULL, ?, ?, 'PENDING')`,
-//     [`${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, entityType, String(localId), now, now]
-//   );
-// }
 
 
 
@@ -174,10 +123,17 @@ export async function enqueueUpsert(entityType, localId, dependsOn = null) {
 
 
 
+
+//   } catch (e) {
+//     console.error('[SYNC] enqueueDelete failed (local delete unaffected):', e.message);
+//   }
 // hadServerBackup: the caller checks (BEFORE deleting the local row) whether
 // this entity was ever backed up (server_id set). Never-backed-up deletes
 // are clean local removals — no queue row, no server call.
-export async function enqueueDelete(entityType, localId, hadServerBackup) {
+// snapshot (optional): small JSON the remove-handler may need that can no
+// longer be read from the deleted row (e.g. progress photos need the
+// SERVER id because their delete endpoint keys on it, not the local id).
+export async function enqueueDelete(entityType, localId, hadServerBackup, snapshot = null) {
   const db = await getDb();
   try {
     await db.runAsync(
@@ -189,22 +145,15 @@ export async function enqueueDelete(entityType, localId, hadServerBackup) {
     await db.runAsync(
       `INSERT INTO sync_queue (operation_id, entity_type, entity_id, operation, payload,
          created_at, updated_at, status)
-       VALUES (?, ?, ?, 'DELETE', NULL, ?, ?, 'PENDING')`,
-      [`${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, entityType, String(localId), now, now]
+       VALUES (?, ?, ?, 'DELETE', ?, ?, ?, 'PENDING')`,
+      [`${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, entityType, String(localId),
+       snapshot ? JSON.stringify(snapshot) : null, now, now]
     );
-//   } catch (e) {
-//     console.error('[SYNC] enqueueDelete failed (local delete unaffected):', e.message);
-//   }
-// }
-
-
-
   } catch (e) {
     console.error('[SYNC] enqueueDelete failed (local delete unaffected):', e.message);
   }
   kickQueue();
 }
-
 
 // Debounced auto-sync kick: any enqueue schedules one processQueue attempt
 // a few seconds later. processQueue itself enforces mode/connectivity/
@@ -369,10 +318,25 @@ async function buildDietPlanPayload(localId) {
       }
     }
   }
+  // plan VERSIONS ride the payload: they are the historical target snapshots
+  // that keep past diaries evaluating against the targets effective on THEIR
+  // date — without them a reinstall silently re-evaluates history against
+  // the CURRENT plan targets
+  const versions = await db.getAllAsync(
+    'SELECT * FROM local_diet_plan_versions WHERE diet_plan_local_id = ? ORDER BY version_number',
+    [localId]);
   return {
     local_entity_id: p.local_id, name: p.name, notes: p.notes, tags: parseJsonArr(p.tags),
     daily_calorie_target: p.daily_calorie_target, daily_protein_target: p.daily_protein_target,
     daily_carbs_target: p.daily_carbs_target, daily_fat_target: p.daily_fat_target,
+    tracking_mode: p.tracking_mode || 'simple', tolerance_pct: p.tolerance_pct ?? 10,
+    versions: versions.map((v) => ({
+      local_entity_id: String(v.id), version_number: v.version_number,
+      effective_from: v.effective_from,
+      daily_calorie_target: v.daily_calorie_target, daily_protein_target: v.daily_protein_target,
+      daily_carbs_target: v.daily_carbs_target, daily_fat_target: v.daily_fat_target,
+      tolerance_pct: v.tolerance_pct, tracking_mode: v.tracking_mode,
+    })),
     days: days.map((d) => ({
       local_entity_id: d.local_id, day_label: d.day_label, order_index: d.order_index,
       meals: d.meals.map((m) => ({
@@ -449,20 +413,6 @@ const HANDLERS = {
   },
 
 
-  // custom_exercise: {
-  //   path: '/user/backup/custom-exercises',
-  //   async upsert(id) {
-  //     const db = await getDb();
-  //     const e = await db.getFirstAsync('SELECT * FROM exercises WHERE id = ? AND is_custom = 1', [id]);
-  //     if (!e) return;
-  //     const rows = await api(this.path, {
-  //       method: 'POST',
-  //       body: [{ local_entity_id: String(e.id), name: e.name, muscle_group: e.muscle_group, instructions: e.instructions, thumbnail_path: e.thumbnail_path }],
-  //     });
-  //     await db.runAsync('UPDATE exercises SET synced = 1, server_id = ? WHERE id = ?', [rows?.[0]?.id || null, id]);
-  //   },
-  //   async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
-  //   deps: null,
   // },
 
     custom_exercise: {
@@ -631,6 +581,149 @@ const HANDLERS = {
       return p && p.synced === 0 ? [s.plan_ref] : [];
     },
   },
+  // diet_food_log: the raw food diary ("what I actually ate"). One row per
+  // logged food; entity id is the entry's stable local id so repeated syncs
+  // upsert idempotently server-side (UNIQUE(user_id, local_entity_id)) —
+  // an offline entry synced twice can never become a duplicate. plan_ref
+  // follows the diet_swap convention: local plan id for self-authored
+  // plans, server uuid for assigned plans (plan_server_id drives the
+  // trainer's monitoring visibility; self-authored logs stay private).
+  diet_food_log: {
+    path: '/user/backup/food-log',
+    async upsert(localId) {
+      const db = await getDb();
+      const e = await db.getFirstAsync(
+        'SELECT * FROM local_food_log_entries WHERE local_id = ? AND (user_id IS NULL OR user_id = ?)',
+        [localId, getCurrentUserId()]
+      );
+      if (!e) return; // deleted meanwhile — clean no-op
+      const rows = await api(this.path, {
+        method: 'POST',
+        body: [{
+          local_entity_id: e.local_id,
+          plan_ref: e.plan_ref || null,
+          plan_server_id: e.plan_ref && !/^(dp_|mig_)/.test(String(e.plan_ref)) ? e.plan_ref : null,
+          plan_version_id: e.plan_version_id ?? null,
+          log_date: e.log_date,
+          meal_type: e.meal_type ?? null,
+          source: e.source,
+          planned_item_ref: e.planned_item_ref ?? null,
+          name: e.name,
+          calories: e.calories,
+          protein_g: e.protein_g,
+          carbs_g: e.carbs_g,
+          fat_g: e.fat_g,
+          serving_size: e.serving_size ?? null,
+          quantity: e.quantity || 1,
+          logged_at: new Date(e.logged_at || Date.now()).toISOString(),
+        }],
+      });
+      await db.runAsync(
+        'UPDATE local_food_log_entries SET synced = 1, server_id = ? WHERE local_id = ?',
+        [rows?.[0]?.id || null, localId]
+      );
+    },
+    async remove(localId) {
+      await api(`${this.path}/${encodeURIComponent(localId)}`, { method: 'DELETE' });
+    },
+    async deps(localId) {
+      const db = await getDb();
+      const e = await db.getFirstAsync('SELECT plan_ref FROM local_food_log_entries WHERE local_id = ?', [localId]);
+      if (!e || !e.plan_ref || !/^(dp_|mig_)/.test(String(e.plan_ref))) return []; // assigned plan — no local parent
+      const p = await db.getFirstAsync('SELECT synced FROM local_diet_plans WHERE local_id = ?', [e.plan_ref]);
+      return p && p.synced === 0 ? [e.plan_ref] : [];
+    },
+  },
+
+  // food_log: the LOG-FIRST diary (migration v39) — user-scoped entries,
+  // no plan container. Stable local ids + server upserts keyed
+  // (user_id, local_entity_id) keep repeated offline syncs idempotent.
+  food_log: {
+    path: '/user/backup/food-log-entries',
+    async upsert(localId) {
+      const db = await getDb();
+      const e = await db.getFirstAsync(
+        'SELECT * FROM food_log_entries WHERE local_id = ? AND (user_id IS NULL OR user_id = ?)',
+        [localId, getCurrentUserId()]
+      );
+      if (!e) return;
+      const rows = await api(this.path, {
+        method: 'POST',
+        body: [{
+          local_entity_id: e.local_id,
+          log_date: e.log_date,
+          meal_type: e.meal_type,
+          name: e.name,
+          calories: e.calories,
+          protein_g: e.protein_g,
+          carbs_g: e.carbs_g,
+          fat_g: e.fat_g,
+          fiber_g: e.fiber_g,
+          sugar_g: e.sugar_g,
+          sodium_mg: e.sodium_mg,
+          quantity: e.quantity || 1,
+          serving_unit: e.serving_unit || 'serving',
+          food_source_type: e.food_source_type || 'manual',
+          food_source_id: e.food_source_id ?? null,
+          suggested_by_trainer: e.suggested_by_trainer === 1,
+          logged_at: new Date(e.logged_at || Date.now()).toISOString(),
+        }],
+      });
+      await db.runAsync(
+        'UPDATE food_log_entries SET synced = 1, server_id = ? WHERE local_id = ?',
+        [rows?.[0]?.id || null, localId]
+      );
+    },
+    async remove(localId) {
+      await api(`${this.path}/${encodeURIComponent(localId)}`, { method: 'DELETE' });
+    },
+    deps: null,
+  },
+
+  // custom_dish: the ingredient-based dish builder (snapshot macros inside
+  // each ingredient row). Ingredients ride INSIDE the dish payload.
+  custom_dish: {
+    path: '/user/backup/custom-dishes',
+    async upsert(localId) {
+      const db = await getDb();
+      const d = await db.getFirstAsync(
+        'SELECT * FROM custom_dishes WHERE local_id = ? AND (user_id IS NULL OR user_id = ?)',
+        [localId, getCurrentUserId()]
+      );
+      if (!d) return;
+      const ings = await db.getAllAsync(
+        'SELECT * FROM custom_dish_ingredients WHERE custom_dish_local_id = ? ORDER BY order_index',
+        [localId]
+      );
+      const rows = await api(this.path, {
+        method: 'POST',
+        body: {
+          local_entity_id: d.local_id,
+          name: d.name,
+          total_servings: d.total_servings || 1,
+          ingredients: ings.map((i) => ({
+            global_food_id: i.global_food_id || null,
+            ingredient_name: i.ingredient_name,
+            quantity: i.quantity,
+            unit: i.unit,
+            calories_snapshot: i.calories_snapshot,
+            protein_g_snapshot: i.protein_g_snapshot,
+            carbs_g_snapshot: i.carbs_g_snapshot,
+            fat_g_snapshot: i.fat_g_snapshot,
+          })),
+        },
+      });
+      await db.runAsync(
+        'UPDATE custom_dishes SET synced = 1, server_id = ? WHERE local_id = ?',
+        [rows?.[0]?.id || null, localId]
+      );
+    },
+    async remove(localId) {
+      await api(`${this.path}/${encodeURIComponent(localId)}`, { method: 'DELETE' });
+    },
+    deps: null,
+  },
+
   supplement_plan: {
     path: '/user/backup/supplement-plans',
     async upsert(localId) {
@@ -672,26 +765,6 @@ const HANDLERS = {
       return p && p.synced === 0 ? [planLocalId] : [];
     },
   },
-//   personal_record: {
-//     path: '/user/backup/personal-records',
-//     async upsert(id) {
-//       const db = await getDb();
-//       const r = await db.getFirstAsync('SELECT * FROM personal_records WHERE id = ?', [id]);
-//       if (!r) return;
-//       const rows = await api(this.path, {
-//         method: 'POST',
-//         body: [{
-//           local_entity_id: String(r.id), exercise_name: r.exercise_name,
-//           record_type: r.record_type, value: r.value,
-//           secondary_value: r.secondary_value,
-//           achieved_at: r.achieved_at,
-//         }],
-//       });
-//       await db.runAsync('UPDATE personal_records SET synced = 1, server_id = ? WHERE id = ?', [rows?.[0]?.id || null, id]);
-//     },
-//     async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
-//     deps: null,
-//   },
 
 
 
@@ -726,32 +799,119 @@ const HANDLERS = {
 
 
 
+  // progress_photo: {
+  //   path: '/user/backup/progress-photos',
+  //   async upsert(id) {
+  //     const db = await getDb();
+  //     const p = await db.getFirstAsync('SELECT * FROM progress_photos WHERE id = ?', [id]);
+  //     if (!p) return;
+  //   //   const base64 = await FileSystem.readAsStringAsync(p.file_path, {
+  //   //     encoding: FileSystem.EncodingType.Base64,
+  //   //   });
+
+
+    // progress photos → the FIRST-CLASS /progress-photos API (not the old
+  // backup route). Upsert = create-or-replace BY DATE (LWW — the server's
+  // documented conflict policy), carrying the current bytes + visibility.
+  // DELETE by server id (photos always carry server_id once synced — the
+  // old local-id delete is retired along with the backup route).
   progress_photo: {
-    path: '/user/backup/progress-photos',
+    path: '/progress-photos',
     async upsert(id) {
       const db = await getDb();
-      const p = await db.getFirstAsync('SELECT * FROM progress_photos WHERE id = ?', [id]);
-      if (!p) return;
-    //   const base64 = await FileSystem.readAsStringAsync(p.file_path, {
-    //     encoding: FileSystem.EncodingType.Base64,
-    //   });
+      // const p = await db.getFirstAsync('SELECT * FROM progress_photos WHERE id = ?', [id]);
+        const p = await db.getFirstAsync(
+        'SELECT * FROM progress_photos WHERE id = ? AND (user_id IS NULL OR user_id = ?)',
+        [id, getCurrentUserId()]);
+      if (!p) return; // deleted meanwhile — clean no-op
+      const body = {
+        // photo_date: p.date,
+        photo_date: /^\d{4}-\d{2}-\d{2}$/.test(String(p.date)) ? p.date : new Date(p.date).toISOString().slice(0, 10),
+        visibility: p.visibility || 'PERSONAL',
+      };
+      // local capture → upload the bytes; server-fetched row (image_path,
+      // no local file) → metadata-only visibility change via PATCH
+      if (p.file_path) {
+        const filePath = String(p.file_path).startsWith('file:')
+          ? p.file_path
+          : `${FileSystem.documentDirectory}progress_photos/${p.file_path}`;
+        body.image_base64 = await FileSystem.readAsStringAsync(filePath, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const row = await api(this.path, { method: 'POST', body });
+        await db.runAsync(
+          'UPDATE progress_photos SET synced = 1, server_id = ?, image_path = ? WHERE id = ?',
+          [row?.id || null, row?.image_path || null, id]);
+      } else if (
+  p.server_id &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    String(p.server_id)
+  )
+) {
+  // genuine first-class UUID → metadata-only visibility update
+  await api(`${this.path}/${p.server_id}`, {
+    method: 'PATCH',
+    body: { visibility: p.visibility || 'PERSONAL' },
+  });
 
-          // file_path is stored as a bare filename (photos.js keeps files under
-      // documentDirectory/progress_photos/) — resolve to a full URI, while
-      // tolerating absolute paths if that ever changes
-      const filePath = String(p.file_path || '').startsWith('file:')
-        ? p.file_path
-        : `${FileSystem.documentDirectory}progress_photos/${p.file_path}`;
-      const base64 = await FileSystem.readAsStringAsync(filePath, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const row = await api(this.path, {
-        method: 'POST',
-        body: { local_entity_id: String(p.id), date: p.date, angle: p.angle, image_base64: base64 },
-      });
-      await db.runAsync('UPDATE progress_photos SET synced = 1, server_id = ? WHERE id = ?', [row?.id || null, id]);
+  await db.runAsync(
+    'UPDATE progress_photos SET synced = 1 WHERE id = ?',
+    [id]
+  );
+
+} else if (p.server_id) {
+  // STALE server_id (numeric — written by the retired backup system).
+  // No local file exists, so a full POST is impossible. Instead adopt
+  // the server's real photo for this DATE.
+  const list = await api(this.path).catch(() => []);
+
+  const match = (list || []).find(
+    (x) => String(x.photo_date) === String(p.date)
+  );
+
+  if (match) {
+    await db.runAsync(
+      'UPDATE progress_photos SET synced = 1, server_id = ?, image_path = ? WHERE id = ?',
+      [match.id, match.image_path || null, id]
+    );
+  } else {
+    // No server photo for this date either.
+    // This local row is display-only, so stop retrying it.
+    await db.runAsync(
+      'UPDATE progress_photos SET synced = 1 WHERE id = ?',
+      [id]
+    );
+  }
+
+} else {
+  // no file_path, no server_id: nothing pushable — display-only
+  await db.runAsync(
+    'UPDATE progress_photos SET synced = 1 WHERE id = ?',
+    [id]
+  );
+}
     },
-    async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
+    async remove(id) {
+      const db = await getDb();
+      // enqueueDelete captured hadServerBackup before the row vanished, but
+      // the row is gone by process time — the server delete keys on the
+      // SERVER id, which we must recover. Look it up by entity id in the
+      // (just-deleted) local table returns nothing, so delete-by-date LWW
+      // replacement covers the row; for true deletes we rely on the queue
+      // carrying the id: extract from the queue row's entity_id → the id
+      // IS the local id. Server-side delete needs the server id, which we
+      // stash in the queue via a pre-delete snapshot:
+      const snap = await db.getFirstAsync(
+        'SELECT payload FROM sync_queue WHERE entity_type = ? AND entity_id = ? AND operation = ?',
+        ['progress_photo', String(id), 'DELETE']
+      );
+      let serverId = null;
+      try { serverId = snap?.payload ? JSON.parse(snap.payload).server_id : null; } catch {}
+      if (serverId) {
+        await api(`${this.path}/${serverId}`, { method: 'DELETE' });
+      }
+      // no snapshot (never synced) — clean local removal, nothing to do
+    },
     deps: null,
   },
 };
@@ -931,6 +1091,18 @@ export async function resyncQueueForCurrentUser() {
     await db.getAllAsync(
       'SELECT local_id FROM local_diet_plans WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
     'diet_plan', (r) => r.local_id);
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT local_id FROM local_food_log_entries WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'diet_food_log', (r) => r.local_id);
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT local_id FROM food_log_entries WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'food_log', (r) => r.local_id);
+  await enqueueAll(
+    await db.getAllAsync(
+      'SELECT local_id FROM custom_dishes WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),
+    'custom_dish', (r) => r.local_id);
   await enqueueAll(
     await db.getAllAsync(
       'SELECT diet_plan_local_id, date FROM local_diet_checkins WHERE synced = 0 AND (user_id = ? OR user_id IS NULL)', [userId]),

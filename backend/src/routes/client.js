@@ -9,6 +9,7 @@ const coaching = require('../data/coachingPlans');
 const notifications = require('../data/notifications');
 const workoutTemplatesSync = require('../data/workoutTemplatesSync');
 const intakeProfiles = require('../data/intakeProfiles');
+const progressPhotos = require('../data/progressPhotos');
 const { query } = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { registerRoute } = require('../admin/registry');
@@ -103,6 +104,15 @@ registerRoute(router, {
     );
     if (!rows.length) {
       return res.status(404).json({ error: 'No active trainer relationship' });
+    }
+        // +1 rule: unlink resets all of this client's TRAINER_SHARED photos to
+    // PERSONAL (any future trainer starts with a clean slate). Non-fatal on
+    // failure — the trainer read endpoint re-checks association + visibility
+    // at query time, so a missed reset can never leak a photo.
+    try {
+      await progressPhotos.resetSharesOnDisconnect(req.user.id);
+    } catch (err) {
+      console.error('[ProgressPhotos] share reset on unlink failed:', err.message);
     }
     res.json(rows[0]);
   } catch (e) {
@@ -554,6 +564,176 @@ registerRoute(router, {
 }, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
   try {
     res.json(await mealCatalog.listUserDishes(req.user.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// ---- Trainer nutrition notes (client side) ----
+// The client can read the trainer's notes and mark them read; per-note read
+// state lets the app surface new notes without a notification system.
+const dietNotes = require('../data/dietNotes');
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/diet-notes',
+  description: "Lists the client's trainer nutrition notes (newest first, with trainer name and read state).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await dietNotes.listNotesForClient(req.user.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/diet-notes/:id/read',
+  description: "Marks one of the client's trainer notes as read.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await dietNotes.markNoteRead(req.user.id, req.params.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// ---- Active nutrition targets (client side) ----
+// The ONE authoritative target service (profile → recommendation →
+// versioned active target). The diet system consumes this; no screen
+// re-derives targets from the profile.
+const nutritionTargetsService = require('../data/nutritionTargetsService');
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/nutrition-targets',
+  description: "Returns the caller's active nutrition target (with its source: automatic or trainer override), the current app recommendation, and whether the profile supports a calculation.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await nutritionTargetsService.getActiveNutritionTargets(req.user.id, req.query.date));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// ---- Log-first nutrition (migration 040): the daily food log is the core
+// entity for every user; search/targets/suggestions are overlays. ----
+const nutritionLog = require('../data/nutritionLog');
+const nutritionDigest = require('../data/nutritionDigest');
+const structureSuggestions = require('../data/structureSuggestions');
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/food-search',
+  description: 'Three-layer food search (global database incl. seeded staples and cached Open Food Facts results, personal recipes, trainer catalog, custom dishes) with an Open Food Facts fall-through. Supports ?q= and exact ?barcode=.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await nutritionLog.searchFoods(req.user.id, { q: req.query.q, barcode: req.query.barcode }));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/food-log',
+  description: "The caller's food diary entries for a date (?date=YYYY-MM-DD, default today).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await nutritionLog.listFoodLogForDate(req.user.id, req.query.date || new Date().toISOString().slice(0, 10)));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/food-log/recent-frequent',
+  description: 'Recently and most-frequently logged foods for low-friction re-logging.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await nutritionLog.recentAndFrequentFoods(req.user.id, Number(req.query.limit) || 10));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/nutrition-suggestions',
+  description: 'Advisory meal-shape suggestions (display-only guidance; never gates anything).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await structureSuggestions.getStructureSuggestions(req.user.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+registerRoute(router, {
+  method: 'PUT',
+  path: '/nutrition-suggestions',
+  description: 'Replaces the caller\'s own structure suggestions (self-guidance).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await structureSuggestions.setSelfSuggestions(req.user.id, req.body));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/nutrition-targets/self',
+  description: "Sets the caller's own calorie/macro targets (source 'self', opens a new target version). Supports target_mode 'daily' or 'weekly_average'.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    const { calories, protein_g, carbs_g, fat_g, tolerance_pct, target_mode } = req.body || {};
+    res.status(201).json(
+      await nutritionTargetsService.setSelfTargets(req.user.id, { calories, protein_g, carbs_g, fat_g, tolerance_pct, target_mode })
+    );
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/nutrition-weekly-digest',
+  description: "Trend-based weekly digest: per-day totals (not-logged days excluded from averages), target status ('daily' or rolling 'weekly_average' mode), plain-language trend lines, and structure suggestions.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Nutrition',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await nutritionDigest.getWeeklyDigest(req.user.id, { days: Math.min(Number(req.query.days) || 7, 30) }));
   } catch (e) {
     httpError(res, e);
   }

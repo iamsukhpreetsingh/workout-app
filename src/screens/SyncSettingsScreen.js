@@ -21,42 +21,7 @@
 //     loadData();
 //   }, []);
 
-//   const handleModeChange = async (mode) => {
-//     if (mode === 'local' && settings.sync_mode !== 'local') {
-//       Alert.alert(
-//         'Switch to Local Only?',
-//         'Your data will be stored only on this device and will not automatically sync to the cloud. If you delete the app, clear its storage, or lose/reset your device, locally stored data may be permanently lost.',
-//         [
-//           { text: 'Cancel', style: 'cancel' },
-//           { text: 'Switch', onPress: async () => { await setSyncMode(mode); loadData(); }, style: 'destructive' },
-//         ]
-//       );
-//     } else {
-//       await setSyncMode(mode);
-//       loadData();
-//     }
-//   };
 
-//   const handleSyncNow = async () => {
-//     setIsSyncing(true);
-//     try {
-//       const result = await syncPending();
-//       if (result.skipped) {
-//         if (result.reason === 'local_only') {
-//           Alert.alert('Sync Disabled', 'Sync is set to Local Only. Change your sync mode to enable automatic synchronization.');
-//         } else if (result.reason === 'offline') {
-//           Alert.alert('Offline', 'No internet connection. Your changes will sync when you\'re back online.');
-//         }
-//       } else {
-//         Alert.alert('Sync Complete', `Uploaded: ${result.uploaded}\nFailed: ${result.failed}\nPending: ${result.pending}`);
-//       }
-//     } catch (e) {
-//       Alert.alert('Sync Failed', e.message);
-//     } finally {
-//       setIsSyncing(false);
-//       loadData();
-//     }
-//   };
 
 //   const handlePull = async () => {
 //     try {
@@ -187,39 +152,6 @@
 //   );
 // }
 
-// const makeStyles = (colors) =>
-//   StyleSheet.create({
-//     container: { flex: 1, backgroundColor: colors.bg },
-//     section: { padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border },
-//     sectionTitle: { color: colors.textDim, fontSize: 13, fontWeight: '700', marginBottom: 12, letterSpacing: 0.5 },
-//     option: { 
-//       flexDirection: 'row', 
-//       alignItems: 'center', 
-//       justifyContent: 'space-between',
-//       padding: 14, 
-//       backgroundColor: colors.card, 
-//       borderRadius: 12, 
-//       marginBottom: 8 
-//     },
-//     optionSelected: { borderWidth: 1, borderColor: colors.primary },
-//     optionContent: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 },
-//     optionText: { flex: 1 },
-//     optionTitle: { color: colors.text, fontSize: 15, fontWeight: '600' },
-//     optionDesc: { color: colors.textDim, fontSize: 12, marginTop: 2 },
-//     statusCard: { backgroundColor: colors.card, borderRadius: 12, padding: 16, marginBottom: 12 },
-//     statusRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-//     statusText: { color: colors.text, fontSize: 15, fontWeight: '600' },
-//     lastSync: { color: colors.textDim, fontSize: 13 },
-//     pending: { color: colors.yellow, fontSize: 13, marginTop: 4 },
-//     buttonRow: { flexDirection: 'row', gap: 12 },
-//     button: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12, borderRadius: 10 },
-//     buttonPrimary: { backgroundColor: colors.primary },
-//     buttonSecondary: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.primary },
-//     buttonDisabled: { opacity: 0.6 },
-//     buttonText: { color: '#fff', fontWeight: '600', fontSize: 14 },
-//     buttonTextSecondary: { color: colors.primary },
-//     warningCard: { flexDirection: 'row', gap: 10, backgroundColor: colors.card, borderRadius: 12, padding: 14, alignItems: 'flex-start' },
-//     warningText: { flex: 1, color: colors.textDim, fontSize: 12, lineHeight: 18 },
 //   });
 
 
