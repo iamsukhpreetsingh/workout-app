@@ -77,6 +77,7 @@ async function cacheExternalFoods(items) {
       [String(f.name).slice(0, 200), f.brand || null, Math.round(f.calories),
        f.protein_g ?? null, f.carbs_g ?? null, f.fat_g ?? null,
        f.fiber_g ?? null, f.sugar_g ?? null, f.sodium_mg ?? null,
+       100, // OFF results are per-100g — default serving is 100 g
        f.barcode || null]
     );
     if (rows[0]) cached.push(rows[0]);
