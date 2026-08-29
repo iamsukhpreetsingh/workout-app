@@ -51,7 +51,6 @@ export const TRAINER_TABS = 'TrainerMain';
 export const TAB_CLIENTS = 'Clients';
 export const TAB_WORKOUTS = 'Workouts';
 export const TAB_RECIPES = 'Recipes';
-export const TRAINER_SETTINGS = 'TrainerSettings';
 export const ASSIGN_WORKOUT_PICKER = 'AssignWorkoutPicker';
 export const WORKOUT_TEMPLATE_EDITOR = 'WorkoutTemplateEditor';
 export const TAG_MANAGER = 'TagManager';

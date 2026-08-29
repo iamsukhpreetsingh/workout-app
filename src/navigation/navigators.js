@@ -28,7 +28,6 @@ import BodyScreen from '../screens/BodyScreen';
 import ProgressPhotosScreen from '../screens/ProgressPhotosScreen';
 import TrainerProgressPhotosScreen from '../screens/TrainerProgressPhotosScreen';
 import TrainerClientsScreen from '../screens/TrainerClientsScreen';
-import TrainerSettingsScreen from '../screens/TrainerSettingsScreen';
 import ClientDetailScreen from '../screens/ClientDetailScreen';
 import AssignWorkoutScreen from '../screens/AssignWorkoutScreen';
 import ClientAssignedDetailScreen from '../screens/ClientAssignedDetailScreen';
@@ -93,7 +92,6 @@ import {
   TAB_CLIENTS,
   TAB_WORKOUTS,
   TAB_RECIPES,
-  TRAINER_SETTINGS,
   ASSIGN_WORKOUT_PICKER,
   WORKOUT_TEMPLATE_EDITOR,
   TAG_MANAGER,
@@ -253,7 +251,9 @@ export function Tabs({ onSwitchView }) {
       <Tab.Screen name={TAB_PROFILE}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>
-            <Stack.Screen name="ProfileMain" component={ProfileScreen} options={{ title: 'Profile' }} />
+            <Stack.Screen name="ProfileMain">
+              {(props) => <ProfileScreen {...props} onSwitchView={onSwitchView} />}
+            </Stack.Screen>
           </TabStack>
         )}
       </Tab.Screen>
@@ -305,7 +305,6 @@ export function TrainerTabs({ onSwitchView }) {
     [TAB_CLIENTS]: 'people',
     [TAB_WORKOUTS]: 'barbell-outline',
     [TAB_RECIPES]: 'restaurant-outline',
-    [TRAINER_SETTINGS]: 'settings-outline',
     [TAB_PROFILE]: 'person',
   };
   return (
@@ -341,19 +340,12 @@ export function TrainerTabs({ onSwitchView }) {
           </TabStack>
         )}
       </Tab.Screen>
-      <Tab.Screen name={TRAINER_SETTINGS}>
-        {() => (
-          <TabStack onSwitchView={onSwitchView}>
-            <Stack.Screen name="TrainerSettingsMain">
-              {(props) => <TrainerSettingsScreen {...props} onSwitchView={onSwitchView} />}
-            </Stack.Screen>
-          </TabStack>
-        )}
-      </Tab.Screen>
       <Tab.Screen name={TAB_PROFILE}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>
-            <Stack.Screen name="TrainerProfileMain" component={ProfileScreen} options={{ title: 'Profile' }} />
+            <Stack.Screen name="TrainerProfileMain">
+              {(props) => <ProfileScreen {...props} inTrainerView onSwitchView={onSwitchView} />}
+            </Stack.Screen>
           </TabStack>
         )}
       </Tab.Screen>
@@ -412,6 +404,9 @@ export function TrainerStack({ onSwitchView }) {
         options={{ title: 'Notifications' }}
       />
       <Stack.Screen name={TAG_MANAGER} component={TagManagerScreen} options={{ title: 'Manage Tags' }} />
+      {/* top-bar gear/data-sync resolve inside trainer view as well */}
+      <Stack.Screen name={SETTINGS} component={SettingsScreen} options={{ title: 'Settings' }} />
+      <Stack.Screen name={SYNC_SETTINGS} component={SyncSettingsScreen} options={{ title: 'Data & Sync' }} />
     </Stack.Navigator>
   );
 }

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, Modal, Alert } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, Modal, Alert, Share, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
@@ -9,7 +9,7 @@ import { TAB_CLIENTS, EDIT_PROFILE, INTAKE_FORM } from '../shared/constants/rout
 import ChangePasswordCard from '../components/ChangePasswordCard';
 
 // Profile identity/info only — app preferences stay in Settings.
-export default function ProfileScreen({ navigation }) {
+export default function ProfileScreen({ navigation, inTrainerView = false, onSwitchView }) {
   const colors = useColors();
   const { user, logout } = useAuth();
   const styles = makeStyles(colors);
@@ -17,11 +17,11 @@ export default function ProfileScreen({ navigation }) {
   if (!user) return null;
 
   const isTrainer = user.role === 'trainer';
-  return <ProfileBody navigation={navigation} colors={colors} styles={styles} user={user} isTrainer={isTrainer} logout={logout} />;
+  return <ProfileBody navigation={navigation} colors={colors} styles={styles} user={user} isTrainer={isTrainer} logout={logout} inTrainerView={inTrainerView} onSwitchView={onSwitchView} />;
 }
 
 // Split so the trainer-view hook rules don't depend on the early return
-function ProfileBody({ navigation, colors, styles, user, isTrainer, logout }) {
+function ProfileBody({ navigation, colors, styles, user, isTrainer, logout, inTrainerView, onSwitchView }) {
   const [inviteCode, setInviteCode] = useState('');
   const [assoc, setAssoc] = useState(null); // { status, trainer_name }
   const [assocMsg, setAssocMsg] = useState(null); // confirmation / error
@@ -33,6 +33,41 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer, logout }) {
   }, []);
 
   const [reconnect, setReconnect] = useState(null); // preview when is_reactivation
+
+  // Invite code management (moved from the retired Trainer Settings tab) —
+  // trainers in Trainer View generate/share the single-use client code here.
+  const [invite, setInvite] = useState(null); // { code, expires_at }
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const loadInvite = React.useCallback(async () => {
+    setInviteLoading(true);
+    try {
+      setInvite(await api('/trainer/invite-code/latest'));
+    } catch {
+      setInvite(null);
+    }
+    setInviteLoading(false);
+  }, []);
+  const generateInvite = async () => {
+    setInviteLoading(true);
+    try {
+      setInvite(await api('/trainer/invite-code', { method: 'POST' }));
+    } catch (e) {
+      Alert.alert('Could not generate code', e.message || 'Please try again.');
+    }
+    setInviteLoading(false);
+  };
+  const shareInvite = async () => {
+    if (!invite) return;
+    try {
+      await Share.share({
+        message: `Join me as your trainer on Workout Tracker! Invite code: ${invite.code} (valid until ${new Date(invite.expires_at).toLocaleDateString()})`,
+        title: 'Trainer invite code',
+      });
+    } catch {}
+  };
+  React.useEffect(() => {
+    if (inTrainerView && isTrainer) loadInvite();
+  }, [inTrainerView, isTrainer, loadInvite]);
 
   const submitInviteCode = async () => {
     const code = inviteCode.trim().toUpperCase();
@@ -139,6 +174,87 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer, logout }) {
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={17} color={colors.textDim} />
+        </TouchableOpacity>
+      )}
+
+      {/* Trainer-only: invite code + view switch (merged from the retired
+          Trainer Settings tab) */}
+      {isTrainer && inTrainerView && (
+        <>
+          <View style={styles.inviteCard}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={styles.inviteTitle}>Invite Code</Text>
+              <TouchableOpacity onPress={loadInvite} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="refresh" size={16} color={colors.textDim} />
+              </TouchableOpacity>
+            </View>
+            {inviteLoading ? (
+              <ActivityIndicator color={colors.primary} size="small" style={{ marginVertical: 18 }} />
+            ) : invite ? (
+              <>
+                <Text style={styles.inviteCode}>{invite.code}</Text>
+                <Text style={styles.inviteMeta}>
+                  Expires {new Date(invite.expires_at).toLocaleDateString()} · single-use
+                </Text>
+                <View style={styles.inviteBtnRow}>
+                  <TouchableOpacity style={[styles.inviteBtn, { backgroundColor: colors.blue }]} onPress={shareInvite}>
+                    <Ionicons name="share-social-outline" size={15} color="#fff" />
+                    <Text style={styles.inviteBtnTextOn}>Share</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.inviteBtn, { borderWidth: 1, borderColor: colors.border }]}
+                    onPress={generateInvite}
+                  >
+                    <Ionicons name="add-circle-outline" size={15} color={colors.text} />
+                    <Text style={styles.inviteBtnText}>Generate New</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.inviteNone}>
+                  No active code. Generate one and share it with a client to let them connect.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.inviteBtn, { backgroundColor: colors.blue, alignSelf: 'flex-start' }]}
+                  onPress={generateInvite}
+                >
+                  <Ionicons name="add-circle-outline" size={15} color="#fff" />
+                  <Text style={styles.inviteBtnTextOn}>Generate Code</Text>
+                </TouchableOpacity>
+              </>
+            )}
+            <Text style={styles.inviteHint}>
+              Each code works exactly once — it expires the moment any client uses it.
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.switchBtn}
+            onPress={() => onSwitchView && onSwitchView('user')}
+          >
+            <Ionicons name="swap-horizontal-outline" size={18} color={colors.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.switchTitle}>Switch to User View</Text>
+              <Text style={styles.switchSub}>Log your own workouts like a personal account</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+          </TouchableOpacity>
+        </>
+      )}
+
+      {/* trainer browsing their own account in User View: switch back */}
+      {isTrainer && !inTrainerView && onSwitchView && (
+        <TouchableOpacity
+          style={styles.switchBtn}
+          onPress={() => onSwitchView('trainer')}
+        >
+          <Ionicons name="swap-horizontal-outline" size={18} color={colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.switchTitle}>Switch to Trainer View</Text>
+            <Text style={styles.switchSub}>Manage clients and assign plans</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
         </TouchableOpacity>
       )}
 
@@ -274,6 +390,32 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer, logout }) {
 const makeStyles = (colors) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.bg },
+    inviteCard: {
+      backgroundColor: colors.card, borderRadius: 14, padding: 16, marginBottom: 12,
+    },
+    inviteTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
+    inviteCode: {
+      color: colors.text, fontSize: 28, fontWeight: '900', letterSpacing: 4,
+      marginTop: 12, fontVariant: ['tabular-nums'],
+    },
+    inviteMeta: { color: colors.textDim, fontSize: 12, marginTop: 4 },
+    inviteNone: { color: colors.textDim, fontSize: 13, marginTop: 10, marginBottom: 14 },
+    inviteBtnRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
+    inviteBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10,
+    },
+    inviteBtnText: { color: colors.text, fontWeight: '700', fontSize: 13 },
+    inviteBtnTextOn: { color: '#fff', fontWeight: '700', fontSize: 13 },
+    inviteHint: { color: colors.textDim, fontSize: 11, marginTop: 12 },
+    switchBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 12,
+      backgroundColor: colors.card, borderRadius: 14, padding: 16,
+      borderLeftWidth: 3, borderLeftColor: colors.primary,
+      borderTopLeftRadius: 4, borderBottomLeftRadius: 4,
+    },
+    switchTitle: { color: colors.text, fontSize: 15, fontWeight: '700' },
+    switchSub: { color: colors.textDim, fontSize: 12, marginTop: 2 },
     editBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
       borderWidth: 1.5, borderColor: colors.primary, borderRadius: 12,

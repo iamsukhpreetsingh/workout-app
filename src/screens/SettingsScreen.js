@@ -385,21 +385,6 @@ export default function SettingsScreen({ onSwitchView }) {
         </View>
       ) : null}
 
-      {onSwitchView ? (
-        <View style={[styles.card, { backgroundColor: colors.card }]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>Trainer Account</Text>
-          <Text style={[styles.hint, { color: colors.textDim }]}>
-            You are in User View — logging your own workouts.
-          </Text>
-          <TouchableOpacity
-            style={[styles.saveBtn, { backgroundColor: colors.blue, marginTop: 14 }]}
-            onPress={() => onSwitchView('trainer')}
-          >
-            <Text style={styles.saveBtnText}>Switch to Trainer View</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
-
       {pendingSync > 0 && (
         <Text style={[styles.hint, { color: colors.textDim, textAlign: 'center', marginTop: 10 }]}>
           {pendingSync} session{pendingSync === 1 ? '' : 's'} pending sync — will upload when you're back online.
