@@ -26,28 +26,6 @@ class HttpError extends Error {
 
 const sinceClause = (since) => (since ? 'AND updated_at > $2' : '');
 
-// // ── Custom exercises ────────────────────────────────────────────────────
-// async function upsertCustomExercises(userId, list) {
-//   if (!Array.isArray(list) || !list.length) throw new HttpError(400, 'Body must be a non-empty array');
-//   const rows = [];
-//   for (const e of list) {
-//     if (!e || !e.local_entity_id || !e.name) {
-//       throw new HttpError(400, 'Each exercise requires local_entity_id and name');
-//     }
-//     const { rows: r } = await query(
-//       `INSERT INTO backup_custom_exercises (user_id, local_entity_id, name, muscle_group, instructions, thumbnail_path)
-//        VALUES ($1,$2,$3,$4,$5,$6)
-//        ON CONFLICT (user_id, local_entity_id) DO UPDATE SET
-//          name = EXCLUDED.name, muscle_group = EXCLUDED.muscle_group,
-//          instructions = EXCLUDED.instructions, thumbnail_path = EXCLUDED.thumbnail_path,
-//          updated_at = now()
-//        RETURNING *`,
-//       [userId, String(e.local_entity_id), e.name, e.muscle_group || 'other', e.instructions ?? null, e.thumbnail_path ?? null]
-//     );
-//     rows.push(r[0]);
-//   }
-//   return rows;
-// }
 
 
 

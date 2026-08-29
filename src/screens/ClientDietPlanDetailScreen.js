@@ -29,12 +29,11 @@ import {
   STATUS_META,
 } from '../features/diet/domain/nutritionCore';
 import { todayLocalISO, isFutureDate, buildCheckinMap } from '../lib/checkinDates';
+import { macroLine, scaled } from '../features/diet/utils/dietPlanUtils';
 import { useColors } from '../theme';
 import { COACHING_PLAN_BUILDER, DIET_PLAN_BUILDER } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
-
-const scaled = (v, mult) => (v == null ? null : Number(v) * (mult || 1));
 
 // Local calendar date — NEVER new Date().toISOString(), which is UTC-based
 // and mislabels "today" near midnight in non-UTC timezones (an explicit
@@ -56,17 +55,6 @@ const formatDateLabel = (date) => {
 // alternative_name/alternative_*, local rows and backup JSONB use name/*)
 const altName = (a) => a?.name ?? a?.alternative_name;
 const altMacro = (a, k) => a?.[k] ?? a?.[`alternative_${k}`];
-
-const macroLine = (i) => {
-  const m = i.quantity_multiplier || 1;
-  const parts = [];
-  if (i.calories != null) parts.push(`${Math.round(scaled(i.calories, m))} cal`);
-  if (i.protein_g != null) parts.push(`${Math.round(scaled(i.protein_g, m))}P`);
-  if (i.carbs_g != null) parts.push(`${Math.round(scaled(i.carbs_g, m))}C`);
-  if (i.fat_g != null) parts.push(`${Math.round(scaled(i.fat_g, m))}F`);
-  if (i.serving_size) parts.push(i.serving_size);
-  return parts.join(' · ') || 'macros not set';
-};
 
 // Day-by-day diet chart viewer for BOTH trainer-assigned and self-authored
 // plans. Fetches the full nested structure from GET /client/diet-plans/:id
@@ -268,25 +256,6 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
     setRefreshing(false);
   };
 
-  // useEffect(() => {
-  //   if (!planId) return;
-  //   let mounted = true;
-  //   const endpoint = isSupplement 
-  //     ? `/client/supplement-plans/${planId}/checkins` 
-  //     : `/client/diet-plans/${planId}/checkins`;
-  //   api(endpoint)
-  //     .then((rows) => {
-  //       if (!mounted) return;
-  //       const today = new Date().toISOString().slice(0, 10);
-  //       const todays = (rows || []).find((c) => c.date.slice(0, 10) === today);
-  //       if (todays) {
-  //         // supplements use 'taken', diet uses 'followed'
-  //         setCheckedToday(isSupplement ? todays.taken : todays.followed);
-  //       }
-  //     })
-  //     .catch(() => {});
-  //   return () => { mounted = false; };
-  // }, [planId, isSupplement]);
 
 
     useEffect(() => {
@@ -418,10 +387,10 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
         // a swap in effect for THIS viewed date feeds its own macros into
         // the running total — only for this exact calendar date
         const i = isSupplement ? raw : resolveItem(raw);
-        t.cal += scaled(i.calories, i.quantity_multiplier) || 0;
-        t.pro += scaled(i.protein_g, i.quantity_multiplier) || 0;
-        t.car += scaled(i.carbs_g, i.quantity_multiplier) || 0;
-        t.fat += scaled(i.fat_g, i.quantity_multiplier) || 0;
+        t.cal += scaled(i.calories, i.quantity_multiplier, { round: false }) || 0;
+        t.pro += scaled(i.protein_g, i.quantity_multiplier, { round: false }) || 0;
+        t.car += scaled(i.carbs_g, i.quantity_multiplier, { round: false }) || 0;
+        t.fat += scaled(i.fat_g, i.quantity_multiplier, { round: false }) || 0;
       }
     }
     return t;
@@ -504,10 +473,10 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
       .map((it) => ({
         id: String(it.id),
         name: it.name,
-        calories: scaled(it.calories, it.quantity_multiplier),
-        protein_g: it.protein_g != null ? Math.round(scaled(it.protein_g, it.quantity_multiplier)) : null,
-        carbs_g: it.carbs_g != null ? Math.round(scaled(it.carbs_g, it.quantity_multiplier)) : null,
-        fat_g: it.fat_g != null ? Math.round(scaled(it.fat_g, it.quantity_multiplier)) : null,
+        calories: scaled(it.calories, it.quantity_multiplier, { round: false }),
+        protein_g: it.protein_g != null ? Math.round(scaled(it.protein_g, it.quantity_multiplier, { round: false })) : null,
+        carbs_g: it.carbs_g != null ? Math.round(scaled(it.carbs_g, it.quantity_multiplier, { round: false })) : null,
+        fat_g: it.fat_g != null ? Math.round(scaled(it.fat_g, it.quantity_multiplier, { round: false })) : null,
         serving_size: it.serving_size || null,
       }));
   }, [detailedMode, plannedItemsForDay, foodLogs]);
@@ -623,25 +592,6 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
   const tFat = Number(plan.daily_fat_target) || 0;
   const pct = target > 0 ? Math.min(100, Math.round((totals.cal / target) * 100)) : 0;
 
-  // const checkIn = async (followed) => {
-  //   if (checkBusy) return;
-  //   setCheckBusy(true);
-  //   const today = new Date().toISOString().slice(0, 10);
-  //   try {
-  //     const endpoint = isSupplement 
-  //       ? `/client/supplement-plans/${planId}/checkins` 
-  //       : `/client/diet-plans/${planId}/checkins`;
-  //     const body = isSupplement 
-  //       ? { date: today, taken: followed }
-  //       : { date: today, followed };
-  //     await api(endpoint, { method: 'POST', body });
-  //     setCheckedToday(followed);
-  //   } catch (e) {
-  //     Alert.alert('Check-in failed', e.message || 'Please try again.');
-  //   } finally {
-  //     setCheckBusy(false);
-  //   }
-  // };
 
     const checkIn = async (followed) => {
     if (checkBusy) return;
@@ -1065,7 +1015,7 @@ export default function ClientDietPlanDetailScreen({ route, navigation }) {
                           />
                         ) : null}
                       </View>
-                      <Text style={[styles.itemMacro, NUMS]}>{macroLine(i)}</Text>
+                      <Text style={[styles.itemMacro, NUMS]}>{macroLine(i, { withServing: true })}</Text>
                       {i.activeSwap ? (
                         <View style={styles.swapBadge}>
                           <Ionicons name="arrow-undo" size={10} color={colors.blue} />

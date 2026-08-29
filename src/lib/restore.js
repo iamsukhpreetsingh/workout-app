@@ -85,43 +85,8 @@ async function runRestoreSteps(onProgress = () => {}) {
     return r.lastInsertRowId;
   };
 
-  // await step('Custom exercises', async () => {
-  //   const rows = await api('/user/backup/custom-exercises');
-  //   for (const e of rows) {
-  //     const existing = await db.getFirstAsync('SELECT id FROM exercises WHERE name = ?', [e.name]);
-  //     if (existing) {
-  //       await db.runAsync(
-  //         'UPDATE exercises SET synced = 1, server_id = ?, is_custom = 1 WHERE id = ?',
-  //         [e.id, existing.id]);
-  //     } else {
-  //       await db.runAsync(
-  //         `INSERT INTO exercises (name, muscle_group, is_custom, instructions, thumbnail_path, synced, server_id)
-  //          VALUES (?,?,1,?,?,1,?)`,
-  //         [e.name, e.muscle_group || 'other', e.instructions ?? null, e.thumbnail_path ?? null, e.id]);
-  //     }
-  //   }
-  // });
 
 
-  //   await step('Custom exercises', async () => {
-  //   const rows = await api('/user/backup/custom-exercises');
-  //   for (const e of rows) {
-  //     const existing = await db.getFirstAsync('SELECT id FROM exercises WHERE name = ?', [e.name]);
-  //     if (existing) {
-  //       // claim unowned rows; never steal another account's row
-  //       await db.runAsync(
-  //         `UPDATE exercises SET synced = 1, server_id = ?, is_custom = 1,
-  //            user_id = COALESCE(user_id, ?)
-  //          WHERE id = ?`,
-  //         [e.id, userId, existing.id]);
-  //     } else {
-  //       await db.runAsync(
-  //         `INSERT INTO exercises (name, muscle_group, is_custom, instructions, thumbnail_path, synced, server_id, user_id)
-  //          VALUES (?,?,1,?,?,1,?,?)`,
-  //         [e.name, e.muscle_group || 'other', e.instructions ?? null, e.thumbnail_path ?? null, e.id, userId]);
-  //     }
-  //   }
-  // });
 
 
 
@@ -422,31 +387,6 @@ async function runRestoreSteps(onProgress = () => {}) {
     }
   });
 
-  // await step('Progress photos', async (onDetail) => {
-  //   const rows = await api('/user/backup/progress-photos');
-  //   if (!rows.length) return;
-  //   const dirInfo = await FileSystem.getInfoAsync(PHOTOS_DIR);
-  //   if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(PHOTOS_DIR, { intermediates: true });
-  //   for (let i = 0; i < rows.length; i++) {
-  //     const ph = rows[i];
-  //     onDetail(`Downloading photos… ${i + 1} of ${rows.length}`);
-  //     const filename = `${ph.date}_${ph.local_entity_id}.jpg`;
-  //     const dest = `${PHOTOS_DIR}${filename}`;
-  //     const info = await FileSystem.getInfoAsync(dest);
-  //     if (!info.exists) {
-  //       if (!ph.url) continue;
-  //       try { await FileSystem.downloadAsync(ph.url, dest); } catch { continue; }
-  //     }
-  //     const after = await FileSystem.getInfoAsync(dest);
-  //     if (!after.exists) continue; // broken URL — skip rather than fail the restore
-  //     const pid = parseInt(ph.local_entity_id, 10);
-  //     await db.runAsync(
-  //       `INSERT OR REPLACE INTO progress_photos (id, date, file_path, angle, created_at, synced, server_id)
-  //        VALUES (?,?,?,?,?,?,?)`,
-  //       [isNaN(pid) ? null : pid, ph.date, filename, ph.angle ?? null,
-  //        new Date().toISOString(), 1, ph.id]);
-  //   }
-  // });
 
     await step('Progress photos', async (onDetail) => {
     // FIRST-CLASS endpoint (visibility-aware), not the old backup route.

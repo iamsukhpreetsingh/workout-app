@@ -10,16 +10,23 @@ export function registerTokenHooks(hooks) {
   tokenHooks = { ...tokenHooks, ...hooks };
 }
 
+// Base URL + current access token for the few places that must make a raw
+// fetch outside this wrapper (e.g. streaming a protected image download).
+// getAccessToken resolves via the hooks AuthContext registered, so it stays
+// correct across refreshes.
+export const API_BASE = API_URL;
+export function getAccessToken() {
+  return tokenHooks.getAccessToken();
+}
+
 async function rawRequest(path, { method = 'GET', body, headers } = {}) {
   const url = `${API_URL}${path}`;
-  console.log('[API] Requesting:', url);
   try {
     const res = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json', ...(headers || {}) },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    console.log('[API] Response status:', res.status);
     return res;
   } catch (e) {
     console.error('[API] Network error:', e.message, e);

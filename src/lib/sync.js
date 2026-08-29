@@ -359,33 +359,6 @@
 //           [startTime, userId]
 //         );
         
-//         if (existingSession) {
-//           // Update existing session
-//           await db.runAsync(
-//             `UPDATE workout_sessions SET name = ?, duration_sec = ?, notes = ?, synced = 1, local_session_id = ?
-//              WHERE id = ?`,
-//             [session.name, session.duration_seconds, session.notes || null, localSessionId, existingSession.id]
-//           );
-//         } else {
-//           // Insert new session
-//           const result = await db.runAsync(
-//             `INSERT INTO workout_sessions 
-//              (name, start_time, end_time, duration_sec, notes, plan_id, synced, sync_attempted_at, source_assigned_plan_id, local_session_id, user_id)
-//              VALUES (?, ?, null, ?, ?, ?, 1, ?, ?, ?, ?)`,
-//             [
-//               session.name, 
-//               startTime, 
-//               session.duration_seconds,
-//               session.notes || null,
-//               session.plan_id || null,
-//               new Date().toISOString(), 
-//               session.source_assigned_plan_id || null,
-//               localSessionId,
-//               userId
-//             ]
-//           );
-//           existingSession = { id: result.lastInsertRowId };
-//         }
         
 //         // Insert session details if available
 //         if (existingSession && data.session_details && data.session_details[session.local_session_id]) {
@@ -409,27 +382,6 @@
 //               [existingSession.id, exerciseId, i]
 //             );
             
-//             // Insert sets for this exercise
-//             if (ex.sets && Array.isArray(ex.sets)) {
-//               for (let j = 0; j < ex.sets.length; j++) {
-//                 const set = ex.sets[j];
-//                 await db.runAsync(
-//                   `INSERT INTO sets (session_exercise_id, weight, reps, is_warmup, position, set_type, completed)
-//                    VALUES (?, ?, ?, ?, ?, ?, ?)`,
-//                   [
-//                     seResult.lastInsertRowId,
-//                     set.weight || 0,
-//                     set.reps || 0,
-//                     set.set_type === 'warmup' ? 1 : 0,
-//                     j,
-//                     set.set_type || 'working',
-//                     set.completed !== false ? 1 : 0
-//                   ]
-//                 );
-//               }
-//             }
-//           }
-//         }
         
 //         downloaded++;
 //       }
@@ -464,21 +416,6 @@
 //           }
 //         }
         
-//         // Insert exercises for the plan
-//         if (exercises && Array.isArray(exercises)) {
-//           await db.runAsync('DELETE FROM plan_exercises WHERE plan_id = ?', [localId]);
-//           for (let i = 0; i < exercises.length; i++) {
-//             const ex = exercises[i];
-//             const exerciseId = ex.exercise_id || ex.exerciseId;
-//             if (exerciseId) {
-//               await db.runAsync(
-//                 `INSERT INTO plan_exercises (plan_id, exercise_id, position, target_sets, rest_seconds, group_id)
-//                  VALUES (?, ?, ?, ?, ?, ?)`,
-//                 [localId, exerciseId, i, ex.target_sets || ex.targetSets || 3, ex.rest_seconds || ex.restSeconds || 90, ex.group_id || ex.groupId || null]
-//               );
-//             }
-//           }
-//         }
         
 //         downloaded++;
 //       }

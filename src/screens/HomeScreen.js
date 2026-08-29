@@ -207,23 +207,6 @@ export default function HomeScreen({ navigation }) {
     }, [isClient])
   );
 
-  // Pinned cards start DIRECTLY — no detail-screen step
-  // const startPinned = async (item) => {
-  //   if (workout) {
-  //     navigation.navigate(ACTIVE_WORKOUT);
-  //     return;
-  //   }
-  //   try {
-  //     if (item.source === 'self') {
-  //       const plan = await getPlan(item.id);
-  //       beginWorkout(plan.name, plan.id, plan.exercises);
-  //     } else {
-  //       await startAssignedPlan(item.plan, { dispatch, navigation });
-  //     }
-  //   } catch (e) {
-  //     Alert.alert('Could not start workout', e.message || 'Please try again.');
-  //   }
-  // };
 
     // Pinned cards open the DETAIL screen (preview first, Start from there) —
   // consistent with every other plan list in the app. If a workout is

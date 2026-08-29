@@ -69,58 +69,7 @@ async function touchLastSynced() {
   await db.runAsync('UPDATE sync_settings SET last_synced_at = ? WHERE id = 1', [Date.now()]);
 }
 
-// // ── queue writes ─────────────────────────────────────────────────────────
-// // Dedup-in-place: an existing pending row for the same entity is updated,
-// // never duplicated. Editing the same plan 5 times = 1 queue row.
-// export async function enqueueUpsert(entityType, localId, dependsOn = null) {
-//   const db = await getDb();
-//   if (!getCurrentUserId()) return;
-//   const now = Date.now();
-//   const existing = await db.getFirstAsync(
-//     `SELECT id FROM sync_queue WHERE entity_type = ? AND entity_id = ? AND status IN ('PENDING','SYNCING','FAILED')`,
-//     [entityType, String(localId)]
-//   );
-//   if (existing) {
-//     await db.runAsync(
-//       `UPDATE sync_queue SET operation = 'UPDATE', status = 'PENDING', retry_count = 0,
-//          last_error = NULL, updated_at = ?, last_attempt_at = NULL,
-//          depends_on_entity_type = ?, depends_on_local_id = ?
-//        WHERE id = ?`,
-//       [now, dependsOn ? dependsOn.entityType : null, dependsOn ? String(dependsOn.localId) : null, existing.id]
-//     );
-//     return;
-//   }
-//   await db.runAsync(
-//     `INSERT INTO sync_queue (operation_id, entity_type, entity_id, operation, payload,
-//        created_at, updated_at, status, depends_on_entity_type, depends_on_local_id)
-//      VALUES (?, ?, ?, 'CREATE', NULL, ?, ?, 'PENDING', ?, ?)`,
-//     [
-//       `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-//       entityType, String(localId), now, now,
-//       dependsOn ? dependsOn.entityType : null,
-//       dependsOn ? String(dependsOn.localId) : null,
-//     ]
-//   );
-// }
 
-// // hadServerBackup: the caller checks (BEFORE deleting the local row) whether
-// // this entity was ever backed up (server_id set). Never-backed-up deletes
-// // are clean local removals — no queue row, no server call.
-// export async function enqueueDelete(entityType, localId, hadServerBackup) {
-//   const db = await getDb();
-//   await db.runAsync(
-//     `DELETE FROM sync_queue WHERE entity_type = ? AND entity_id = ? AND operation != 'DELETE'`,
-//     [entityType, String(localId)]
-//   );
-//   if (!hadServerBackup) return; // never synced — nothing to tell the server
-//   const now = Date.now();
-//   await db.runAsync(
-//     `INSERT INTO sync_queue (operation_id, entity_type, entity_id, operation, payload,
-//        created_at, updated_at, status)
-//      VALUES (?, ?, ?, 'DELETE', NULL, ?, ?, 'PENDING')`,
-//     [`${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, entityType, String(localId), now, now]
-//   );
-// }
 
 
 
@@ -174,28 +123,6 @@ export async function enqueueUpsert(entityType, localId, dependsOn = null) {
 
 
 
-// // hadServerBackup: the caller checks (BEFORE deleting the local row) whether
-// // this entity was ever backed up (server_id set). Never-backed-up deletes
-// // are clean local removals — no queue row, no server call.
-// export async function enqueueDelete(entityType, localId, hadServerBackup) {
-//   const db = await getDb();
-//   try {
-//     await db.runAsync(
-//       `DELETE FROM sync_queue WHERE entity_type = ? AND entity_id = ? AND operation != 'DELETE'`,
-//       [entityType, String(localId)]
-//     );
-//     if (!hadServerBackup) return; // never synced — nothing to tell the server
-//     const now = Date.now();
-//     await db.runAsync(
-//       `INSERT INTO sync_queue (operation_id, entity_type, entity_id, operation, payload,
-//          created_at, updated_at, status)
-//        VALUES (?, ?, ?, 'DELETE', NULL, ?, ?, 'PENDING')`,
-//       [`${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, entityType, String(localId), now, now]
-//     );
-// //   } catch (e) {
-// //     console.error('[SYNC] enqueueDelete failed (local delete unaffected):', e.message);
-// //   }
-// // }
 
 //   } catch (e) {
 //     console.error('[SYNC] enqueueDelete failed (local delete unaffected):', e.message);
@@ -471,20 +398,6 @@ const HANDLERS = {
   },
 
 
-  // custom_exercise: {
-  //   path: '/user/backup/custom-exercises',
-  //   async upsert(id) {
-  //     const db = await getDb();
-  //     const e = await db.getFirstAsync('SELECT * FROM exercises WHERE id = ? AND is_custom = 1', [id]);
-  //     if (!e) return;
-  //     const rows = await api(this.path, {
-  //       method: 'POST',
-  //       body: [{ local_entity_id: String(e.id), name: e.name, muscle_group: e.muscle_group, instructions: e.instructions, thumbnail_path: e.thumbnail_path }],
-  //     });
-  //     await db.runAsync('UPDATE exercises SET synced = 1, server_id = ? WHERE id = ?', [rows?.[0]?.id || null, id]);
-  //   },
-  //   async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
-  //   deps: null,
   // },
 
     custom_exercise: {
@@ -747,26 +660,6 @@ const HANDLERS = {
       return p && p.synced === 0 ? [planLocalId] : [];
     },
   },
-//   personal_record: {
-//     path: '/user/backup/personal-records',
-//     async upsert(id) {
-//       const db = await getDb();
-//       const r = await db.getFirstAsync('SELECT * FROM personal_records WHERE id = ?', [id]);
-//       if (!r) return;
-//       const rows = await api(this.path, {
-//         method: 'POST',
-//         body: [{
-//           local_entity_id: String(r.id), exercise_name: r.exercise_name,
-//           record_type: r.record_type, value: r.value,
-//           secondary_value: r.secondary_value,
-//           achieved_at: r.achieved_at,
-//         }],
-//       });
-//       await db.runAsync('UPDATE personal_records SET synced = 1, server_id = ? WHERE id = ?', [rows?.[0]?.id || null, id]);
-//     },
-//     async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
-//     deps: null,
-//   },
 
 
 
@@ -811,24 +704,6 @@ const HANDLERS = {
   //   //     encoding: FileSystem.EncodingType.Base64,
   //   //   });
 
-  //         // file_path is stored as a bare filename (photos.js keeps files under
-  //     // documentDirectory/progress_photos/) — resolve to a full URI, while
-  //     // tolerating absolute paths if that ever changes
-  //     const filePath = String(p.file_path || '').startsWith('file:')
-  //       ? p.file_path
-  //       : `${FileSystem.documentDirectory}progress_photos/${p.file_path}`;
-  //     const base64 = await FileSystem.readAsStringAsync(filePath, {
-  //       encoding: FileSystem.EncodingType.Base64,
-  //     });
-  //     const row = await api(this.path, {
-  //       method: 'POST',
-  //       body: { local_entity_id: String(p.id), date: p.date, angle: p.angle, image_base64: base64 },
-  //     });
-  //     await db.runAsync('UPDATE progress_photos SET synced = 1, server_id = ? WHERE id = ?', [row?.id || null, id]);
-  //   },
-  //   async remove(id) { await api(`${this.path}/${id}`, { method: 'DELETE' }); },
-  //   deps: null,
-  // },
 
     // progress photos → the FIRST-CLASS /progress-photos API (not the old
   // backup route). Upsert = create-or-replace BY DATE (LWW — the server's
@@ -862,54 +737,6 @@ const HANDLERS = {
         await db.runAsync(
           'UPDATE progress_photos SET synced = 1, server_id = ?, image_path = ? WHERE id = ?',
           [row?.id || null, row?.image_path || null, id]);
-      // } else if (p.server_id) {
-      //   await api(`${this.path}/${p.server_id}`, {
-      //     method: 'PATCH',
-      //     body: { visibility: p.visibility || 'PERSONAL' },
-      //   });
-      //   await db.runAsync('UPDATE progress_photos SET synced = 1 WHERE id = ?', [id]);
-      // }
-      // // no file_path and no server_id: nothing meaningful to push — skip
-      //       } else if (p.server_id) 
-      //         {
-      //   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(p.server_id));
-      //   if (!isUuid) {
-      //     const row = await api(this.path, {
-      //       method: 'POST',
-      //       body: {
-      //         photo_date: p.date,
-      //         visibility: p.visibility || 'PERSONAL',
-      //         image_base64: null, // no local file — see guard below
-      //       },
-      //     }).catch(() => null);
-      //     // POST without image fails validation ("image_base64 is required")
-      //     // — a no-file, bad-server-id row can't be repaired by upsert.
-      //     // Instead: pull the server's photo for this DATE and adopt its id.
-      //     if (!row) {
-      //       const list = await api(this.path).catch(() => []);
-      //       const match = (list || []).find((x) => x.photo_date === p.date);
-      //       if (match) {
-      //         await db.runAsync(
-      //           'UPDATE progress_photos SET synced = 1, server_id = ?, image_path = ? WHERE id = ?',
-      //           [match.id, match.image_path || null, id]);
-      //       } else {
-      //         // no server photo for this date either — nothing to sync;
-      //         // mark synced to stop the retry loop (display-only local row)
-      //         await db.runAsync('UPDATE progress_photos SET synced = 1 WHERE id = ?', [id]);
-      //       }
-      //     } else {
-      //       await db.runAsync(
-      //         'UPDATE progress_photos SET synced = 1, server_id = ?, image_path = ? WHERE id = ?',
-      //         [row?.id || null, row?.image_path || null, id]);
-      //     }
-      //   } else {
-      //     await api(`${this.path}/${p.server_id}`, {
-      //       method: 'PATCH',
-      //       body: { visibility: p.visibility || 'PERSONAL' },
-      //     });
-      //     await db.runAsync('UPDATE progress_photos SET synced = 1 WHERE id = ?', [id]);
-      //   }
-      // }
       } else if (
   p.server_id &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(

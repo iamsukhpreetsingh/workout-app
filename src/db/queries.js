@@ -275,48 +275,7 @@ export async function getPlan(id) {
   return plan;
 }
 
-// // exercises: [{ exerciseId, targetSets, restSeconds, groupId }]
-// // tags: optional array of strings (max 5)
-// export async function createPlan(name, notes, exercises, tags = []) {
-//   const db = await getDb();
-//   const userId = getCurrentUserId();
-//   if (!userId) throw new Error('User not authenticated');
-//   const tagsJson = JSON.stringify(tags.slice(0, 5));
-//   const result = await db.runAsync(
-//     'INSERT INTO workout_plans (name, notes, created_at, user_id, tags) VALUES (?, ?, ?, ?, ?)',
-//     [name, notes || null, Date.now(), userId, tagsJson]
-//   );
-//   const planId = result.lastInsertRowId;
-//   for (let i = 0; i < exercises.length; i++) {
-//     await db.runAsync(
-//       `INSERT INTO plan_exercises (plan_id, exercise_id, position, target_sets, rest_seconds, group_id)
-//        VALUES (?, ?, ?, ?, ?, ?)`,
-//       [
-//         planId,
-//         exercises[i].exerciseId,
-//         i,
-//         exercises[i].targetSets || 3,
-//         exercises[i].restSeconds || 90,
-//         exercises[i].groupId || null,
-//       ]
-//     );
-//   }
   
-//   // Add to sync queue
-//   await addToSyncQueue(ENTITY_TYPES.WORKOUT_PLAN, String(planId), 'CREATE', {
-//     local_plan_id: String(planId),
-//     name,
-//     notes: notes || null,
-//     exercises: exercises.map((e, i) => ({
-//       exercise_id: e.exerciseId,
-//       target_sets: e.targetSets || 3,
-//       rest_seconds: e.restSeconds || 90,
-//       order_index: i,
-//     })),
-//     tags,
-//     created_at: new Date().toISOString(),
-//     updated_at: new Date().toISOString(),
-//   });
   
 //   return planId;
 // }
@@ -433,30 +392,6 @@ export async function deletePlan(id) {
 }
 
 
-// export async function updatePlan(id, name, notes, exercises, tags = []) {
-//   const db = await getDb();
-//   const userId = getCurrentUserId();
-//   if (!userId) throw new Error('User not authenticated');
-//   const tagsJson = JSON.stringify(tags.slice(0, 5));
-//   await db.runAsync(
-//     'UPDATE workout_plans SET name = ?, notes = ?, tags = ? WHERE id = ? AND user_id = ?',
-//     [name, notes || null, tagsJson, id, userId]
-//   );
-//   await db.runAsync('DELETE FROM plan_exercises WHERE plan_id = ?', [id]);
-//   for (let i = 0; i < exercises.length; i++) {
-//     await db.runAsync(
-//       `INSERT INTO plan_exercises (plan_id, exercise_id, position, target_sets, rest_seconds, group_id)
-//        VALUES (?, ?, ?, ?, ?, ?)`,
-//       [
-//         id,
-//         exercises[i].exerciseId,
-//         i,
-//         exercises[i].targetSets || 3,
-//         exercises[i].restSeconds || 90,
-//         exercises[i].groupId || null,
-//       ]
-//     );
-//   }
   
 //   // Add to sync queue
 //   await addToSyncQueue(ENTITY_TYPES.WORKOUT_PLAN, String(id), 'UPDATE', {
@@ -565,88 +500,7 @@ export async function getSession(id) {
   return session;
 }
 
-// // session: { id?, name, start_time, end_time, duration_sec, notes, plan_id,
-// //            exercises: [{ exerciseId, restSeconds, groupId, notes,
-// //                          sets: [{ weight, reps, rpe, setType, completed }] }] }
-// export async function saveSession(session) {
-//   const db = await getDb();
-//   const userId = getCurrentUserId();
-//   if (!userId) throw new Error('User not authenticated');
-//   let sessionId = session.id;
-//   if (sessionId) {
-//     await db.runAsync('DELETE FROM session_exercises WHERE session_id = ?', [sessionId]);
-//     await db.runAsync(
-//       `UPDATE workout_sessions SET name = ?, end_time = ?, duration_sec = ?, notes = ?, synced = 0
-//        WHERE id = ? AND user_id = ?`,
-//       [session.name, session.end_time, session.duration_sec, session.notes || null, sessionId, userId]
-//     );
-//     // Add to sync queue for update
-//     await addToSyncQueue(ENTITY_TYPES.SESSION, String(sessionId), 'UPDATE', {
-//       local_session_id: String(sessionId),
-//       name: session.name,
-//       performed_at: new Date(session.start_time).toISOString(),
-//       duration_seconds: session.duration_sec,
-//     });
-//   } else {
-//     const result = await db.runAsync(
-//       `INSERT INTO workout_sessions (name, start_time, end_time, duration_sec, notes, plan_id, source_assigned_plan_id, user_id, synced)
-//        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-//       [session.name, session.start_time, session.end_time, session.duration_sec, session.notes || null, session.plan_id || null, session.sourceAssignedPlanId || null, userId]
-//     );
-//     sessionId = result.lastInsertRowId;
     
-//     // Add to sync queue for create
-//     await addToSyncQueue(ENTITY_TYPES.SESSION, String(sessionId), 'CREATE', {
-//       local_session_id: String(sessionId),
-//       name: session.name,
-//       performed_at: new Date(session.start_time).toISOString(),
-//       duration_seconds: session.duration_sec,
-//       exercise_count: session.exercises?.length || 0,
-//     });
-//   }
-//   for (let i = 0; i < session.exercises.length; i++) {
-//     const ex = session.exercises[i];
-//     const r = await db.runAsync(
-//       `INSERT INTO session_exercises (session_id, exercise_id, position, rest_seconds, group_id, notes)
-//        VALUES (?, ?, ?, ?, ?, ?)`,
-//       [sessionId, ex.exerciseId, i, ex.restSeconds || 90, ex.groupId || null, ex.notes || null]
-//     );
-//     const seId = r.lastInsertRowId;
-//     for (let j = 0; j < ex.sets.length; j++) {
-//       const set = ex.sets[j];
-//       const inserted = await db.runAsync(
-//         `INSERT INTO sets (session_exercise_id, weight, reps, is_warmup, position, rpe, set_type, completed)
-//          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-//         [
-//           seId,
-//           set.weight || 0,
-//           set.reps || 0,
-//           set.setType === 'warmup' ? 1 : 0,
-//           j,
-//           set.rpe ?? null,
-//           set.setType || 'working',
-//           set.completed === 0 ? 0 : 1,
-//         ]
-//       );
-//       // PRs only for completed, non-warmup sets with real values
-//       if (
-//         set.completed !== 0 &&
-//         (set.setType || 'working') !== 'warmup' &&
-//         (set.weight || 0) > 0 &&
-//         (set.reps || 0) > 0
-//       ) {
-//         await checkAndRecordPR(
-//           ex.exerciseId,
-//           set.weight,
-//           set.reps,
-//           inserted.lastInsertRowId,
-//           session.start_time
-//         );
-//       }
-//     }
-//   }
-//   return sessionId;
-// }
 
 
 
@@ -742,22 +596,6 @@ export async function saveSession(session) {
 }
 
 
-// export async function updateSessionName(sessionId, newName) {
-//   const db = await getDb();
-//   const userId = getCurrentUserId();
-//   if (!userId) return;
-//   await db.runAsync(
-//     'UPDATE workout_sessions SET name = ?, synced = 0 WHERE id = ? AND user_id = ?',
-//     [newName.trim(), sessionId, userId]
-//   );
-//   // Add to sync queue for update
-//   await addToSyncQueue(ENTITY_TYPES.SESSION, String(sessionId), 'UPDATE', {
-//     local_session_id: String(sessionId),
-//     name: newName.trim(),
-//   });
-//   // Trigger immediate sync attempt
-//   syncPending().catch(e => console.log('[SYNC] Background sync failed:', e.message));
-// }
 
 
 export async function updateSessionName(sessionId, newName) {
@@ -773,22 +611,6 @@ export async function updateSessionName(sessionId, newName) {
 }
 
 
-// export async function deleteSession(id) {
-//   const db = await getDb();
-//   const userId = getCurrentUserId();
-//   if (!userId) return;
-//   const exerciseIds = (
-//     await db.getAllAsync(
-//       'SELECT DISTINCT exercise_id FROM session_exercises WHERE session_id = ?',
-//       [id]
-//     )
-//   ).map((r) => r.exercise_id);
-//   await db.runAsync('DELETE FROM workout_sessions WHERE id = ? AND user_id = ?', [id, userId]);
-//   // Deleted sets may have held records — demote to the next-best historical set
-//   for (const exId of exerciseIds) {
-//     await recomputePRsForExercise(exId);
-//   }
-// }
 
 
 
@@ -823,26 +645,6 @@ export async function deleteSession(id) {
 }
 
 
-// // Retroactive set type change (history/session edit). Stats are derived at
-// // query time, so recalculating a session happens automatically — but PRs are
-// // stored, so they must be recomputed if a set is reclassified as a warm-up.
-// export async function updateSetType(setId, setType) {
-//   const db = await getDb();
-//   const userId = getCurrentUserId();
-//   const row = await db.getFirstAsync(
-//     `SELECT se.exercise_id, se.session_id FROM sets s
-//      JOIN session_exercises se ON s.session_exercise_id = se.id
-//      WHERE s.id = ?`,
-//     [setId]
-//   );
-//   await db.runAsync('UPDATE sets SET set_type = ? WHERE id = ?', [setType, setId]);
-//   if (row) await recomputePRsForExercise(row.exercise_id);
-//   // A retroactive type change alters the session's aggregates — flag the
-//   // session for re-sync so the trainer-facing summary reflects the fix.
-//   if (row && userId) {
-//     await db.runAsync('UPDATE workout_sessions SET synced = 0 WHERE id = ? AND user_id = ?', [row.session_id, userId]);
-//   }
-// }
 
 
 // Retroactive set type change (history/session edit). Stats are derived at

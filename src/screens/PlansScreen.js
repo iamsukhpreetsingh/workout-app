@@ -69,31 +69,6 @@ export default function PlansScreen({ navigation }) {
             allResults.push({ type: 'workout', source: 'My Workout', ...p, displayName: p.name, displayTags: p.tags || [] });
           }
         });
-        // if (isClient) {
-        //   const [dietPlans, suppPlans, trainerWorkouts] = await Promise.all([
-        //     api('/client/diet-plans').catch(() => []),
-        //     api('/client/supplement-plans').catch(() => []),
-        //     api('/client/assigned-plans').catch(() => []),
-        //   ]);
-        //   dietPlans.forEach((p) => {
-        //     const tags = p.display_tags || p.tags || [];
-        //     if (p.name.toLowerCase().includes(q) || tags.some(t => t.toLowerCase().includes(q))) {
-        //       allResults.push({ type: 'diet', source: p.created_by === 'client' ? 'My Diet' : 'From Trainer · Diet', ...p, displayName: p.name, displayTags: tags });
-        //     }
-        //   });
-        //   suppPlans.forEach((p) => {
-        //     const tags = p.tags || [];
-        //     if (p.name.toLowerCase().includes(q) || tags.some(t => t.toLowerCase().includes(q))) {
-        //       allResults.push({ type: 'supplement', source: p.created_by === 'client' ? 'My Supplement' : 'From Trainer · Supplement', ...p, displayName: p.name, displayTags: tags });
-        //     }
-        //   });
-        //   trainerWorkouts.forEach((p) => {
-        //     const tags = p.tags || [];
-        //     if (p.name.toLowerCase().includes(q) || tags.some(t => t.toLowerCase().includes(q))) {
-        //       allResults.push({ type: 'workout', source: 'From Trainer · Workout', ...p, displayName: p.name, displayTags: tags });
-        //     }
-        //   });
-        // }
 
 
                 if (isClient) {

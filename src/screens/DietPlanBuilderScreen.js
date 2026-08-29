@@ -138,8 +138,6 @@ const planConflicts = (() => {
 
   useEffect(() => {
     if (!editPlanId) return;
-    // // edit mode: prefill from the existing own plan
-    // api(`/client/diet-plans/${editPlanId}`)
         // edit mode: prefill from the existing own plan — local plans from
     // SQLite, legacy server plans via the API
     const loadPromise = isLocalDietPlanId(editPlanId)
@@ -175,8 +173,6 @@ const planConflicts = (() => {
                 fat_g: it.fat_g,
                 serving_size: it.serving_size,
                 recipe_url: it.recipe_url,
-                // quantity_multiplier: it.quantity_multiplier || 1,
-                // client_note: it.client_note || '',
                 quantity_multiplier: it.quantity_multiplier || 1,
                 client_note: it.client_note || '',
                 photo_path: it.photo_path || null,
@@ -343,8 +339,6 @@ const planConflicts = (() => {
               fat_g: i.fat_g ?? null,
               serving_size: i.serving_size || null,
               recipe_url: i.recipe_url || null,
-              // quantity_multiplier: i.quantity_multiplier || 1,
-              // client_note: i.client_note || null,
 
               quantity_multiplier: i.quantity_multiplier || 1,
               client_note: i.client_note || null,
@@ -369,10 +363,6 @@ const planConflicts = (() => {
           })),
         })),
       };
-      // if (editPlanId) {
-      //   await api(`/client/diet-plans/${editPlanId}`, { method: 'PATCH', body });
-      // } else if (self) {
-      //   await api('/client/diet-plans', { method: 'POST', body });
       // } else {
 
               if (editPlanId) {
