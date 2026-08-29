@@ -5,6 +5,7 @@
 // the client can collapse or disable entirely.
 const { query, transaction } = require('../db/pool');
 const coaching = require('./coachingPlans');
+const { assertActiveAssociation } = require('./assignedPlans');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -25,7 +26,7 @@ async function getStructureSuggestions(userId) {
 
 // Trainer sets/replaces the client's suggestion list in one call.
 async function setStructureSuggestions(trainerId, clientId, suggestions) {
-  await coaching.assertActiveAssociation(trainerId, clientId);
+  await assertActiveAssociation(trainerId, clientId);
   if (!Array.isArray(suggestions)) throw new HttpError(400, 'suggestions must be an array');
   return transaction(async (client) => {
     await client.query('DELETE FROM structure_suggestions WHERE user_id = $1', [clientId]);
