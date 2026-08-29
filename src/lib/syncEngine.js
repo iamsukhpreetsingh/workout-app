@@ -318,10 +318,25 @@ async function buildDietPlanPayload(localId) {
       }
     }
   }
+  // plan VERSIONS ride the payload: they are the historical target snapshots
+  // that keep past diaries evaluating against the targets effective on THEIR
+  // date — without them a reinstall silently re-evaluates history against
+  // the CURRENT plan targets
+  const versions = await db.getAllAsync(
+    'SELECT * FROM local_diet_plan_versions WHERE diet_plan_local_id = ? ORDER BY version_number',
+    [localId]);
   return {
     local_entity_id: p.local_id, name: p.name, notes: p.notes, tags: parseJsonArr(p.tags),
     daily_calorie_target: p.daily_calorie_target, daily_protein_target: p.daily_protein_target,
     daily_carbs_target: p.daily_carbs_target, daily_fat_target: p.daily_fat_target,
+    tracking_mode: p.tracking_mode || 'simple', tolerance_pct: p.tolerance_pct ?? 10,
+    versions: versions.map((v) => ({
+      local_entity_id: String(v.id), version_number: v.version_number,
+      effective_from: v.effective_from,
+      daily_calorie_target: v.daily_calorie_target, daily_protein_target: v.daily_protein_target,
+      daily_carbs_target: v.daily_carbs_target, daily_fat_target: v.daily_fat_target,
+      tolerance_pct: v.tolerance_pct, tracking_mode: v.tracking_mode,
+    })),
     days: days.map((d) => ({
       local_entity_id: d.local_id, day_label: d.day_label, order_index: d.order_index,
       meals: d.meals.map((m) => ({

@@ -1022,6 +1022,29 @@ const MIGRATIONS = [
     await addColumnSafe(db, 'user_settings', 'show_meal_suggestions', 'INTEGER NOT NULL DEFAULT 1');
   },
 
+  // v40: ONE-TIME re-upload sweep for self-authored diet plans. tracking_mode/
+  // tolerance_pct were missing from the backup payload and plan VERSIONS were
+  // never backed up at all — every already-synced plan needs one fresh push
+  // (fresh payload includes both; server upsert is idempotent).
+  async (db) => {
+    const plans = await db.getAllAsync('SELECT local_id FROM local_diet_plans');
+    const now = Date.now();
+    for (const p of plans) {
+      await db.runAsync(
+        `INSERT INTO sync_queue
+           (operation_id, entity_type, entity_id, operation, payload,
+            created_at, updated_at, status)
+         SELECT ?, 'diet_plan', ?, 'CREATE', NULL, ?, ?, 'PENDING'
+         WHERE NOT EXISTS (
+           SELECT 1 FROM sync_queue
+           WHERE entity_type = 'diet_plan' AND entity_id = ?
+             AND status IN ('PENDING','SYNCING','FAILED')
+         )`,
+        [`v40-dietplan-resync-${p.local_id}`, p.local_id, now, now, p.local_id]
+      );
+    }
+  },
+
 ];
 
 async function backfillPRs(db) {

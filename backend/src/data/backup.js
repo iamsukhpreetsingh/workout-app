@@ -180,6 +180,32 @@ async function upsertDietPlan(userId, p) {
          ? Math.round(Number(p.tolerance_pct)) : 10]
     );
     const pid = String(p.local_entity_id);
+    // plan VERSIONS ride the payload (historical target snapshots — without
+    // them a reinstall re-evaluates history against current targets)
+    await client.query('DELETE FROM backup_diet_plan_versions WHERE user_id = $1 AND diet_plan_local_id = $2', [userId, pid]);
+    for (const v of p.versions || []) {
+      if (v?.version_number == null || !v?.effective_from) continue;
+      await client.query(
+        `INSERT INTO backup_diet_plan_versions
+           (user_id, local_entity_id, diet_plan_local_id, version_number, effective_from,
+            daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
+            tolerance_pct, tracking_mode)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (user_id, local_entity_id) DO UPDATE SET
+           version_number = EXCLUDED.version_number, effective_from = EXCLUDED.effective_from,
+           daily_calorie_target = EXCLUDED.daily_calorie_target,
+           daily_protein_target = EXCLUDED.daily_protein_target,
+           daily_carbs_target = EXCLUDED.daily_carbs_target,
+           daily_fat_target = EXCLUDED.daily_fat_target,
+           tolerance_pct = EXCLUDED.tolerance_pct, tracking_mode = EXCLUDED.tracking_mode,
+           updated_at = now()`,
+        [userId, String(v.local_entity_id), pid, v.version_number,
+         String(v.effective_from).slice(0, 10),
+         v.daily_calorie_target ?? null, v.daily_protein_target ?? null,
+         v.daily_carbs_target ?? null, v.daily_fat_target ?? null,
+         v.tolerance_pct ?? 10, v.tracking_mode || 'simple']
+      );
+    }
     await client.query('DELETE FROM backup_diet_plan_days WHERE user_id = $1 AND diet_plan_local_id = $2', [userId, pid]);
     for (let di = 0; di < (p.days || []).length; di++) {
       const d = p.days[di] || {};
@@ -270,7 +296,17 @@ async function listDietPlans(userId, since) {
     if (!daysByPlan.has(d.diet_plan_local_id)) daysByPlan.set(d.diet_plan_local_id, []);
     daysByPlan.get(d.diet_plan_local_id).push({ ...d, meals: mealsByDay.get(d.local_entity_id) || [] });
   }
-  for (const p of plans) p.days = daysByPlan.get(p.local_entity_id) || [];
+  const { rows: planVersions } = await query(
+    'SELECT * FROM backup_diet_plan_versions WHERE user_id = $1 ORDER BY diet_plan_local_id, version_number', [userId]);
+  const versionsByPlan = new Map();
+  for (const v of planVersions) {
+    if (!versionsByPlan.has(v.diet_plan_local_id)) versionsByPlan.set(v.diet_plan_local_id, []);
+    versionsByPlan.get(v.diet_plan_local_id).push(v);
+  }
+  for (const p of plans) {
+    p.days = daysByPlan.get(p.local_entity_id) || [];
+    p.versions = versionsByPlan.get(p.local_entity_id) || [];
+  }
   return plans;
 }
 

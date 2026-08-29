@@ -232,11 +232,31 @@ async function runRestoreSteps(onProgress = () => {}) {
         `INSERT OR REPLACE INTO local_diet_plans
            (local_id, server_id, user_id, synced, name, notes, tags,
             daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
-            created_at, updated_at)
-         VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?)`,
+            tracking_mode, tolerance_pct, created_at, updated_at)
+         VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?,?,?)`,
         [p.local_entity_id, p.id, userId, p.name, p.notes ?? null, JSON.stringify(p.tags || []),
          p.daily_calorie_target ?? null, p.daily_protein_target ?? null,
-         p.daily_carbs_target ?? null, p.daily_fat_target ?? null, Date.now(), Date.now()]);
+         p.daily_carbs_target ?? null, p.daily_fat_target ?? null,
+         p.tracking_mode || 'simple', p.tolerance_pct ?? 10, Date.now(), Date.now()]);
+      // plan versions — the historical target snapshots (without them past
+      // diaries evaluate against CURRENT targets after a reinstall)
+      for (const v of p.versions || []) {
+        // preserve the ORIGINAL numeric row id when present — diary entries
+        // reference plan_version_id, so same-device reinstalls keep the
+        // references valid instead of dangling
+        const vid = Number(v.local_entity_id);
+        await db.runAsync(
+          `INSERT OR REPLACE INTO local_diet_plan_versions
+             (id, diet_plan_local_id, version_number, effective_from,
+              daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
+              tolerance_pct, tracking_mode, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+          [Number.isFinite(vid) && vid > 0 ? vid : null,
+           p.local_entity_id, v.version_number, String(v.effective_from).slice(0, 10),
+           v.daily_calorie_target ?? null, v.daily_protein_target ?? null,
+           v.daily_carbs_target ?? null, v.daily_fat_target ?? null,
+           v.tolerance_pct ?? 10, v.tracking_mode || 'simple', Date.now()]);
+      }
       for (const d of p.days || []) {
         await db.runAsync(
           `INSERT OR REPLACE INTO local_diet_plan_days (local_id, diet_plan_local_id, day_label, order_index)
