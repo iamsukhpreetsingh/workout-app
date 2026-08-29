@@ -21,7 +21,9 @@ export default function PlansScreen({ navigation }) {
   const styles = makeStyles(colors);
   const [tab, setTab] = useState('mine'); // 'mine' | 'trainer'
   const [pinned, setPinned] = useState(new Set());
-  const [subTab, setSubTab] = useState('workouts'); // workouts | diet | supplements
+  // diet/supplements sub-tabs retired (Diet tab owns diet now; Supps UI
+  // temporarily removed) — the list components below are kept restorable
+  const [subTab] = useState('workouts');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState(null);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -174,7 +176,7 @@ export default function PlansScreen({ navigation }) {
         <Ionicons name="search" size={16} color={colors.textDim} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search workouts, diets, supplements..."
+          placeholder="Search workouts..."
           placeholderTextColor={colors.textDim}
           value={searchQuery}
           onChangeText={setSearchQuery}
@@ -199,7 +201,7 @@ export default function PlansScreen({ navigation }) {
         ) : searchResults && searchResults.length === 0 ? (
           <View style={styles.emptyWrap}>
             <Text style={styles.emptyTitle}>No results</Text>
-            <Text style={styles.emptySub}>No workouts, diets, or supplements match "{searchQuery}"</Text>
+            <Text style={styles.emptySub}>No workouts match "{searchQuery}"</Text>
           </View>
         ) : searchResults ? (
           <FlatList
@@ -221,35 +223,12 @@ export default function PlansScreen({ navigation }) {
           <SegmentedControl styles={styles} colors={colors} tab={tab} setTab={setTab} />
         </>
       )}
-      {isClient && subTab === 'supplements' ? (
-        <SupplementPlansList styles={styles} colors={colors} navigation={navigation} fromTrainer={showTrainerTab} />
-      ) : isClient && subTab === 'diet' ? (
-        <DietPlansList styles={styles} colors={colors} navigation={navigation} fromTrainer={showTrainerTab} />
-      ) : showTrainerTab ? (
+      {/* Diet lives in the dedicated Diet tab; Supplements UI is temporarily
+          retired — underlying data/sync untouched and restorable */}
+      {showTrainerTab ? (
         <AssignedList styles={styles} colors={colors} navigation={navigation} pinned={pinned} onTogglePin={onTogglePin} />
       ) : (
         <MyRoutinesList styles={styles} colors={colors} navigation={navigation} pinned={pinned} onTogglePin={onTogglePin} />
-      )}
-      {isClient && (
-        <View style={styles.subTabDock}>
-          {[
-            { key: 'workouts', label: 'Workouts', icon: 'barbell-outline' },
-            { key: 'diet', label: 'Diet', icon: 'nutrition-outline' },
-            { key: 'supplements', label: 'Supps', icon: 'medkit-outline' },
-          ].map((t) => {
-            const on = subTab === t.key;
-            return (
-              <TouchableOpacity
-                key={t.key}
-                style={[styles.subTabBtn, on && styles.subTabBtnOn]}
-                onPress={() => setSubTab(t.key)}
-              >
-                <Ionicons name={t.icon} size={15} color={on ? '#fff' : colors.textDim} />
-                <Text style={[styles.subTabText, on && { color: '#fff' }]}>{t.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
       )}
     </View>
   );

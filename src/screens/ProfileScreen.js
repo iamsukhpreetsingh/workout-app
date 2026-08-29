@@ -1,24 +1,24 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, Modal } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, Modal, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
-import { MAIN_TABS, TAB_CLIENTS } from '../shared/constants/routes';
+import { TAB_CLIENTS, EDIT_PROFILE, INTAKE_FORM, CHANGE_PASSWORD } from '../shared/constants/routes';
 
 // Profile identity/info only — app preferences stay in Settings.
 export default function ProfileScreen({ navigation }) {
   const colors = useColors();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const styles = makeStyles(colors);
   if (!user) return null;
 
   const isTrainer = user.role === 'trainer';
-  return <ProfileBody navigation={navigation} colors={colors} styles={styles} user={user} isTrainer={isTrainer} />;
+  return <ProfileBody navigation={navigation} colors={colors} styles={styles} user={user} isTrainer={isTrainer} logout={logout} />;
 }
 
 // Split so the trainer-view hook rules don't depend on the early return
-function ProfileBody({ navigation, colors, styles, user, isTrainer }) {
+function ProfileBody({ navigation, colors, styles, user, isTrainer, logout }) {
   const [inviteCode, setInviteCode] = useState('');
   const [assoc, setAssoc] = useState(null); // { status, trainer_name }
   const [assocMsg, setAssocMsg] = useState(null); // confirmation / error
@@ -119,6 +119,26 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer }) {
         </View>
       </View>
 
+      {/* Edit Profile — opens the dedicated editing view */}
+      <TouchableOpacity style={styles.editBtn} onPress={() => navigation.navigate(EDIT_PROFILE)}>
+        <Ionicons name="create-outline" size={16} color={colors.primary} />
+        <Text style={styles.editBtnText}>Edit Profile</Text>
+      </TouchableOpacity>
+
+      {/* Health Profile — moved from Settings (same screen, same data) */}
+      {!isTrainer && (
+        <TouchableOpacity style={styles.navCard} onPress={() => navigation.navigate(INTAKE_FORM)}>
+          <Ionicons name="heart-circle-outline" size={19} color={colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.navCardTitle}>Health Profile</Text>
+            <Text style={styles.navCardSub}>
+              Goals, activity, dietary preferences and allergens — feeds your nutrition targets
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={17} color={colors.textDim} />
+        </TouchableOpacity>
+      )}
+
       <View style={styles.card}>
         <View style={styles.row}>
           <Ionicons name="fitness-outline" size={18} color={colors.textDim} />
@@ -216,10 +236,35 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer }) {
         </Modal>
       )}
 
+      {/* Account — moved from Settings (existing implementations reused) */}
+      <View style={styles.card}>
+        <TouchableOpacity
+          style={styles.row}
+          onPress={() => navigation.navigate(CHANGE_PASSWORD)}
+        >
+          <Ionicons name="lock-closed-outline" size={18} color={colors.textDim} />
+          <Text style={styles.rowLabel}>Change Password</Text>
+          <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+        </TouchableOpacity>
+        <View style={styles.divider} />
+        <TouchableOpacity
+          style={styles.row}
+          onPress={() =>
+            Alert.alert('Log Out', 'Sign out of this device?', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Log Out', style: 'destructive', onPress: () => logout() },
+            ])
+          }
+        >
+          <Ionicons name="log-out-outline" size={18} color={colors.red} />
+          <Text style={[styles.rowLabel, { color: colors.red }]}>Log Out</Text>
+        </TouchableOpacity>
+      </View>
+
       {isTrainer && (
         <TouchableOpacity
           style={styles.clientsRow}
-          onPress={() => navigation.navigate(MAIN_TABS, { screen: TAB_CLIENTS })}
+          onPress={() => navigation.navigate(TAB_CLIENTS)}
         >
           <Ionicons name="people-outline" size={20} color={colors.primary} />
           <Text style={styles.clientsText}>Manage Clients</Text>
@@ -233,6 +278,18 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer }) {
 const makeStyles = (colors) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.bg },
+    editBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+      borderWidth: 1.5, borderColor: colors.primary, borderRadius: 12,
+      paddingVertical: 12, marginBottom: 12,
+    },
+    editBtnText: { color: colors.primary, fontWeight: '800', fontSize: 14 },
+    navCard: {
+      flexDirection: 'row', alignItems: 'center', gap: 11,
+      backgroundColor: colors.card, borderRadius: 12, padding: 14, marginBottom: 12,
+    },
+    navCardTitle: { color: colors.text, fontSize: 14, fontWeight: '700' },
+    navCardSub: { color: colors.textDim, fontSize: 11, marginTop: 2, lineHeight: 15 },
     hero: { alignItems: 'center', paddingVertical: 28 },
     avatar: {
       width: 84,
