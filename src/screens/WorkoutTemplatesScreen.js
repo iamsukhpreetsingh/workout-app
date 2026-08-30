@@ -7,6 +7,7 @@ import CatalogSearch from '../components/CatalogSearch';
 import TagEditorModal from '../components/TagEditorModal';
 import { useColors } from '../theme';
 import { WORKOUT_TEMPLATE_EDITOR } from '../shared/constants/routes';
+import { useHeaderActions } from '../components/HeaderActions';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
