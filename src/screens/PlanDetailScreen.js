@@ -10,7 +10,7 @@ import { useColors } from '../theme';
 import { useHeaderActions } from '../components/HeaderActions';
 import { fmtDate } from '../shared/utils/format';
 import LoadError from '../shared/components/LoadError';
-import { ACTIVE_WORKOUT, PLAN_EDITOR } from '../shared/constants/routes';
+import { ACTIVE_WORKOUT, PLAN_EDITOR, BACKFILL_WORKOUT } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -167,9 +167,24 @@ export default function PlanDetailScreen({ route, navigation }) {
       })}
 
       {/* Primary action: solid ember CTA */}
+      {/* <TouchableOpacity style={styles.startBtn} onPress={() => startWorkout(plan)}>
+        <Ionicons name="play" size={18} color="#fff" />
+        <Text style={styles.startBtnText}>Start Workout</Text>
+      </TouchableOpacity> */}
+            {/* Primary action: solid ember CTA */}
       <TouchableOpacity style={styles.startBtn} onPress={() => startWorkout(plan)}>
         <Ionicons name="play" size={18} color="#fff" />
         <Text style={styles.startBtnText}>Start Workout</Text>
+      </TouchableOpacity>
+
+      {/* Historical logging: log what you DID on a past date using this
+          routine's structure — saved and synced under that date */}
+      <TouchableOpacity
+        style={styles.backfillBtn}
+        onPress={() => navigation.navigate(BACKFILL_WORKOUT, { planId: plan.id })}
+      >
+        <Ionicons name="calendar-outline" size={16} color={colors.primary} />
+        <Text style={styles.backfillBtnText}>Log Past Workout</Text>
       </TouchableOpacity>
 
       {/* Destructive: quiet, outlined, separated — mirrors Session Detail */}
@@ -270,6 +285,13 @@ const makeStyles = (colors) =>
       elevation: 5,
     },
     startBtnText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+
+        backfillBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+      borderWidth: 1.5, borderColor: colors.primary, borderRadius: 14,
+      padding: 14, marginTop: 10,
+    },
+    backfillBtnText: { color: colors.primary, fontWeight: '700', fontSize: 14 },
 
     deleteBtn: {
       flexDirection: 'row',

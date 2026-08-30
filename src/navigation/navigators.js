@@ -19,6 +19,7 @@ import HistoryScreen from '../screens/HistoryScreen';
 import SessionDetailScreen from '../screens/SessionDetailScreen';
 import PlansScreen from '../screens/PlansScreen';
 import PlanDetailScreen from '../screens/PlanDetailScreen';
+import BackfillWorkoutScreen from '../screens/BackfillWorkoutScreen';
 import PlanEditorScreen from '../screens/PlanEditorScreen';
 import ProgressScreen from '../screens/ProgressScreen';
 import ExerciseProgressScreen from '../screens/ExerciseProgressScreen';
@@ -95,6 +96,7 @@ import {
   TAB_RECIPES,
   ASSIGN_WORKOUT_PICKER,
   WORKOUT_TEMPLATE_EDITOR,
+  BACKFILL_WORKOUT,
   TAG_MANAGER,
 } from '../shared/constants/routes';
 
@@ -120,6 +122,7 @@ function renderDetailScreens(onSwitchView) {
     <>
       <Stack.Screen name={SESSION_DETAIL} component={SessionDetailScreen} options={{ title: 'Workout' }} />
       <Stack.Screen name={PLAN_DETAIL} component={PlanDetailScreen} options={{ title: 'Routine' }} />
+      <Stack.Screen name={BACKFILL_WORKOUT} component={BackfillWorkoutScreen} options={{ title: 'Log Past Workout' }} />
       <Stack.Screen name={PLAN_EDITOR} component={PlanEditorScreen} options={{ title: 'New Routine' }} />
       <Stack.Screen name={EXERCISE_PROGRESS} component={ExerciseProgressScreen} options={{ title: 'Exercise' }} />
       <Stack.Screen name={SETTINGS}>
