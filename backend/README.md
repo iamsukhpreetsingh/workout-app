@@ -12,14 +12,14 @@ Companion docs: [`../README.md`](../README.md) (mobile app),
 
 ## 1. Stack & Setup
 
-| Concern | Choice |
-|---|---|
-| Runtime | Node ≥ 18 (native `fetch` used for Open Food Facts) |
-| Framework | Express 4 |
-| Database | PostgreSQL via `pg` Pool (no ORM) |
-| Auth | JWT access (30 m) + refresh (30 d), `bcryptjs` hashing |
-| Email | `nodemailer` (password reset, optional) |
-| Files | Optional S3 (`@aws-sdk/client-s3`) with local-disk fallback |
+| Concern   | Choice                                                        |
+| --------- | ------------------------------------------------------------- |
+| Runtime   | Node ≥ 18 (native`fetch` used for Open Food Facts)         |
+| Framework | Express 4                                                     |
+| Database  | PostgreSQL via`pg` Pool (no ORM)                            |
+| Auth      | JWT access (30 m) + refresh (30 d),`bcryptjs` hashing       |
+| Email     | `nodemailer` (password reset, optional)                     |
+| Files     | Optional S3 (`@aws-sdk/client-s3`) with local-disk fallback |
 
 `.env`:
 
@@ -55,8 +55,7 @@ never cross the API as timezone-shifted timestamps.
 
 ## 2. Conventions
 
-- **Routes** live in `src/routes/{auth,client,trainer,backup,notifications,
-  progressPhotos,progression,exerciseCatalog,syncReport,passwordReset,tags}.js`
+- **Routes** live in `src/routes/{auth,client,trainer,backup,notifications, progressPhotos,progression,exerciseCatalog,syncReport,passwordReset,tags}.js`
   and mount under `/auth`, `/client`, `/trainer`, `/user`, `/exercises`, …
   in `server.js`. Every NEW endpoint must use `registerRoute()` (admin API
   Explorer metadata); `npm run check-routes` enforces it.
@@ -78,44 +77,43 @@ never cross the API as timezone-shifted timestamps.
 
 ## 3. API Reference
 
-Machine-readable registry: `GET /admin/api-registry`. Auth = `Authorization:
-Bearer <accessToken>` unless noted.
+Machine-readable registry: `GET /admin/api-registry`. Auth = `Authorization: Bearer <accessToken>` unless noted.
 
 ### 3.1 Auth — `/auth` (routes/auth.js, passwordReset.js)
 
-| Method & Path | Purpose |
-|---|---|
-| POST `/auth/signup` | Create account `{name, email, password, role}` → tokens + user |
-| POST `/auth/login` | Email/password → `{user, accessToken, refreshToken}` |
-| POST `/auth/refresh` | Refresh token → new token pair (rotation) |
-| POST `/auth/logout` | Invalidate refresh token |
-| PATCH `/auth/profile` | Update display name (email is the auth identity — read-only) |
-| POST `/auth/change-password` | Authenticated password change; rotates sessions |
-| POST `/auth/forgot-password` | Email a single-use reset token (rate-limited) |
-| POST `/auth/reset-password` | Consume token → set password, revoke sessions |
+| Method & Path                 | Purpose                                                          |
+| ----------------------------- | ---------------------------------------------------------------- |
+| POST`/auth/signup`          | Create account`{name, email, password, role}` → tokens + user |
+| POST`/auth/login`           | Email/password →`{user, accessToken, refreshToken}`           |
+| POST`/auth/refresh`         | Refresh token → new token pair (rotation)                       |
+| POST`/auth/logout`          | Invalidate refresh token                                         |
+| PATCH`/auth/profile`        | Update display name (email is the auth identity — read-only)    |
+| POST`/auth/change-password` | Authenticated password change; rotates sessions                  |
+| POST`/auth/forgot-password` | Email a single-use reset token (rate-limited)                    |
+| POST`/auth/reset-password`  | Consume token → set password, revoke sessions                   |
 
 ### 3.2 Client — `/client` (routes/client.js; role `user`/`trainer`)
 
-| Method & Path | Purpose |
-|---|---|
-| GET `/client/trainer` | Association state (null / pending / active + trainer info) |
-| GET `/client/trainer-code-preview?code=` | Preview an invite code before connecting |
-| POST `/client/associations/request` | Connect to a trainer by invite code (`restore_preference` for reconnections) |
-| POST `/client/trainer/unlink` | Archive the relationship (trainer keeps 30-day read access) |
-| GET/POST/PATCH/DELETE `/client/diet-plans…` | Self-authored diet plans (legacy server-first path) |
-| GET/POST/PATCH/DELETE `/client/supplement-plans…` | Supplement plans |
-| GET/POST `/client/diet-plans/:planId/checkins` | Yes/no diet check-ins |
-| GET `/client/coach-dishes` | Active trainer's meal catalog (for swaps) |
-| GET/POST/PATCH/DELETE `/client/my-dishes` | Personal dish catalog (server copy) |
-| GET/PUT `/client/intake-profile` | Nutrition & dietary profile (allergens, body, activity, goal, dietary pattern, preferences, avoided foods) |
-| GET `/client/nutrition-targets` | Active target (versioned; source = automatic/self/trainer_override) + recommendation + drift flag |
-| POST `/client/nutrition-targets/self` | Set own targets (opens a new version; mode daily/weekly_average) |
-| GET `/client/food-search?q=&barcode=` | Three-layer food search + Open Food Facts fall-through/caching |
-| GET `/client/food-log?date=` | Diary entries for one date |
-| GET `/client/food-log/recent-frequent` | Recent + most-frequent foods |
-| GET/PUT `/client/nutrition-suggestions` | Advisory meal-shape suggestions |
-| GET `/client/nutrition-weekly-digest` | Trend digest (logged-days averages, target status, suggestions) |
-| GET `/client/notifications`, PATCH `/:id/read`, `/:id/dismiss`, `/mark-all-read`, POST `/push-token` | Notification center |
+| Method & Path                                                                                                 | Purpose                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| GET`/client/trainer`                                                                                        | Association state (null / pending / active + trainer info)                                                 |
+| GET`/client/trainer-code-preview?code=`                                                                     | Preview an invite code before connecting                                                                   |
+| POST`/client/associations/request`                                                                          | Connect to a trainer by invite code (`restore_preference` for reconnections)                             |
+| POST`/client/trainer/unlink`                                                                                | Archive the relationship (trainer keeps 30-day read access)                                                |
+| GET/POST/PATCH/DELETE`/client/diet-plans…`                                                                 | Self-authored diet plans (legacy server-first path)                                                        |
+| GET/POST/PATCH/DELETE`/client/supplement-plans…`                                                           | Supplement plans                                                                                           |
+| GET/POST`/client/diet-plans/:planId/checkins`                                                               | Yes/no diet check-ins                                                                                      |
+| GET`/client/coach-dishes`                                                                                   | Active trainer's meal catalog (for swaps)                                                                  |
+| GET/POST/PATCH/DELETE`/client/my-dishes`                                                                    | Personal dish catalog (server copy)                                                                        |
+| GET/PUT`/client/intake-profile`                                                                             | Nutrition & dietary profile (allergens, body, activity, goal, dietary pattern, preferences, avoided foods) |
+| GET`/client/nutrition-targets`                                                                              | Active target (versioned; source = automatic/self/trainer_override) + recommendation + drift flag          |
+| POST`/client/nutrition-targets/self`                                                                        | Set own targets (opens a new version; mode daily/weekly_average)                                           |
+| GET`/client/food-search?q=&barcode=`                                                                        | Three-layer food search + Open Food Facts fall-through/caching                                             |
+| GET`/client/food-log?date=`                                                                                 | Diary entries for one date                                                                                 |
+| GET`/client/food-log/recent-frequent`                                                                       | Recent + most-frequent foods                                                                               |
+| GET/PUT`/client/nutrition-suggestions`                                                                      | Advisory meal-shape suggestions                                                                            |
+| GET`/client/nutrition-weekly-digest`                                                                        | Trend digest (logged-days averages, target status, suggestions)                                            |
+| GET`/client/notifications`, PATCH `/:id/read`, `/:id/dismiss`, `/mark-all-read`, POST `/push-token` | Notification center                                                                                        |
 
 ### 3.3 Offline sync — `/user/backup` (routes/backup.js)
 
@@ -123,22 +121,22 @@ All upserts are keyed `(user_id, local_entity_id)` — last-write-wins,
 idempotent under repeated syncs; deletes are idempotent. These are the ONLY
 endpoints the mobile sync engine talks to.
 
-| Method & Path | Entity |
-|---|---|
-| POST/GET/DELETE `/user/backup/sessions[/:localId]` | Full-fidelity workout sessions (+exercises+sets) |
-| POST/GET/DELETE `/user/backup/workout-plans[/:localId]` | Workout routines |
-| POST/GET/DELETE `/user/backup/custom-exercises[/:localId]` | Custom exercises |
-| POST/GET/DELETE `/user/backup/recipes[/:localId]` | Personal recipes (My Dishes) |
-| POST/GET/DELETE `/user/backup/diet-plans[/:localId]` | Self-authored diet plans (+days/meals/items/alternatives/**versions**, tracking_mode, tolerance) |
-| POST/GET `/user/backup/diet-checkins` | Yes/no diet check-ins |
-| POST/GET/DELETE `/user/backup/diet-swaps[/:itemRef/:date]` | Date-scoped plan-item swaps |
-| POST/GET/DELETE `/user/backup/food-log-entries[/:localId]` | **Log-first food diary** (user+date scoped; future dates rejected) |
-| POST/GET/DELETE `/user/backup/custom-dishes[/:localId]` | Custom dishes (+snapshot ingredients) |
-| POST/GET/DELETE `/user/backup/food-log[/:localId]` | LEGACY plan-scoped detailed diary (pre-040 data) |
-| POST/GET/DELETE `/user/backup/supplement-plans[/:localId]`, `/user/backup/supplement-checkins` | Supplement plans/check-ins |
-| POST/GET/DELETE `/user/backup/measurements`, `/user/backup/personal-records`, `/user/backup/progress-photos`, `/user/backup/custom-exercises` | Body/PR/photo backups |
-| GET `/user/backup/summary` | Per-entity counts — drives the mobile restore gate |
-| POST `/sync/report`, `/sync/restore-run/*` | Sync/restore health telemetry |
+| Method & Path                                                                                                                                        | Entity                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| POST/GET/DELETE`/user/backup/sessions[/:localId]`                                                                                                  | Full-fidelity workout sessions (+exercises+sets)                                                       |
+| POST/GET/DELETE`/user/backup/workout-plans[/:localId]`                                                                                             | Workout routines                                                                                       |
+| POST/GET/DELETE`/user/backup/custom-exercises[/:localId]`                                                                                          | Custom exercises                                                                                       |
+| POST/GET/DELETE`/user/backup/recipes[/:localId]`                                                                                                   | Personal recipes (My Dishes)                                                                           |
+| POST/GET/DELETE`/user/backup/diet-plans[/:localId]`                                                                                                | Self-authored diet plans (+days/meals/items/alternatives/**versions**, tracking_mode, tolerance) |
+| POST/GET`/user/backup/diet-checkins`                                                                                                               | Yes/no diet check-ins                                                                                  |
+| POST/GET/DELETE`/user/backup/diet-swaps[/:itemRef/:date]`                                                                                          | Date-scoped plan-item swaps                                                                            |
+| POST/GET/DELETE`/user/backup/food-log-entries[/:localId]`                                                                                          | **Log-first food diary** (user+date scoped; future dates rejected)                               |
+| POST/GET/DELETE`/user/backup/custom-dishes[/:localId]`                                                                                             | Custom dishes (+snapshot ingredients)                                                                  |
+| POST/GET/DELETE`/user/backup/food-log[/:localId]`                                                                                                  | LEGACY plan-scoped detailed diary (pre-040 data)                                                       |
+| POST/GET/DELETE`/user/backup/supplement-plans[/:localId]`, `/user/backup/supplement-checkins`                                                    | Supplement plans/check-ins                                                                             |
+| POST/GET/DELETE`/user/backup/measurements`, `/user/backup/personal-records`, `/user/backup/progress-photos`, `/user/backup/custom-exercises` | Body/PR/photo backups                                                                                  |
+| GET`/user/backup/summary`                                                                                                                          | Per-entity counts — drives the mobile restore gate                                                    |
+| POST`/sync/report`, `/sync/restore-run/*`                                                                                                        | Sync/restore health telemetry                                                                          |
 
 Side effects: syncing completed past days to `food-log-entries` triggers
 idempotent missed-target notification evaluation (see 3.5).
@@ -147,46 +145,46 @@ idempotent missed-target notification evaluation (see 3.5).
 
 Relationships:
 
-| Method & Path | Purpose |
-|---|---|
-| POST/GET `/trainer/invite-code` (+`/latest`) | Generate / fetch the single-use client invite code |
-| GET `/trainer/associations?status=`, POST `/associations/:id/accept|reject` | Manage connect requests |
-| GET `/trainer/clients` | Roster (+`trainer_notifications_enabled`, adherence, last active) |
-| POST `/trainer/clients/:clientId/unlink` | Archive relationship (30-day read window) |
-| PATCH `/trainer/clients/:clientId/notification-preference` | Generic per-client notification toggle |
+| Method & Path                                                        | Purpose                                                             |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| POST/GET`/trainer/invite-code` (+`/latest`)                      | Generate / fetch the single-use client invite code                  |
+| GET`/trainer/associations?status=`, POST `/associations/:id/accept | reject`                                                             |
+| GET`/trainer/clients`                                              | Roster (+`trainer_notifications_enabled`, adherence, last active) |
+| POST`/trainer/clients/:clientId/unlink`                            | Archive relationship (30-day read window)                           |
+| PATCH`/trainer/clients/:clientId/notification-preference`          | Generic per-client notification toggle                              |
 
 Workouts:
 
-| Method & Path | Purpose |
-|---|---|
-| GET/POST `/trainer/clients/:clientId/assigned-plans`, GET/PATCH/DELETE `…/:planId` | Assigned workout plans |
-| POST `/trainer/clients/:clientId/assigned-plans/from-template/:templateId` | Assign from a template |
-| GET `/trainer/clients/:clientId/session-summaries`, `…/sessions/:id/details` | Read-only workout summaries + per-set details |
-| GET `/trainer/clients/:clientId/volume-by-muscle-group`, `…/strength`, `…/measurements`, `…/measurement-types` | Read-only analytics |
-| POST/GET/PATCH/DELETE `/trainer/workout-templates…`, `/trainer/exercises…` | Template + exercise management |
+| Method & Path                                                                                                            | Purpose                                       |
+| ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| GET/POST`/trainer/clients/:clientId/assigned-plans`, GET/PATCH/DELETE `…/:planId`                                   | Assigned workout plans                        |
+| POST`/trainer/clients/:clientId/assigned-plans/from-template/:templateId`                                              | Assign from a template                        |
+| GET`/trainer/clients/:clientId/session-summaries`, `…/sessions/:id/details`                                         | Read-only workout summaries + per-set details |
+| GET`/trainer/clients/:clientId/volume-by-muscle-group`, `…/strength`, `…/measurements`, `…/measurement-types` | Read-only analytics                           |
+| POST/GET/PATCH/DELETE`/trainer/workout-templates…`, `/trainer/exercises…`                                          | Template + exercise management                |
 
 Diet & nutrition (all reads require an active/readable association):
 
-| Method & Path | Purpose |
-|---|---|
-| POST/GET/PATCH/DELETE `/trainer/clients/:clientId/diet-plans…` | Assign/manage diet plans (days→meals→items, allergens, alternatives) |
-| GET `…/diet-plans/:planId/checkins` | Check-in history |
-| GET `…/diet-monitoring?days=` | Exception-first monitoring (statuses, metrics, alerts) |
-| GET `/trainer/diet-monitoring/overview` | Per-client status for the whole roster |
-| GET `…/nutrition-day?date=` | One day: Target Hit/Under/Over/Not Logged, macro statuses, grouped read-only food log |
-| GET `…/nutrition-history?mode=week|month&date=` | Per-day statuses + logged-days-only averages + counts |
-| GET `…/nutrition-digest?days=` | Trend digest (plain-language, no compliance %) |
-| GET `…/activity-map?weeks=4..52` | GitHub-style map summaries (per-day diet color + workout sessions, streaks, week/month stats, attention) — two aggregate queries, never raw per-exercise history |
-| GET `…/food-diary?from=&to=` | Raw read-only diary browse |
-| GET `…/nutrition-targets` | Active target + recommendation + source/drift |
-| POST `…/nutrition-targets/override` | Trainer override (new version; recommendation retained; optional note) |
-| POST `…/nutrition-targets/use-recommendation` | Return to the automatic recommendation |
-| GET/PUT `…/nutrition-suggestions` | Advisory structure suggestions |
-| GET `…/diet-food-log?from=&to=` | Raw assigned-plan diary (legacy detailed mode) |
-| GET/POST `…/diet-notes`, GET `/client/diet-notes` (+`/:id/read`) | One-way notes with read receipts |
-| GET/PUT `…/nutrition-notifications` | Per-client missed-target notification toggle (default OFF) |
-| GET/POST/PATCH/DELETE `/trainer/meal-catalog…`, `/trainer/tags…` | Trainer dish catalog + tag taxonomy |
-| GET/PUT/DELETE `/trainer/clients/:clientId/progression-*` | Auto-progression overrides |
+| Method & Path                                                          | Purpose                                                                                                                                                           |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST/GET/PATCH/DELETE`/trainer/clients/:clientId/diet-plans…`       | Assign/manage diet plans (days→meals→items, allergens, alternatives)                                                                                            |
+| GET`…/diet-plans/:planId/checkins`                                  | Check-in history                                                                                                                                                  |
+| GET`…/diet-monitoring?days=`                                        | Exception-first monitoring (statuses, metrics, alerts)                                                                                                            |
+| GET`/trainer/diet-monitoring/overview`                               | Per-client status for the whole roster                                                                                                                            |
+| GET`…/nutrition-day?date=`                                          | One day: Target Hit/Under/Over/Not Logged, macro statuses, grouped read-only food log                                                                             |
+| GET `…/nutrition-history?mode=week                                    | month&date=`                                                                                                                                                      |
+| GET`…/nutrition-digest?days=`                                       | Trend digest (plain-language, no compliance %)                                                                                                                    |
+| GET`…/activity-map?weeks=4..52`                                     | GitHub-style map summaries (per-day diet color + workout sessions, streaks, week/month stats, attention) — two aggregate queries, never raw per-exercise history |
+| GET`…/food-diary?from=&to=`                                         | Raw read-only diary browse                                                                                                                                        |
+| GET`…/nutrition-targets`                                            | Active target + recommendation + source/drift                                                                                                                     |
+| POST`…/nutrition-targets/override`                                  | Trainer override (new version; recommendation retained; optional note)                                                                                            |
+| POST`…/nutrition-targets/use-recommendation`                        | Return to the automatic recommendation                                                                                                                            |
+| GET/PUT`…/nutrition-suggestions`                                    | Advisory structure suggestions                                                                                                                                    |
+| GET`…/diet-food-log?from=&to=`                                      | Raw assigned-plan diary (legacy detailed mode)                                                                                                                    |
+| GET/POST`…/diet-notes`, GET `/client/diet-notes` (+`/:id/read`) | One-way notes with read receipts                                                                                                                                  |
+| GET/PUT`…/nutrition-notifications`                                  | Per-client missed-target notification toggle (default OFF)                                                                                                        |
+| GET/POST/PATCH/DELETE`/trainer/meal-catalog…`, `/trainer/tags…`  | Trainer dish catalog + tag taxonomy                                                                                                                               |
+| GET/PUT/DELETE`/trainer/clients/:clientId/progression-*`             | Auto-progression overrides                                                                                                                                        |
 
 ### 3.5 Admin — `/admin` (role-gated; dashboard: `../admin-dashboard`)
 
@@ -203,17 +201,17 @@ Diet & nutrition (all reads require an active/readable association):
 
 ## 4. Database Schema (domains; see `migrations/*.sql` for exact columns)
 
-| Domain | Tables |
-|---|---|
-| Accounts | `users`, `refresh_tokens`, `password_reset_tokens`, `admin_users`, `push_tokens`, `notifications` |
-| Relationships | `trainer_clients` (status lifecycle: pending → active → archived(30-day read) → revoked; `trainer_notifications_enabled`), `trainer_invite_codes`, `client_intake_profiles` (profile + nutrition inputs + allergens; `completed_at` gates warnings) |
-| Assigned workouts | `assigned_plans`, `assigned_plan_exercises`(+alternatives), `session_summaries` (aggregate-only), `session_exercise_details`, `trainer_tags`, `trainer_workout_templates`, `exercises` (catalog) |
-| Assigned diet | `diet_plans` (+`tracking_mode`, `tolerance_pct`), `diet_plan_days/meals/meal_items`, `diet_plan_meal_item_alternatives`, `meal_catalog_items`, `diet_checkins`, `diet_item_swaps` |
-| Log-first nutrition | `food_log_entries` (user+date scoped; source: global_database/personal_recipe/trainer_recipe/custom_dish/manual), `global_foods` (seed/cached-external/admin; verified flag, barcode, cuisine_tags, usage_count), `custom_dishes` + `custom_dish_ingredients` (snapshot macros), `structure_suggestions` (advisory) |
-| Targets | `user_nutrition_targets` (versioned; `target_source` automatic/self/trainer_override, `target_mode` daily/weekly_average, `set_by`, `override_note`, `recommended_snapshot`) |
-| Monitoring | `trainer_nutrition_prefs` (per relationship, default OFF), `diet_target_notifications` (idempotency ledger: UNIQUE(trainer, client, date, direction)) |
+| Domain                | Tables                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Accounts              | `users`, `refresh_tokens`, `password_reset_tokens`, `admin_users`, `push_tokens`, `notifications`                                                                                                                                                                                                                                                                                                                       |
+| Relationships         | `trainer_clients` (status lifecycle: pending → active → archived(30-day read) → revoked; `trainer_notifications_enabled`), `trainer_invite_codes`, `client_intake_profiles` (profile + nutrition inputs + allergens; `completed_at` gates warnings)                                                                                                                                                                    |
+| Assigned workouts     | `assigned_plans`, `assigned_plan_exercises`(+alternatives), `session_summaries` (aggregate-only), `session_exercise_details`, `trainer_tags`, `trainer_workout_templates`, `exercises` (catalog)                                                                                                                                                                                                                      |
+| Assigned diet         | `diet_plans` (+`tracking_mode`, `tolerance_pct`), `diet_plan_days/meals/meal_items`, `diet_plan_meal_item_alternatives`, `meal_catalog_items`, `diet_checkins`, `diet_item_swaps`                                                                                                                                                                                                                                   |
+| Log-first nutrition   | `food_log_entries` (user+date scoped; source: global_database/personal_recipe/trainer_recipe/custom_dish/manual), `global_foods` (seed/cached-external/admin; verified flag, barcode, cuisine_tags, usage_count), `custom_dishes` + `custom_dish_ingredients` (snapshot macros), `structure_suggestions` (advisory)                                                                                                       |
+| Targets               | `user_nutrition_targets` (versioned; `target_source` automatic/self/trainer_override, `target_mode` daily/weekly_average, `set_by`, `override_note`, `recommended_snapshot`)                                                                                                                                                                                                                                            |
+| Monitoring            | `trainer_nutrition_prefs` (per relationship, default OFF), `diet_target_notifications` (idempotency ledger: UNIQUE(trainer, client, date, direction))                                                                                                                                                                                                                                                                           |
 | Backups (mobile sync) | `backup_sessions/exercises/sets`, `client_workout_plans`, `backup_custom_exercises`, `user_recipes`, `backup_diet_plans/days/meals/meal_items/**_versions`, `backup_diet_checkins`, `diet_item_swaps`, `backup_food_log_entries` (legacy), `backup_food_log_entries` → `food_log_entries` (log-first), `backup_custom_dishes` → `custom_dishes(+ingredients)` — all `UNIQUE(user_id, local_entity_id)` |
-| Misc | `measurement_entries`, `backup_personal_records`, `backup_progress_photos` (+S3/local storage), `diet_trainer_notes`, `sync_status_reports`, `restore_runs` |
+| Misc                  | `measurement_entries`, `backup_personal_records`, `backup_progress_photos` (+S3/local storage), `diet_trainer_notes`, `sync_status_reports`, `restore_runs`                                                                                                                                                                                                                                                             |
 
 Indexes exist for every hot query path (user+date on diaries, plan+date on
 swaps/versions, trainer relationship joins). Never drop or rewrite historical
