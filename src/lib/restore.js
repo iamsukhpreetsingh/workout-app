@@ -85,43 +85,8 @@ async function runRestoreSteps(onProgress = () => {}) {
     return r.lastInsertRowId;
   };
 
-  // await step('Custom exercises', async () => {
-  //   const rows = await api('/user/backup/custom-exercises');
-  //   for (const e of rows) {
-  //     const existing = await db.getFirstAsync('SELECT id FROM exercises WHERE name = ?', [e.name]);
-  //     if (existing) {
-  //       await db.runAsync(
-  //         'UPDATE exercises SET synced = 1, server_id = ?, is_custom = 1 WHERE id = ?',
-  //         [e.id, existing.id]);
-  //     } else {
-  //       await db.runAsync(
-  //         `INSERT INTO exercises (name, muscle_group, is_custom, instructions, thumbnail_path, synced, server_id)
-  //          VALUES (?,?,1,?,?,1,?)`,
-  //         [e.name, e.muscle_group || 'other', e.instructions ?? null, e.thumbnail_path ?? null, e.id]);
-  //     }
-  //   }
-  // });
 
 
-  //   await step('Custom exercises', async () => {
-  //   const rows = await api('/user/backup/custom-exercises');
-  //   for (const e of rows) {
-  //     const existing = await db.getFirstAsync('SELECT id FROM exercises WHERE name = ?', [e.name]);
-  //     if (existing) {
-  //       // claim unowned rows; never steal another account's row
-  //       await db.runAsync(
-  //         `UPDATE exercises SET synced = 1, server_id = ?, is_custom = 1,
-  //            user_id = COALESCE(user_id, ?)
-  //          WHERE id = ?`,
-  //         [e.id, userId, existing.id]);
-  //     } else {
-  //       await db.runAsync(
-  //         `INSERT INTO exercises (name, muscle_group, is_custom, instructions, thumbnail_path, synced, server_id, user_id)
-  //          VALUES (?,?,1,?,?,1,?,?)`,
-  //         [e.name, e.muscle_group || 'other', e.instructions ?? null, e.thumbnail_path ?? null, e.id, userId]);
-  //     }
-  //   }
-  // });
 
 
 
@@ -267,11 +232,31 @@ async function runRestoreSteps(onProgress = () => {}) {
         `INSERT OR REPLACE INTO local_diet_plans
            (local_id, server_id, user_id, synced, name, notes, tags,
             daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
-            created_at, updated_at)
-         VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?)`,
+            tracking_mode, tolerance_pct, created_at, updated_at)
+         VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?,?,?)`,
         [p.local_entity_id, p.id, userId, p.name, p.notes ?? null, JSON.stringify(p.tags || []),
          p.daily_calorie_target ?? null, p.daily_protein_target ?? null,
-         p.daily_carbs_target ?? null, p.daily_fat_target ?? null, Date.now(), Date.now()]);
+         p.daily_carbs_target ?? null, p.daily_fat_target ?? null,
+         p.tracking_mode || 'simple', p.tolerance_pct ?? 10, Date.now(), Date.now()]);
+      // plan versions — the historical target snapshots (without them past
+      // diaries evaluate against CURRENT targets after a reinstall)
+      for (const v of p.versions || []) {
+        // preserve the ORIGINAL numeric row id when present — diary entries
+        // reference plan_version_id, so same-device reinstalls keep the
+        // references valid instead of dangling
+        const vid = Number(v.local_entity_id);
+        await db.runAsync(
+          `INSERT OR REPLACE INTO local_diet_plan_versions
+             (id, diet_plan_local_id, version_number, effective_from,
+              daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
+              tolerance_pct, tracking_mode, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+          [Number.isFinite(vid) && vid > 0 ? vid : null,
+           p.local_entity_id, v.version_number, String(v.effective_from).slice(0, 10),
+           v.daily_calorie_target ?? null, v.daily_protein_target ?? null,
+           v.daily_carbs_target ?? null, v.daily_fat_target ?? null,
+           v.tolerance_pct ?? 10, v.tracking_mode || 'simple', Date.now()]);
+      }
       for (const d of p.days || []) {
         await db.runAsync(
           `INSERT OR REPLACE INTO local_diet_plan_days (local_id, diet_plan_local_id, day_label, order_index)
@@ -329,6 +314,96 @@ async function runRestoreSteps(onProgress = () => {}) {
            it.timing ?? null, it.notes ?? null, it.order_index ?? 0]);
       }
     }
+  // ── Diet food diaries (log-first + legacy detailed-mode logs) ──────────
+  // These were previously MISSING from the restore: uploads reached Postgres
+  // and "backup" reported success, but a fresh install restored an empty
+  // diary. Restored rows are marked synced (they ARE the server truth) and
+  // keep their local ids, so later edits upsert in place instead of
+  // duplicating (idempotent under repeated restores).
+
+  await step('Food diary', async () => {
+    const rows = await api('/user/backup/food-log-entries');
+    for (const e of rows) {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO food_log_entries
+           (local_id, user_id, server_id, synced, log_date, meal_type, name,
+            calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+            quantity, serving_unit, food_source_type, food_source_id,
+            suggested_by_trainer, logged_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [e.local_entity_id, userId, e.id, 1, String(e.log_date).slice(0, 10),
+         e.meal_type || 'other', e.name,
+         e.calories ?? null, e.protein_g ?? null, e.carbs_g ?? null, e.fat_g ?? null,
+         e.fiber_g ?? null, e.sugar_g ?? null, e.sodium_mg ?? null,
+         e.quantity ?? 1, e.serving_unit || 'serving', e.food_source_type || 'manual',
+         e.food_source_id ?? null, e.suggested_by_trainer ? 1 : 0,
+         e.logged_at ? new Date(e.logged_at).getTime() : Date.now()]);
+    }
+  });
+
+  await step('Detailed plan food logs', async () => {
+    // Legacy detailed-mode entries (pre-log-first): restore into the old
+    // plan-scoped table for the plan detail screens AND map them into the
+    // log-first diary so the Diet tab shows the same history (the same
+    // mapping the v39 local migration applied to never-cleared devices).
+    const rows = await api('/user/backup/food-log').catch(() => []);
+    for (const e of rows) {
+      const mealType = ['breakfast', 'lunch', 'dinner', 'snack'].includes(
+        String(e.meal_type || '').toLowerCase()
+      ) ? String(e.meal_type).toLowerCase() : 'other';
+      await db.runAsync(
+        `INSERT OR REPLACE INTO local_food_log_entries
+           (local_id, user_id, server_id, synced, plan_ref, plan_version_id, log_date, meal_type,
+            source, planned_item_ref, name, calories, protein_g, carbs_g, fat_g,
+            serving_size, quantity, logged_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [e.local_entity_id, userId, e.id, 1, e.plan_ref ?? null, e.plan_version_id ?? null,
+         String(e.log_date).slice(0, 10), e.meal_type || null, e.source || 'free_logged',
+         e.planned_item_ref ?? null, e.name,
+         e.calories ?? null, e.protein_g ?? null, e.carbs_g ?? null, e.fat_g ?? null,
+         e.serving_size ?? null, e.quantity ?? 1,
+         e.logged_at ? new Date(e.logged_at).getTime() : Date.now()]);
+      // map into the log-first diary (same rules as migration v39)
+      await db.runAsync(
+        `INSERT OR IGNORE INTO food_log_entries
+           (local_id, user_id, server_id, synced, log_date, meal_type, name,
+            calories, protein_g, carbs_g, fat_g, quantity, serving_unit,
+            food_source_type, food_source_id, logged_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [`legacy_${e.local_entity_id}`, userId, null, 1, String(e.log_date).slice(0, 10),
+         mealType, e.name,
+         e.calories ?? null, e.protein_g ?? null, e.carbs_g ?? null, e.fat_g ?? null,
+         e.quantity ?? 1, 'serving', 'manual', e.planned_item_ref ?? null,
+         e.logged_at ? new Date(e.logged_at).getTime() : Date.now()]);
+    }
+  });
+
+  await step('Custom dishes', async () => {
+    const rows = await api('/user/backup/custom-dishes');
+    for (const d of rows) {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO custom_dishes
+           (local_id, user_id, server_id, synced, name, total_servings, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        [d.local_entity_id, userId, d.id, 1, d.name, d.total_servings || 1, Date.now(), Date.now()]);
+      await db.runAsync(
+        'DELETE FROM custom_dish_ingredients WHERE custom_dish_local_id = ?',
+        [d.local_entity_id]);
+      for (let i = 0; i < (d.ingredients || []).length; i++) {
+        const ing = d.ingredients[i];
+        await db.runAsync(
+          `INSERT INTO custom_dish_ingredients
+             (custom_dish_local_id, global_food_id, ingredient_name, quantity, unit,
+              calories_snapshot, protein_g_snapshot, carbs_g_snapshot, fat_g_snapshot, order_index)
+           VALUES (?,?,?,?,?,?,?,?,?,?)`,
+          [d.local_entity_id, ing.global_food_id ?? null, ing.ingredient_name,
+           ing.quantity ?? 0, ing.unit || 'g',
+           ing.calories_snapshot ?? 0, ing.protein_g_snapshot ?? 0,
+           ing.carbs_g_snapshot ?? 0, ing.fat_g_snapshot ?? 0, i]);
+      }
+    }
+  });
+
     const [dietCis, suppCis, dietSwaps] = await Promise.all([
       api('/user/backup/diet-checkins'),
       api('/user/backup/supplement-checkins'),
@@ -422,31 +497,6 @@ async function runRestoreSteps(onProgress = () => {}) {
     }
   });
 
-  // await step('Progress photos', async (onDetail) => {
-  //   const rows = await api('/user/backup/progress-photos');
-  //   if (!rows.length) return;
-  //   const dirInfo = await FileSystem.getInfoAsync(PHOTOS_DIR);
-  //   if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(PHOTOS_DIR, { intermediates: true });
-  //   for (let i = 0; i < rows.length; i++) {
-  //     const ph = rows[i];
-  //     onDetail(`Downloading photos… ${i + 1} of ${rows.length}`);
-  //     const filename = `${ph.date}_${ph.local_entity_id}.jpg`;
-  //     const dest = `${PHOTOS_DIR}${filename}`;
-  //     const info = await FileSystem.getInfoAsync(dest);
-  //     if (!info.exists) {
-  //       if (!ph.url) continue;
-  //       try { await FileSystem.downloadAsync(ph.url, dest); } catch { continue; }
-  //     }
-  //     const after = await FileSystem.getInfoAsync(dest);
-  //     if (!after.exists) continue; // broken URL — skip rather than fail the restore
-  //     const pid = parseInt(ph.local_entity_id, 10);
-  //     await db.runAsync(
-  //       `INSERT OR REPLACE INTO progress_photos (id, date, file_path, angle, created_at, synced, server_id)
-  //        VALUES (?,?,?,?,?,?,?)`,
-  //       [isNaN(pid) ? null : pid, ph.date, filename, ph.angle ?? null,
-  //        new Date().toISOString(), 1, ph.id]);
-  //   }
-  // });
 
     await step('Progress photos', async (onDetail) => {
     // FIRST-CLASS endpoint (visibility-aware), not the old backup route.

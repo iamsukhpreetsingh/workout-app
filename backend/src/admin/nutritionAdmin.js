@@ -347,4 +347,96 @@ registerRoute(router, {
   } catch (e) { err(res, e); }
 }, requireAdminRole(...READ_ROLES));
 
+// ── Global Foods module (log-first nutrition, migration 040) ────────────
+// Staff can browse/search the shared food database, add entries, edit
+// macros, and promote frequently-searched unverified (external) entries to
+// verified after checking accuracy. This is how curated coverage expands
+// over time — including regional/cuisine-specific ingredients.
+registerRoute(router, {
+  method: 'GET',
+  path: '/nutrition/global-foods',
+  description: 'Browse/search the shared global food database (q filter, verified filter).',
+}, async (req, res) => {
+  try {
+    const params = [];
+    const where = [];
+    if (req.query.q) {
+      params.push(`%${req.query.q}%`);
+      where.push(`name ILIKE $${params.length}`);
+    }
+    if (req.query.verified === 'true' || req.query.verified === 'false') {
+      params.push(req.query.verified === 'true');
+      where.push(`verified = $${params.length}`);
+    }
+    const { rows } = await query(
+      `SELECT * FROM global_foods ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+       ORDER BY verified DESC, usage_count DESC, name LIMIT 300`,
+      params
+    );
+    res.json(rows);
+  } catch (e) { err(res, e); }
+}, requireAdminRole(...READ_ROLES));
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/nutrition/global-foods',
+  description: 'Adds or edits a global food entry (id present → edit; else create as admin_added, verified).',
+}, async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.name) return res.status(400).json({ error: 'name is required' });
+    if (b.id) {
+      const { rows } = await query(
+        `UPDATE global_foods SET name=$2, brand=$3, calories=$4, protein_g=$5, carbs_g=$6,
+           fat_g=$7, fiber_g=$8, sugar_g=$9, sodium_mg=$10,
+           default_serving_size=$11, default_serving_unit=$12,
+           cuisine_tags=$13, verified=COALESCE($14, verified), updated_at=now()
+         WHERE id=$1::uuid RETURNING *`,
+        [b.id, b.name, b.brand || null, b.calories ?? null, b.protein_g ?? null, b.carbs_g ?? null,
+         b.fat_g ?? null, b.fiber_g ?? null, b.sugar_g ?? null, b.sodium_mg ?? null,
+         b.default_serving_size ?? 100, b.default_serving_unit || 'g',
+         b.cuisine_tags || [], b.verified ?? null]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'Food not found' });
+      return res.json(rows[0]);
+    }
+    const { rows } = await query(
+      `INSERT INTO global_foods
+         (name, brand, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+          default_serving_size, default_serving_unit, source, verified, cuisine_tags)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'admin_added',true,$12) RETURNING *`,
+      [b.name, b.brand || null, b.calories ?? null, b.protein_g ?? null, b.carbs_g ?? null,
+       b.fat_g ?? null, b.fiber_g ?? null, b.sugar_g ?? null, b.sodium_mg ?? null,
+       b.default_serving_size ?? 100, b.default_serving_unit || 'g', b.cuisine_tags || []]
+    );
+    res.status(201).json(rows[0]);
+  } catch (e) { err(res, e, 400); }
+}, requireAdminRole('super_admin', 'content_moderator'));
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/nutrition/global-foods/:id/verify',
+  description: 'Promotes an entry (typically a cached Open Food Facts result) to verified after review.',
+}, async (req, res) => {
+  try {
+    const { rows } = await query(
+      'UPDATE global_foods SET verified = true, source = CASE WHEN source = $2 THEN $3 ELSE source END, updated_at = now() WHERE id = $1::uuid RETURNING *',
+      [req.params.id, 'open_food_facts', 'admin_added']
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Food not found' });
+    res.json(rows[0]);
+  } catch (e) { err(res, e, 400); }
+}, requireAdminRole('super_admin', 'content_moderator'));
+
+registerRoute(router, {
+  method: 'DELETE',
+  path: '/nutrition/global-foods/:id',
+  description: 'Removes an incorrect entry from the shared food database.',
+}, async (req, res) => {
+  try {
+    await query('DELETE FROM global_foods WHERE id = $1::uuid', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { err(res, e); }
+}, requireAdminRole('super_admin'));
+
 module.exports = { router };

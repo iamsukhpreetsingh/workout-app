@@ -52,53 +52,6 @@ export async function getCachedProgressionSetting() {
   };
 }
 
-// // Build the history contract: working sets (warm-ups excluded) from the
-// // last 3 sessions containing this exercise, most recent session first,
-// // stamped with sessionIndex / targetReps / trainingMax. Blank placeholder
-// // rows are skipped; a REAL missed set (numbers but not completed) is kept —
-// // it should block progression.
-// export async function getRecentHistoryForExercise(exerciseId, maxSessions = 3) {
-//   const db = await getDb();
-//   const userId = getCurrentUserId();
-//   if (!userId) return [];
-//   const ex = await db.getFirstAsync('SELECT training_max FROM exercises WHERE id = ?', [exerciseId]);
-//   const trainingMax = ex?.training_max ?? null;
-//   const rows = await db.getAllAsync(
-//     `SELECT s.weight, s.reps, s.rpe, s.completed, s.position,
-//             sess.id AS session_id, sess.start_time
-//      FROM sets s
-//      JOIN session_exercises se ON s.session_exercise_id = se.id
-//      JOIN workout_sessions sess ON se.session_id = sess.id
-//      WHERE se.exercise_id = ? AND sess.user_id = ? AND s.set_type != 'warmup'
-//      ORDER BY sess.start_time DESC, se.position ASC, s.position ASC
-//      LIMIT 100`,
-//     [exerciseId, userId]
-//   );
-//   const bySession = new Map();
-//   for (const r of rows) {
-//     const real = r.completed !== 0 || (Number(r.weight) > 0 || Number(r.reps) > 0);
-//     if (!real) continue;
-//     if (!bySession.has(r.session_id)) bySession.set(r.session_id, []);
-//     bySession.get(r.session_id).push(r);
-//   }
-//   const history = [];
-//   [...bySession.entries()].slice(0, maxSessions).forEach(([sid, sets], sessionIndex) => {
-//     const targetReps = sets[0]?.reps ?? 0; // session's opening working set = the reps target
-//     for (const st of sets) {
-//       history.push({
-//         weight: Number(st.weight) || 0,
-//         reps: Number(st.reps) || 0,
-//         targetReps,
-//         completed: st.completed !== 0,
-//         rpe: st.rpe ?? null,
-//         sessionIndex,
-//         trainingMax,
-//         performedAt: st.start_time,
-//       });
-//     }
-//   });
-//   return history;
-// }
 
 
 

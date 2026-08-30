@@ -12,12 +12,11 @@ import { getSyncSettings } from '../lib/sync';
 import { getCachedProgressionSetting, fetchAndCacheProgressionSetting } from '../lib/progression';
 import { getFormula } from '../progressionFormulas';
 import ProgressionStrategyEditor from '../components/ProgressionStrategyEditor';
-import ChangePasswordCard from '../components/ChangePasswordCard';
-import { INTAKE_FORM, SYNC_SETTINGS } from '../shared/constants/routes';
+import { SYNC_SETTINGS } from '../shared/constants/routes';
 
 export default function SettingsScreen({ onSwitchView }) {
   const { themeMode, setThemeMode } = useApp();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const navigation = useNavigation();
   const [trainer, setTrainer] = useState(null); // active association state
 
@@ -258,6 +257,21 @@ export default function SettingsScreen({ onSwitchView }) {
       </View>
 
       <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <View style={styles.rowBetween}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Meal suggestions</Text>
+          <Switch
+            value={settings.show_meal_suggestions !== 0}
+            onValueChange={(v) => save({ show_meal_suggestions: v ? 1 : 0 })}
+            trackColor={{ true: colors.primary, false: colors.cardLight }}
+          />
+        </View>
+        <Text style={[styles.hint, { color: colors.textDim }]}>
+          Show advisory meal-shape suggestions on the Diet tab. Turning this off keeps your
+          targets and logging fully active.
+        </Text>
+      </View>
+
+      <View style={[styles.card, { backgroundColor: colors.card }]}>
         <Text style={[styles.cardTitle, { color: colors.text }]}>Plate Calculator</Text>
         <Text style={[styles.label, { color: colors.textDim }]}>Bar weight ({settings.weight_unit || 'kg'})</Text>
         <TextInput
@@ -356,20 +370,6 @@ export default function SettingsScreen({ onSwitchView }) {
         </View>
       )}
 
-        <TouchableOpacity 
-          style={[styles.card, { backgroundColor: colors.card, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
-          onPress={() => navigation.navigate(INTAKE_FORM)}
-        >
-          <View style={{ flex: 1, paddingRight: 8 }}>
-            <Text style={[styles.cardTitle, { color: colors.text }]}>Health Profile</Text>
-            <Text style={[styles.hint, { color: colors.textDim }]}>
-              Allergies, goals, injuries — shared with your trainer for safer plans
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
-        </TouchableOpacity>
-
-
       {trainer ? (
         <View style={[styles.card, { backgroundColor: colors.card }]}>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Trainer</Text>
@@ -385,40 +385,11 @@ export default function SettingsScreen({ onSwitchView }) {
         </View>
       ) : null}
 
-      {onSwitchView ? (
-        <View style={[styles.card, { backgroundColor: colors.card }]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>Trainer Account</Text>
-          <Text style={[styles.hint, { color: colors.textDim }]}>
-            You are in User View — logging your own workouts.
-          </Text>
-          <TouchableOpacity
-            style={[styles.saveBtn, { backgroundColor: colors.blue, marginTop: 14 }]}
-            onPress={() => onSwitchView('trainer')}
-          >
-            <Text style={styles.saveBtnText}>Switch to Trainer View</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
-
-      <ChangePasswordCard />
-
-      <View style={[styles.card, { backgroundColor: colors.card }]}>
-        <Text style={[styles.cardTitle, { color: colors.text }]}>Account</Text>
-        <Text style={[styles.hint, { color: colors.textDim }]}>
-          Profile info lives in Home → profile icon. Logout is an account action, so it stays here.
+      {pendingSync > 0 && (
+        <Text style={[styles.hint, { color: colors.textDim, textAlign: 'center', marginTop: 10 }]}>
+          {pendingSync} session{pendingSync === 1 ? '' : 's'} pending sync — will upload when you're back online.
         </Text>
-        {pendingSync > 0 && (
-          <Text style={[styles.hint, { color: colors.textDim }]}>
-            {pendingSync} session{pendingSync === 1 ? '' : 's'} pending sync — will upload when you're back online.
-          </Text>
-        )}
-        <TouchableOpacity
-          style={[styles.saveBtn, { backgroundColor: colors.red, marginTop: 14 }]}
-          onPress={() => logout()}
-        >
-          <Text style={styles.saveBtnText}>Log Out</Text>
-        </TouchableOpacity>
-      </View>
+      )}
     </ScrollView>
   );
 }

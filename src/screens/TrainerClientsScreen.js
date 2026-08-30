@@ -13,7 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../lib/api';
 import { useColors } from '../theme';
-import { NotificationBell } from '../components/NotificationBell';
+import { useHeaderActions } from '../components/HeaderActions';
 import { CLIENT_DETAIL, NOTIFICATION_CENTER } from '../shared/constants/routes';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
@@ -52,19 +52,26 @@ export default function TrainerClientsScreen({ navigation }) {
   const [clients, setClients] = useState([]);
   const [archived, setArchived] = useState([]);
   const [pending, setPending] = useState([]);
+  const [dietStatus, setDietStatus] = useState({}); // client_id -> overview row
   const [error, setError] = useState(null);
   const [invite, setInvite] = useState(null); // { code, expires_at }
 
   const load = useCallback(async () => {
     try {
       setError(null);
-      const [roster, pendingReqs] = await Promise.all([
+      const [roster, pendingReqs, dietOverview] = await Promise.all([
         api('/trainer/clients'),
         api('/trainer/associations?status=pending'),
+        // exception-first diet status per client (best-effort: the list must
+        // render even if the monitoring endpoint is unavailable)
+        api('/trainer/diet-monitoring/overview').catch(() => []),
       ]);
       setClients(roster.filter((c) => c.status === 'active'));
       setArchived(roster.filter((c) => c.status === 'archived'));
       setPending(pendingReqs);
+      const byId = {};
+      for (const o of dietOverview || []) byId[o.client_id] = o;
+      setDietStatus(byId);
     } catch (e) {
       setError(e.message || 'Could not load clients');
     }
@@ -80,15 +87,7 @@ export default function TrainerClientsScreen({ navigation }) {
   // the code always visible) — the old header icon generated codes whose
   // display only rendered in the zero-clients empty state.
 
-  React.useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <NotificationBell onPress={() => navigation.navigate(NOTIFICATION_CENTER)} />
-        </View>
-      ),
-    });
-  }, [navigation, colors]);
+  useHeaderActions(navigation);
 
   const refresh = async () => {
     setRefreshing(true);
@@ -309,6 +308,36 @@ export default function TrainerClientsScreen({ navigation }) {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.name}>{item.name}</Text>
+              {(() => {
+                // exception-first diet line: who needs attention at a glance
+                const d = dietStatus[item.id];
+                if (!d) return null;
+                const map = {
+                  on_track: { icon: 'checkmark-circle', color: colors.green, label: 'On track' },
+                  needs_attention: { icon: 'warning', color: colors.red, label: 'Needs attention' },
+                  not_enough_data: { icon: 'remove', color: colors.textDim, label: 'Not enough data' },
+                };
+                const s = map[d.status] || map.not_enough_data;
+                const detail =
+                  d.top_alert ||
+                  [
+                    d.target_calories
+                      ? `${Number(d.target_calories).toLocaleString()} kcal ${d.target_source === 'trainer_override' ? '(trainer target)' : '(auto)'}`
+                      : null,
+                    d.days_tracked > 0
+                      ? `${d.days_tracked}/7 logged${d.days_on_target ? ` · ${d.days_on_target} on target` : ''}`
+                      : 'No food logged',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ');
+                return (
+                  <View style={styles.dietStatusRow}>
+                    <Ionicons name={s.icon} size={12} color={s.color} />
+                    <Text style={[styles.dietStatusText, { color: s.color }]}>{s.label}</Text>
+                    <Text style={[styles.dietStatusDetail, NUMS]} numberOfLines={1}>· {detail}</Text>
+                  </View>
+                );
+              })()}
               <Text style={[styles.meta, NUMS]}>
                 {item.adherence_pct != null ? `${Math.round(item.adherence_pct)}% adherence` : '—'}
                 {' · '}
@@ -386,6 +415,9 @@ const makeStyles = (colors) =>
     avatarText: { color: '#fff', fontWeight: '800' },
     name: { color: colors.text, fontSize: 15, fontWeight: '700' },
     meta: { color: colors.textDim, fontSize: 12, marginTop: 3 },
+    dietStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+    dietStatusText: { fontSize: 12, fontWeight: '700' },
+    dietStatusDetail: { color: colors.textDim, fontSize: 11, flex: 1 },
 
     // Pending — muted, outlined, visually distinct from data-backed cards
     pendingCard: {

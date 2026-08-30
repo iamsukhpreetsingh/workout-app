@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import { api, registerTokenHooks, tryRefresh } from '../lib/api';
+// import { api, registerTokenHooks, tryRefresh } from '../lib/api';
 import { clearViewChoice } from '../lib/viewMode';
 import { setCurrentUserId } from '../db/queries';
 import { pullFromCloud } from '../lib/sync';
@@ -9,6 +9,7 @@ import { getSyncSettings } from '../lib/sync';
 import { hasUnsyncedBackupData } from '../lib/localOnly';
 import { Alert } from 'react-native';
 import { setImageTokenGetter } from '../lib/progressPhotos';
+import { api, ApiError, registerTokenHooks, tryRefresh } from '../lib/api';
 
 // Hard auth gate for the whole app. authStatus:
 //   'checking'        → splash while restoring the session
@@ -61,8 +62,7 @@ export function AuthProvider({ children }) {
     
     // Pull data from cloud after successful login
     try {
-      const result = await pullFromCloud();
-      console.log('[AUTH] Pulled from cloud:', result);
+      await pullFromCloud();
     } catch (e) {
       console.log('[AUTH] Pull from cloud failed (non-fatal):', e.message);
     }
@@ -75,8 +75,66 @@ export function AuthProvider({ children }) {
       console.log('[AUTH] exercise catalog sync failed:', e?.message));
   }, []);
 
+  // // Launch sequence: splash → check stored tokens → silent refresh if
+  // // possible → main app, else login screen.
+  // useEffect(() => {
+  //   (async () => {
+  //     const storedUser = await readJson(KEY_USER);
+  //     const access = await readJson(KEY_ACCESS);
+  //     const refresh = await readJson(KEY_REFRESH);
+  //     if (storedUser?.id) {
+  //       setCurrentUserId(storedUser.id);
+  //     }
+  //     if (!refresh) {
+  //       setAuthStatus('unauthenticated');
+  //       return;
+  //     }
+  //     if (access) {
+  //       // optimistic: verify against /me, refresh on 401 handled by api()
+  //       try {
+  //         await writeJson(KEY_ACCESS, access);
+  //         const me = await api('/me');
+  //         setUser(me);
+  //         setCurrentUserId(me.id);
+  //         setAuthStatus('authenticated');
+  //         // Pull data from cloud after session restore
+  //         pullFromCloud().catch(e => console.log('[AUTH] Pull failed:', e.message));
+  //         refreshExerciseCatalog();
+  //         return;
+  //       } catch {
+  //         // fall through to refresh attempt
+  //       }
+  //     }
+  //     const ok = await tryRefresh();
+  //     if (ok) {
+  //       try {
+  //         const me = await api('/me');
+  //         setUser(me);
+  //         setCurrentUserId(me.id);
+  //         setAuthStatus('authenticated');
+  //         // Pull data from cloud after session restore
+  //         pullFromCloud().catch(e => console.log('[AUTH] Pull failed:', e.message));
+  //         refreshExerciseCatalog();
+  //         return;
+  //       } catch {
+  //         // fall through
+  //       }
+  //     }
+  //     await clearTokens();
+  //     setAuthStatus('unauthenticated');
+  //   })();
+  // }, []);
+
+
   // Launch sequence: splash → check stored tokens → silent refresh if
   // possible → main app, else login screen.
+  //
+  // OFFLINE-FIRST CONTRACT (mirrors api.js): being unreachable is NOT being
+  // logged out. Only a definitive server rejection (tryRefresh === false)
+  // clears tokens. When the server can't be reached (null), the stored
+  // user + refresh token stand: the app opens to the offline experience,
+  // local writes queue, and the session revalidates on the next successful
+  // network call (api()'s 401→refresh path).
   useEffect(() => {
     (async () => {
       const storedUser = await readJson(KEY_USER);
@@ -89,58 +147,65 @@ export function AuthProvider({ children }) {
         setAuthStatus('unauthenticated');
         return;
       }
+
+      const enterApp = (me) => {
+        setUser(me || storedUser);
+        if (me?.id) setCurrentUserId(me.id);
+        setAuthStatus('authenticated');
+        pullFromCloud().catch((e) => console.log('[AUTH] Pull failed:', e.message));
+        refreshExerciseCatalog();
+      };
+
       if (access) {
-        // optimistic: verify against /me, refresh on 401 handled by api()
         try {
-          await writeJson(KEY_ACCESS, access);
           const me = await api('/me');
-          setUser(me);
-          setCurrentUserId(me.id);
-          setAuthStatus('authenticated');
-          // Pull data from cloud after session restore
-          pullFromCloud().catch(e => console.log('[AUTH] Pull failed:', e.message));
-          refreshExerciseCatalog();
+          enterApp(me);
           return;
-        } catch {
-          // fall through to refresh attempt
+        } catch (e) {
+          // 401 handled inside api() (already refreshed+retried, so landing
+          // here means refresh failed too); network error falls through to
+          // the refresh attempt below.
+          if (e instanceof ApiError && e.status === 401) {
+            // api() already invoked onAuthFailed() → tokens cleared
+            setAuthStatus('unauthenticated');
+            return;
+          }
+          // offline/5xx → fall through, try refresh
         }
       }
+
       const ok = await tryRefresh();
-      if (ok) {
+      if (ok === true) {
         try {
           const me = await api('/me');
-          setUser(me);
-          setCurrentUserId(me.id);
-          setAuthStatus('authenticated');
-          // Pull data from cloud after session restore
-          pullFromCloud().catch(e => console.log('[AUTH] Pull failed:', e.message));
-          refreshExerciseCatalog();
+          enterApp(me);
           return;
-        } catch {
-          // fall through
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 401) {
+            setAuthStatus('unauthenticated');
+            return;
+          }
+          // refreshed tokens are stored; /me unreachable → enter offline
+          enterApp(storedUser);
+          return;
         }
       }
-      await clearTokens();
-      setAuthStatus('unauthenticated');
+      if (ok === false) {
+        // definitive server rejection — genuine logout
+        await clearTokens();
+        setAuthStatus('unauthenticated');
+        return;
+      }
+      // ok === null: server unreachable AND access token missing/expired.
+      // The refresh token is still valid as far as anyone knows — enter the
+      // app in offline mode; the session revalidates on the next 401→refresh
+      // cycle once connectivity returns.
+      enterApp(storedUser);
     })();
   }, []);
 
   // Wire the api wrapper to our tokens
   // useEffect(() => {
-  //   registerTokenHooks({
-  //     getAccessToken: async () => (await readJson(KEY_ACCESS)) || null,
-  //     getRefreshToken: async () => (await readJson(KEY_REFRESH)) || null,
-  //     onRefreshed: async (access, refresh) => {
-  //       await writeJson(KEY_ACCESS, access);
-  //       await writeJson(KEY_REFRESH, refresh);
-  //     },
-  //     onAuthFailed: () => {
-  //       clearTokens();
-  //       setUser(null);
-  //       setAuthStatus('unauthenticated');
-  //     },
-  //   });
-  // }, []);
 
   useEffect(() => {
 
@@ -242,7 +307,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, authStatus, login, signup, logout, rotateSession }}>
+    <AuthContext.Provider value={{ user, authStatus, login, signup, logout, rotateSession, updateUser: setUser }}>
       {children}
     </AuthContext.Provider>
   );

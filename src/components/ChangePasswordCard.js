@@ -8,10 +8,10 @@ import { api } from '../lib/api';
 import { useAuth } from '../store/AuthContext';
 import { useColors } from '../theme';
 
-export default function ChangePasswordCard() {
+export default function ChangePasswordCard({ defaultOpen = false, collapsible = true }) {
   const colors = useColors();
   const { rotateSession } = useAuth();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -52,11 +52,13 @@ export default function ChangePasswordCard() {
 
   return (
     <View style={styles.card}>
-      <TouchableOpacity style={styles.header} onPress={() => { setOpen(!open); setError(null); }}>
+      <View style={collapsible ? styles.header : [styles.header, { marginBottom: open ? 8 : 0 }]}>
         <Ionicons name="lock-closed-outline" size={18} color={colors.text} />
         <Text style={[styles.cardTitle, { color: colors.text, flex: 1 }]}>Change Password</Text>
-        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textDim} />
-      </TouchableOpacity>
+        {collapsible && (
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textDim} />
+        )}
+      </View>
 
       {open && (
         <View style={{ marginTop: 10 }}>

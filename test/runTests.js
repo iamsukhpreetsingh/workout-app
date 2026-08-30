@@ -310,4 +310,413 @@ test('check-in: supplement rows (taken) and SQLite ints both map correctly', () 
   assert.ok(!('2026-08-22' in partial));
 });
 
+// ---- Diet nutrition core (outcome-first tracking) ----
+import {
+  evaluateAgainstTarget,
+  computePlanFollowThrough,
+  computeDailySummary,
+  computeWeeklySummary,
+  evaluateClientMonitoring,
+  detectRepeatedMacroMisses,
+  buildRecentFoods,
+  suggestFoodsToFit,
+  STATUS,
+} from '../src/features/diet/domain/nutritionCore.js';
+
+// Test 6 (spec): tolerance boundary, target 2400 ± 10% → 2160 / 2640.
+test('nutrition: tolerance boundaries are exact and inclusive', () => {
+  assert.strictEqual(evaluateAgainstTarget(2160, 2400, 10), STATUS.ON_TARGET);
+  assert.strictEqual(evaluateAgainstTarget(2159, 2400, 10), STATUS.UNDER_TARGET);
+  assert.strictEqual(evaluateAgainstTarget(2640, 2400, 10), STATUS.ON_TARGET);
+  assert.strictEqual(evaluateAgainstTarget(2641, 2400, 10), STATUS.OVER_TARGET);
+  assert.strictEqual(evaluateAgainstTarget(2400, 2400, 10), STATUS.ON_TARGET);
+});
+
+test('nutrition: tolerance is configurable per plan', () => {
+  // strict 5%: 2400 → 2280/2520
+  assert.strictEqual(evaluateAgainstTarget(2279, 2400, 5), STATUS.UNDER_TARGET);
+  assert.strictEqual(evaluateAgainstTarget(2280, 2400, 5), STATUS.ON_TARGET);
+  assert.strictEqual(evaluateAgainstTarget(2520, 2400, 5), STATUS.ON_TARGET);
+  assert.strictEqual(evaluateAgainstTarget(2521, 2400, 5), STATUS.OVER_TARGET);
+});
+
+// Test 1 (spec): only free-logged foods, calories within tolerance.
+test('nutrition: free-logged foods that hit the target = on_target, follow-through 0/N', () => {
+  const entries = [
+    { name: 'Burger', calories: 1400, protein_g: 60, carbs_g: 100, fat_g: 70, source: 'free_logged' },
+    { name: 'Fries', calories: 900, protein_g: 10, carbs_g: 110, fat_g: 40, source: 'free_logged' },
+  ];
+  const plannedItems = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
+  const s = computeDailySummary({
+    date: '2026-08-29',
+    entries,
+    targets: { calories: 2400, protein_g: 200, carbs_g: 250, fat_g: 70 },
+    tolerancePct: 10,
+    planFollowThrough: computePlanFollowThrough(plannedItems, entries),
+  });
+  assert.strictEqual(s.targetStatus, STATUS.ON_TARGET);
+  assert.strictEqual(s.planFollowThrough.completed, 0);
+  assert.strictEqual(s.planFollowThrough.total, 4);
+  // the model communicates this positively, never as failure
+  assert.strictEqual(s.contextualInsight, 'You reached your targets with different foods today.');
+});
+
+// Test 2 (spec): all meals followed, calories within tolerance.
+test('nutrition: fully followed plan within tolerance = on_target, N/N followed', () => {
+  const entries = [
+    { name: 'Oatmeal', calories: 1200, source: 'planned', planned_item_ref: 'a' },
+    { name: 'Chicken Bowl', calories: 1200, source: 'planned', planned_item_ref: 'b' },
+  ];
+  const plannedItems = [{ id: 'a', name: 'Oatmeal' }, { id: 'b', name: 'Chicken Bowl' }];
+  const s = computeDailySummary({
+    date: '2026-08-29',
+    entries,
+    targets: { calories: 2400 },
+    tolerancePct: 10,
+    planFollowThrough: computePlanFollowThrough(plannedItems, entries),
+  });
+  assert.strictEqual(s.targetStatus, STATUS.ON_TARGET);
+  assert.strictEqual(s.planFollowThrough.completed, 2);
+  assert.strictEqual(s.planFollowThrough.total, 2);
+  assert.strictEqual(s.contextualInsight, null); // no motivational spam
+});
+
+// Test 3 (spec): all meals followed, calories below tolerance.
+test('nutrition: fully followed plan below tolerance = under_target', () => {
+  const entries = [{ name: 'Oatmeal', calories: 2000, source: 'planned', planned_item_ref: 'a' }];
+  const plannedItems = [{ id: 'a', name: 'Oatmeal' }];
+  const s = computeDailySummary({
+    date: '2026-08-29',
+    entries,
+    targets: { calories: 2400 },
+    tolerancePct: 10,
+    planFollowThrough: computePlanFollowThrough(plannedItems, entries),
+  });
+  assert.strictEqual(s.targetStatus, STATUS.UNDER_TARGET);
+  assert.strictEqual(s.planFollowThrough.completed, 1);
+  assert.strictEqual(s.contextualInsight, 'You followed the planned meals, but the day’s nutrition target was missed.');
+});
+
+// Test 4 (spec): no entries → not_logged, NEVER under_target.
+test('nutrition: no entries = not_logged, never under_target or 0%', () => {
+  const s = computeDailySummary({
+    date: '2026-08-29',
+    entries: [],
+    targets: { calories: 2400 },
+    tolerancePct: 10,
+  });
+  assert.strictEqual(s.targetStatus, STATUS.NOT_LOGGED);
+  assert.strictEqual(s.isLogged, false);
+  assert.strictEqual(s.calories.actual, 0);
+});
+
+// Test 5 (spec): calories on target, protein below — headline stays on_target.
+test('nutrition: protein miss never flips an on-target day to under', () => {
+  const entries = [
+    { name: 'Pasta', calories: 2300, protein_g: 100, carbs_g: 240, fat_g: 65, source: 'free_logged' },
+  ];
+  const s = computeDailySummary({
+    date: '2026-08-29',
+    entries,
+    targets: { calories: 2400, protein_g: 200, carbs_g: 250, fat_g: 70 },
+    tolerancePct: 10,
+  });
+  assert.strictEqual(s.targetStatus, STATUS.ON_TARGET);
+  assert.strictEqual(s.macros.protein.status, STATUS.UNDER_TARGET);
+  assert.strictEqual(s.macros.carbs.status, STATUS.ON_TARGET);
+});
+
+test('nutrition: today shows progress, not a final under-target verdict', () => {
+  const s = computeDailySummary({
+    date: '2026-08-29',
+    entries: [{ name: 'Eggs', calories: 600, source: 'free_logged' }],
+    targets: { calories: 2400 },
+    tolerancePct: 10,
+    isToday: true,
+  });
+  assert.strictEqual(s.targetStatus, STATUS.IN_PROGRESS);
+  assert.strictEqual(s.calories.remaining, 1800);
+  // the same data on a COMPLETED day is a genuine under-target
+  const done = computeDailySummary({
+    date: '2026-08-29',
+    entries: [{ name: 'Eggs', calories: 600, source: 'free_logged' }],
+    targets: { calories: 2400 },
+    tolerancePct: 10,
+    isToday: false,
+  });
+  assert.strictEqual(done.targetStatus, STATUS.UNDER_TARGET);
+});
+
+test('nutrition: plan follow-through counts name matches, never extras', () => {
+  const plannedItems = [{ id: 'a', name: 'Oatmeal' }, { id: 'b', name: 'Chicken Bowl' }];
+  const entries = [
+    { name: 'oatmeal ', calories: 300, source: 'free_logged' }, // name match counts
+    { name: 'Ice cream', calories: 400, source: 'extra' }, // extras never reduce
+  ];
+  const ft = computePlanFollowThrough(plannedItems, entries);
+  assert.strictEqual(ft.completed, 1);
+  assert.strictEqual(ft.total, 2);
+  // total === 0 → null (UI omits the section, never renders "0 / 0")
+  assert.strictEqual(computePlanFollowThrough([], entries), null);
+});
+
+test('nutrition: weekly summary counts and insight', () => {
+  const mk = (date, status, isLogged, followThrough) => ({
+    date,
+    isLogged,
+    targetStatus: status,
+    calories: { actual: isLogged ? 2300 : 0, target: 2400, remaining: 100, over: 0, status: null },
+    macros: {},
+    planFollowThrough: followThrough,
+  });
+  const days = [
+    mk('2026-08-22', STATUS.ON_TARGET, true, { completed: 4, total: 4 }),
+    mk('2026-08-23', STATUS.ON_TARGET, true, { completed: 1, total: 4 }),
+    mk('2026-08-24', STATUS.UNDER_TARGET, true, { completed: 4, total: 4 }),
+    mk('2026-08-25', STATUS.ON_TARGET, true, { completed: 0, total: 4 }),
+    mk('2026-08-26', STATUS.NOT_LOGGED, false, null),
+    mk('2026-08-27', STATUS.ON_TARGET, true, { completed: 2, total: 4 }),
+    mk('2026-08-28', STATUS.NOT_LOGGED, false, null),
+  ];
+  const w = computeWeeklySummary(days);
+  assert.strictEqual(w.tracked, 5);
+  assert.strictEqual(w.onTarget, 4);
+  assert.strictEqual(w.under, 1);
+  assert.strictEqual(w.notLogged, 2);
+  assert.strictEqual(w.planFollowedDays, 2); // >= 80% items
+  assert.strictEqual(w.hitOnDifferentFoods, 2); // on target with < 50% follow-through
+  assert.ok(w.avgCalories === 2300);
+  assert.ok(w.insight.includes('4 of 5 tracked days'));
+  assert.ok(w.insight.includes("didn't follow the planned meals"));
+});
+
+// Test 7 (spec): plan followed 6/7 days, target missed 4/7 → plan issue.
+test('monitoring: followed plan + missed targets = plan may need review', () => {
+  const days = [
+    { date: 'd1', status: STATUS.ON_TARGET, planFollowedRatio: 1 },
+    { date: 'd2', status: STATUS.UNDER_TARGET, planFollowedRatio: 1 },
+    { date: 'd3', status: STATUS.UNDER_TARGET, planFollowedRatio: 1 },
+    { date: 'd4', status: STATUS.UNDER_TARGET, planFollowedRatio: 0.75 },
+    { date: 'd5', status: STATUS.OVER_TARGET, planFollowedRatio: 1 },
+    { date: 'd6', status: STATUS.ON_TARGET, planFollowedRatio: 1 },
+    { date: 'd7', status: STATUS.ON_TARGET, planFollowedRatio: 1 },
+  ];
+  const m = evaluateClientMonitoring(days);
+  assert.strictEqual(m.potentialPlanIssue, true);
+  assert.ok(m.alerts.some((a) => a.key === 'plan_review' && a.level === 'high'));
+  assert.strictEqual(m.successfulFlexibility, false);
+});
+
+// Test 8 (spec): plan followed 2/7, target hit 6/7 → successful flexibility,
+// and NO negative alert.
+test('monitoring: hit targets with different foods = successful flexibility, no red flag', () => {
+  const days = [
+    { date: 'd1', status: STATUS.ON_TARGET, planFollowedRatio: 0.5 },
+    { date: 'd2', status: STATUS.ON_TARGET, planFollowedRatio: 0 },
+    { date: 'd3', status: STATUS.UNDER_TARGET, planFollowedRatio: 0.25 },
+    { date: 'd4', status: STATUS.ON_TARGET, planFollowedRatio: 0 },
+    { date: 'd5', status: STATUS.ON_TARGET, planFollowedRatio: 0 },
+    { date: 'd6', status: STATUS.ON_TARGET, planFollowedRatio: 0.25 },
+    { date: 'd7', status: STATUS.ON_TARGET, planFollowedRatio: 0 },
+  ];
+  const m = evaluateClientMonitoring(days);
+  assert.strictEqual(m.successfulFlexibility, true);
+  assert.strictEqual(m.potentialPlanIssue, false);
+  assert.ok(!m.alerts.some((a) => a.level === 'high'));
+});
+
+test('monitoring: missing logging streak and repeated under/over', () => {
+  const gap = [
+    { date: 'd1', status: STATUS.ON_TARGET, planFollowedRatio: null },
+    { date: 'd2', status: STATUS.NOT_LOGGED, planFollowedRatio: null },
+    { date: 'd3', status: STATUS.NOT_LOGGED, planFollowedRatio: null },
+    { date: 'd4', status: STATUS.NOT_LOGGED, planFollowedRatio: null },
+  ];
+  let m = evaluateClientMonitoring(gap);
+  assert.strictEqual(m.missingLoggingStreak, 3);
+  assert.ok(m.alerts.some((a) => a.key === 'missing_logging' && a.level === 'high'));
+
+  const under = [
+    { date: 'd1', status: STATUS.UNDER_TARGET, planFollowedRatio: null },
+    { date: 'd2', status: STATUS.NOT_LOGGED, planFollowedRatio: null }, // neither extends nor breaks
+    { date: 'd3', status: STATUS.UNDER_TARGET, planFollowedRatio: null },
+    { date: 'd4', status: STATUS.UNDER_TARGET, planFollowedRatio: null },
+  ];
+  m = evaluateClientMonitoring(under);
+  assert.strictEqual(m.repeatedUnderTarget, 3);
+  assert.ok(m.alerts.some((a) => a.key === 'repeated_under'));
+
+  const over = [
+    { date: 'd1', status: STATUS.OVER_TARGET, planFollowedRatio: null },
+    { date: 'd2', status: STATUS.OVER_TARGET, planFollowedRatio: null },
+    { date: 'd3', status: STATUS.OVER_TARGET, planFollowedRatio: null },
+  ];
+  m = evaluateClientMonitoring(over);
+  assert.ok(m.alerts.some((a) => a.key === 'repeated_over'));
+});
+
+test('monitoring: repeated macro deficiency across last 4 logged days', () => {
+  const out = detectRepeatedMacroMisses(
+    [
+      { date: 'd1', misses: { protein: true } },
+      { date: 'd2', misses: { protein: true } },
+      { date: 'd3', misses: { protein: false } },
+      { date: 'd4', misses: { protein: true } },
+    ],
+    ['protein', 'carbs']
+  );
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(out[0].macro, 'protein');
+  assert.strictEqual(out[0].level, 'medium');
+  assert.strictEqual(out[0].misses, 3);
+});
+
+test('nutrition: recent foods keep the last quantity (quantity memory)', () => {
+  const recents = buildRecentFoods([
+    { name: 'Chicken breast', quantity: 200, calories: 330, logged_at: 100 },
+    { name: 'Rice', quantity: 150, calories: 195, logged_at: 200 },
+    { name: 'Chicken breast', quantity: 250, calories: 413, logged_at: 300 },
+  ]);
+  assert.strictEqual(recents.length, 2);
+  assert.strictEqual(recents[0].name, 'Chicken breast'); // most recent first
+  assert.strictEqual(recents[0].quantity, 250); // latest quantity wins
+});
+
+test('nutrition: find-food-to-fit ranks by budget fit and protein', () => {
+  const suggestions = suggestFoodsToFit(
+    { calories: 220, protein_g: 28 },
+    [
+      { name: 'Greek yogurt', calories: 150, protein_g: 17 },
+      { name: 'Banana', calories: 105, protein_g: 1 },
+      { name: 'Big pizza', calories: 900, protein_g: 30 }, // blows the budget
+      { name: 'Chicken breast', calories: 230, protein_g: 43 },
+    ],
+    3
+  );
+  assert.strictEqual(suggestions.length, 3);
+  assert.ok(!suggestions.some((s) => s.name === 'Big pizza'));
+  // protein-dense chicken outranks the same-calorie yogurt
+  assert.strictEqual(suggestions[0].name, 'Chicken breast');
+});
+
 console.log(`\n${passed} tests passed`);
+
+// ---- Nutrition profile & automatic target calculation ----
+import {
+  calculateRecommendation,
+  validateNutritionProfile,
+  validateProvidedNutritionFields,
+  recommendationInputsChanged,
+} from '../src/features/diet/domain/nutritionTargets.js';
+
+test('targets: Mifflin-St Jeor + activity + deficit produces the documented example', () => {
+  // 82kg, 178cm, 27y male, moderately active, standard fat loss:
+  // BMR 1803 → TDEE 2794 → −20% ≈ 2235 → floored/rounded 2240
+  const r = calculateRecommendation({
+    age: 27, gender: 'male', height_cm: 178, weight_kg: 82,
+    activity_level: 'moderate', primary_goal: 'weight_loss', goal_intensity: 'standard',
+  });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.recommendation.calories, 2240);
+  assert.strictEqual(r.recommendation.protein_g, 164); // 2.0 g/kg
+  assert.ok(r.recommendation.fat_g >= 41); // ≥ 0.5 g/kg floor
+  assert.ok(r.recommendation.carbs_g > 0);
+  // internal math is carried for reference but the UI shows only final numbers
+  assert.strictEqual(r.details.tdee, 2794);
+});
+
+test('targets: incomplete profile never fabricates a recommendation', () => {
+  const r = calculateRecommendation({ age: 27, gender: 'male' });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.missing.includes('height_cm'));
+  assert.ok(r.missing.includes('weight_kg'));
+  assert.ok(r.missing.includes('activity_level'));
+  assert.ok(r.missing.includes('primary_goal'));
+  assert.strictEqual(r.recommendation, null);
+});
+
+test('targets: out-of-range values are rejected, not silently accepted', () => {
+  assert.strictEqual(validateNutritionProfile({ age: 5, gender: 'male', height_cm: 178, weight_kg: 82, activity_level: 'light', primary_goal: 'muscle_gain' }).ok, false);
+  assert.strictEqual(validateNutritionProfile({ age: 30, gender: 'male', height_cm: 50, weight_kg: 82, activity_level: 'light', primary_goal: 'muscle_gain' }).ok, false);
+  assert.strictEqual(validateNutritionProfile({ age: 30, gender: 'male', height_cm: 178, weight_kg: 82, activity_level: 'light', primary_goal: 'muscle_gain', goal_intensity: 'turbo' }).ok, false);
+});
+
+test('targets: partial profile saves validate only provided fields', () => {
+  // gate mode may save only allergens — no nutrition fields → valid
+  assert.strictEqual(validateProvidedNutritionFields({}).ok, true);
+  assert.strictEqual(validateProvidedNutritionFields({ age: 200 }).ok, false);
+  assert.strictEqual(validateProvidedNutritionFields({ weight_kg: 82 }).ok, true);
+});
+
+test('targets: female calorie floor (1200) and surplus goal adjustments', () => {
+  // small, sedentary female cutting aggressively must never go below 1200
+  const r = calculateRecommendation({
+    age: 60, gender: 'female', height_cm: 150, weight_kg: 55,
+    activity_level: 'sedentary', primary_goal: 'weight_loss', goal_intensity: 'aggressive',
+  });
+  assert.ok(r.recommendation.calories >= 1200);
+  // gentle surplus for muscle gain exceeds steady surplus
+  const mild = calculateRecommendation({ age: 25, gender: 'male', height_cm: 180, weight_kg: 70, activity_level: 'moderate', primary_goal: 'muscle_gain', goal_intensity: 'mild' });
+  const aggressive = calculateRecommendation({ age: 25, gender: 'male', height_cm: 180, weight_kg: 70, activity_level: 'moderate', primary_goal: 'muscle_gain', goal_intensity: 'aggressive' });
+  assert.ok(aggressive.recommendation.calories > mild.recommendation.calories);
+});
+
+test('targets: weight change alters the recommendation inputs comparison', () => {
+  assert.strictEqual(recommendationInputsChanged({ weight_kg: 82 }, { weight_kg: 79 }), true);
+  assert.strictEqual(recommendationInputsChanged({ weight_kg: 82, activity_level: 'light' }, { weight_kg: 82, activity_level: 'light' }), false);
+  // string vs number representations of the same value are equal
+  assert.strictEqual(recommendationInputsChanged({ weight_kg: '82' }, { weight_kg: 82 }), false);
+  assert.strictEqual(recommendationInputsChanged({ primary_goal: 'muscle_gain' }, { primary_goal: 'weight_loss' }), true);
+});
+
+// ---- Trend-based progress (log-first model) ----
+import { buildTrendSummary } from '../src/features/diet/domain/nutritionCore.js';
+
+test('trend: not-logged days are excluded from averages, never counted as zero', () => {
+  const days = [
+    { dow: 'Mon', isLogged: true, calories: 2200, protein_g: 150, carbs_g: 200, fat_g: 60 },
+    { dow: 'Tue', isLogged: false, calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 },
+    { dow: 'Wed', isLogged: true, calories: 2400, protein_g: 160, carbs_g: 220, fat_g: 70 },
+  ];
+  const s = buildTrendSummary(days, { calories: 2200, protein_g: 180, carbs_g: 250, fat_g: 70 }, 10);
+  // average over LOGGED days only: (2200+2400)/2 = 2300 — a zero for Tue would give 1533
+  assert.strictEqual(s.avgCalories, 2300);
+  assert.strictEqual(s.loggedDays, 2);
+  assert.deepStrictEqual(s.notLoggedDow, ['Tue']);
+  assert.strictEqual(s.withinTolerance, true);
+  assert.strictEqual(s.calorieSummary, 'right on track');
+});
+
+test('trend: declining-protein data produces the low-protein trend note', () => {
+  const days = [0, 1, 2].map((i) => ({
+    dow: ['Mon', 'Tue', 'Wed'][i],
+    isLogged: true,
+    calories: 2200,
+    protein_g: 180 - i * 30, // 180 → 150 → 120, avg 150 vs 180 target = well below
+    carbs_g: 250,
+    fat_g: 70,
+  }));
+  const s = buildTrendSummary(days, { calories: 2200, protein_g: 180 }, 10);
+  assert.ok(s.notes.some((n) => n.startsWith('Protein has been trending a little low')));
+});
+
+test('trend: no target → totals without verdict language', () => {
+  const s = buildTrendSummary([{ dow: 'Mon', isLogged: true, calories: 1800 }], null, 10);
+  assert.strictEqual(s.avgCalories, 1800);
+  assert.strictEqual(s.calorieSummary, null);
+  assert.strictEqual(s.notes.length, 0);
+});
+
+test('trend: recent 3-day improvement reads as moving toward target', () => {
+  const days = [
+    { dow: 'Mon', isLogged: true, calories: 2600, protein_g: 150, carbs_g: 200, fat_g: 60 },
+    { dow: 'Tue', isLogged: true, calories: 2700, protein_g: 150, carbs_g: 200, fat_g: 60 },
+    { dow: 'Wed', isLogged: true, calories: 2600, protein_g: 150, carbs_g: 200, fat_g: 60 },
+    { dow: 'Thu', isLogged: true, calories: 2400, protein_g: 150, carbs_g: 200, fat_g: 60 },
+    { dow: 'Fri', isLogged: true, calories: 2300, protein_g: 150, carbs_g: 200, fat_g: 60 },
+  ];
+  const s = buildTrendSummary(days, { calories: 2200 }, 10);
+  // avg 2520 → above target, but the recent 3 days (2300) sit closer to 2200
+  // than the first 3 (2633) — trending DOWN toward target, not "trending high"
+  assert.strictEqual(s.calorieSummary, 'trending down toward target');
+});

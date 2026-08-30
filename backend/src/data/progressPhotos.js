@@ -62,21 +62,6 @@ function validateVisibility(v) {
   return v;
 }
 
-// // base64 → { buffer, ext, contentType } — same parsing rules as the
-// // existing dish-photo route (data-URI or raw base64, 8MB cap)
-// function parseImage(image_base64) {
-//   const b64 = String(image_base64 || '');
-//   const m = /^data:image\/(png|jpe?g|webp);base64,(.+)$/.exec(b64) ||
-//             /^([A-Za-z0-9+/=\s]+)$/.exec(b64);
-//   if (!m) throw new HttpError(400, 'image_base64 is required and must be valid base64 image data');
-//   const raw = Buffer.from(m[m.length - 1], 'base64');
-//   if (!raw.length || raw.length > 8 * 1024 * 1024) {
-//     throw new HttpError(400, 'image too large (max 8MB)');
-//   }
-//   const ext = m[1] ? (m[1] === 'jpeg' ? 'jpg' : m[1]) : 'jpg';
-//   const contentType = m[1] ? `image/${m[1]}` : 'image/jpeg';
-//   return { buffer: raw, ext, contentType };
-// }
 
 
 // BUGFIX: bare base64 (no data:image/...;base64, prefix — what expo's

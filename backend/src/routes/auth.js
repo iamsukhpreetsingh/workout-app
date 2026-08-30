@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const users = require('../data/users');
 const tags = require('../data/tags');
 const { registerRoute } = require('../admin/registry');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -181,6 +182,42 @@ registerRoute(
     next(e);
   }
 });
+
+
+// PATCH /auth/profile — update the authenticated user's editable profile
+// fields. Name only for now: email is the auth identity (changing it would
+// require a verification flow and is deliberately NOT supported here), and
+// body metrics live in the client intake profile. The users row is the
+// authoritative profile source — no separate profile copy.
+const { query } = require('../db/pool');
+registerRoute(
+  router,
+  {
+    method: 'PATCH',
+    path: '/profile',
+    description: "Updates the authenticated user's display name (the only editable core profile field; email is the auth identity and is not editable here).",
+    requiresAuth: true,
+    allowedRoles: ['user', 'trainer'],
+    category: 'Auth',
+  },
+  [requireAuth, requireRole(['user', 'trainer'])],
+  async (req, res) => {
+    try {
+      const name = String((req.body || {}).name || '').trim();
+      if (!name || name.length > 80) {
+        return res.status(400).json({ error: 'name is required (max 80 characters)' });
+      }
+      const { rows } = await query(
+        'UPDATE users SET name = $2, updated_at = now() WHERE id = $1 RETURNING id, name, email, role',
+        [req.user.id, name]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'User not found' });
+      res.json(rows[0]);
+    } catch (e) {
+      res.status(500).json({ error: e.message || 'Unexpected error' });
+    }
+  }
+);
 
 // shared with the authenticated change-password flow so access/refresh
 // tokens are always signed identically (same claims, same TTLs)

@@ -26,28 +26,6 @@ class HttpError extends Error {
 
 const sinceClause = (since) => (since ? 'AND updated_at > $2' : '');
 
-// // ── Custom exercises ────────────────────────────────────────────────────
-// async function upsertCustomExercises(userId, list) {
-//   if (!Array.isArray(list) || !list.length) throw new HttpError(400, 'Body must be a non-empty array');
-//   const rows = [];
-//   for (const e of list) {
-//     if (!e || !e.local_entity_id || !e.name) {
-//       throw new HttpError(400, 'Each exercise requires local_entity_id and name');
-//     }
-//     const { rows: r } = await query(
-//       `INSERT INTO backup_custom_exercises (user_id, local_entity_id, name, muscle_group, instructions, thumbnail_path)
-//        VALUES ($1,$2,$3,$4,$5,$6)
-//        ON CONFLICT (user_id, local_entity_id) DO UPDATE SET
-//          name = EXCLUDED.name, muscle_group = EXCLUDED.muscle_group,
-//          instructions = EXCLUDED.instructions, thumbnail_path = EXCLUDED.thumbnail_path,
-//          updated_at = now()
-//        RETURNING *`,
-//       [userId, String(e.local_entity_id), e.name, e.muscle_group || 'other', e.instructions ?? null, e.thumbnail_path ?? null]
-//     );
-//     rows.push(r[0]);
-//   }
-//   return rows;
-// }
 
 
 
@@ -182,20 +160,52 @@ async function upsertDietPlan(userId, p) {
     const { rows } = await client.query(
       `INSERT INTO backup_diet_plans
          (user_id, local_entity_id, name, notes, tags,
-          daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
+          tracking_mode, tolerance_pct)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        ON CONFLICT (user_id, local_entity_id) DO UPDATE SET
          name = EXCLUDED.name, notes = EXCLUDED.notes, tags = EXCLUDED.tags,
          daily_calorie_target = EXCLUDED.daily_calorie_target,
          daily_protein_target = EXCLUDED.daily_protein_target,
          daily_carbs_target = EXCLUDED.daily_carbs_target,
-         daily_fat_target = EXCLUDED.daily_fat_target, updated_at = now()
+         daily_fat_target = EXCLUDED.daily_fat_target,
+         tracking_mode = EXCLUDED.tracking_mode,
+         tolerance_pct = EXCLUDED.tolerance_pct, updated_at = now()
        RETURNING *`,
       [userId, String(p.local_entity_id), p.name, p.notes ?? null, p.tags || [],
        p.daily_calorie_target ?? null, p.daily_protein_target ?? null,
-       p.daily_carbs_target ?? null, p.daily_fat_target ?? null]
+       p.daily_carbs_target ?? null, p.daily_fat_target ?? null,
+       p.tracking_mode === 'detailed' ? 'detailed' : 'simple',
+       Number.isFinite(Number(p.tolerance_pct)) && Number(p.tolerance_pct) >= 1 && Number(p.tolerance_pct) <= 50
+         ? Math.round(Number(p.tolerance_pct)) : 10]
     );
     const pid = String(p.local_entity_id);
+    // plan VERSIONS ride the payload (historical target snapshots — without
+    // them a reinstall re-evaluates history against current targets)
+    await client.query('DELETE FROM backup_diet_plan_versions WHERE user_id = $1 AND diet_plan_local_id = $2', [userId, pid]);
+    for (const v of p.versions || []) {
+      if (v?.version_number == null || !v?.effective_from) continue;
+      await client.query(
+        `INSERT INTO backup_diet_plan_versions
+           (user_id, local_entity_id, diet_plan_local_id, version_number, effective_from,
+            daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
+            tolerance_pct, tracking_mode)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (user_id, local_entity_id) DO UPDATE SET
+           version_number = EXCLUDED.version_number, effective_from = EXCLUDED.effective_from,
+           daily_calorie_target = EXCLUDED.daily_calorie_target,
+           daily_protein_target = EXCLUDED.daily_protein_target,
+           daily_carbs_target = EXCLUDED.daily_carbs_target,
+           daily_fat_target = EXCLUDED.daily_fat_target,
+           tolerance_pct = EXCLUDED.tolerance_pct, tracking_mode = EXCLUDED.tracking_mode,
+           updated_at = now()`,
+        [userId, String(v.local_entity_id), pid, v.version_number,
+         String(v.effective_from).slice(0, 10),
+         v.daily_calorie_target ?? null, v.daily_protein_target ?? null,
+         v.daily_carbs_target ?? null, v.daily_fat_target ?? null,
+         v.tolerance_pct ?? 10, v.tracking_mode || 'simple']
+      );
+    }
     await client.query('DELETE FROM backup_diet_plan_days WHERE user_id = $1 AND diet_plan_local_id = $2', [userId, pid]);
     for (let di = 0; di < (p.days || []).length; di++) {
       const d = p.days[di] || {};
@@ -253,6 +263,8 @@ async function upsertDietPlan(userId, p) {
 
 async function deleteDietPlan(userId, localId) {
   await query('DELETE FROM backup_diet_checkins WHERE user_id = $1 AND diet_plan_local_id = $2', [userId, String(localId)]);
+  // the client's deleteDietPlan removes diary rows locally; cascade here too
+  await query('DELETE FROM backup_food_log_entries WHERE user_id = $1 AND plan_ref = $2', [userId, String(localId)]);
   await query('DELETE FROM backup_diet_plans WHERE user_id = $1 AND local_entity_id = $2', [userId, String(localId)]);
   return { ok: true };
 }
@@ -284,7 +296,17 @@ async function listDietPlans(userId, since) {
     if (!daysByPlan.has(d.diet_plan_local_id)) daysByPlan.set(d.diet_plan_local_id, []);
     daysByPlan.get(d.diet_plan_local_id).push({ ...d, meals: mealsByDay.get(d.local_entity_id) || [] });
   }
-  for (const p of plans) p.days = daysByPlan.get(p.local_entity_id) || [];
+  const { rows: planVersions } = await query(
+    'SELECT * FROM backup_diet_plan_versions WHERE user_id = $1 ORDER BY diet_plan_local_id, version_number', [userId]);
+  const versionsByPlan = new Map();
+  for (const v of planVersions) {
+    if (!versionsByPlan.has(v.diet_plan_local_id)) versionsByPlan.set(v.diet_plan_local_id, []);
+    versionsByPlan.get(v.diet_plan_local_id).push(v);
+  }
+  for (const p of plans) {
+    p.days = daysByPlan.get(p.local_entity_id) || [];
+    p.versions = versionsByPlan.get(p.local_entity_id) || [];
+  }
   return plans;
 }
 
@@ -638,6 +660,13 @@ async function backupSummary(userId) {
     measurements: await one('SELECT COUNT(*) AS c FROM measurement_entries WHERE client_id = $1'),
     personal_records: await one('SELECT COUNT(*) AS c FROM backup_personal_records WHERE user_id = $1'),
     progress_photos: await one('SELECT COUNT(*) AS c FROM backup_progress_photos WHERE user_id = $1'),
+    // diet diaries — MUST be counted here: the fresh-install restore gate
+    // (isRestoreNeeded) decides from these counts whether a restore is
+    // required. A diet-only user must never compute total === 0 and skip
+    // the restore that would bring their food logs back.
+    food_log_entries: await one('SELECT COUNT(*) AS c FROM food_log_entries WHERE user_id = $1'),
+    legacy_food_log_entries: await one('SELECT COUNT(*) AS c FROM backup_food_log_entries WHERE user_id = $1'),
+    custom_dishes: await one('SELECT COUNT(*) AS c FROM custom_dishes WHERE user_id = $1'),
   };
 }
 

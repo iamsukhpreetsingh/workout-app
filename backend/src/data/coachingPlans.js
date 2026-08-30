@@ -94,14 +94,15 @@ async function createPlan(kind, payload) {
 // Diet plan tree creation (one transaction). Catalog-sourced items are
 // SNAPSHOTTED server-side from the catalog at insert time, so later catalog
 // edits never alter already-assigned plans.
-async function createDietTree({ trainerId, clientId, name, notes, days, createdBy = 'trainer', targets = {}, tags = [] }) {
+async function createDietTree({ trainerId, clientId, name, notes, days, createdBy = 'trainer', targets = {}, tags = [], tracking_mode: trackingMode, tolerance_pct: tolerancePct }) {
   const planTags = sanitizeTags(tags); // plan-level (self-authored client plans)
   return transaction(async (client) => {
     const { rows } = await client.query(
       `INSERT INTO diet_plans
          (trainer_id, client_id, name, notes, created_by, tags,
-          daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+          daily_calorie_target, daily_protein_target, daily_carbs_target, daily_fat_target,
+          tracking_mode, tolerance_pct)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [
         createdBy === 'trainer' ? trainerId : null,
         clientId, name, notes || null, createdBy, planTags,
@@ -109,6 +110,9 @@ async function createDietTree({ trainerId, clientId, name, notes, days, createdB
         targets.daily_protein_target ?? null,
         targets.daily_carbs_target ?? null,
         targets.daily_fat_target ?? null,
+        trackingMode === 'detailed' ? 'detailed' : 'simple',
+        Number.isFinite(Number(tolerancePct)) && Number(tolerancePct) >= 1 && Number(tolerancePct) <= 50
+          ? Math.round(Number(tolerancePct)) : 10,
       ]
     );
     const plan = rows[0];
@@ -268,7 +272,8 @@ async function updateOwnDietPlan(clientId, planId, payload) {
       `UPDATE diet_plans SET
          name = $2, notes = $3, tags = $4,
          daily_calorie_target = $5, daily_protein_target = $6,
-         daily_carbs_target = $7, daily_fat_target = $8
+         daily_carbs_target = $7, daily_fat_target = $8,
+         tracking_mode = $9, tolerance_pct = $10
        WHERE id = $1`,
       [
         planId,
@@ -279,6 +284,9 @@ async function updateOwnDietPlan(clientId, planId, payload) {
         (payload.targets || {}).daily_protein_target ?? null,
         (payload.targets || {}).daily_carbs_target ?? null,
         (payload.targets || {}).daily_fat_target ?? null,
+        payload.tracking_mode === 'detailed' ? 'detailed' : 'simple',
+        Number.isFinite(Number(payload.tolerance_pct)) && Number(payload.tolerance_pct) >= 1 && Number(payload.tolerance_pct) <= 50
+          ? Math.round(Number(payload.tolerance_pct)) : 10,
       ]
     );
     await client.query('DELETE FROM diet_plan_days WHERE diet_plan_id = $1', [planId]);

@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Card, Table, Tag, message, Typography, Tabs, Input,
+  Card, Table, Tag, message, Typography, Tabs, Input, Modal,
 } from 'antd';
 import {
   getMealCatalog, getRecipes, getTagVocabulary, getAllergenConsistency,
-  MealCatalogItem, RecipeRow, TagVocabRow, AllergenConsistency,
+  getGlobalFoods, saveGlobalFood, verifyGlobalFood, deleteGlobalFood,
+  MealCatalogItem, RecipeRow, TagVocabRow, AllergenConsistency, GlobalFood,
 } from '../api';
 
 export default function NutritionPage() {
@@ -13,6 +14,7 @@ export default function NutritionPage() {
       <Typography.Title level={4}>Nutrition Content</Typography.Title>
       <Tabs
         items={[
+          { key: 'foods', label: 'Global foods', children: <GlobalFoodsTab /> },
           { key: 'catalog', label: 'Meal catalog', children: <MealCatalogTab /> },
           { key: 'recipes', label: 'Recipes', children: <RecipesTab /> },
           { key: 'tags', label: 'Tag vocabulary', children: <TagVocabTab /> },
@@ -216,6 +218,108 @@ function AllergenTab() {
           />
         </Card>
       </div>
+    </>
+  );
+}
+
+// ─────────────────────────── Global foods ───────────────────────────────
+// The shared food database powering the log-first nutrition search: curated
+// seed rows (verified), cached Open Food Facts results (unverified until a
+// staff member promotes them), and admin-added entries.
+function GlobalFoodsTab() {
+  const [rows, setRows] = useState<GlobalFood[]>([]);
+  const [q, setQ] = useState('');
+  const [msg, contextHolder] = message.useMessage();
+
+  const reload = (query = '') =>
+    getGlobalFoods(query).then(setRows).catch((e) => msg.error(e.message));
+
+  useEffect(() => { reload(); }, []); // eslint-disable-line
+
+  const modal = () => {
+    let name = '', calories = '', protein = '', carbs = '', fat = '';
+    Modal.info({
+      title: 'Add global food (per 100 g)',
+      content: (
+        <div style={{ display: 'grid', gap: 8 }}>
+          <Input placeholder="Name" onChange={(e) => (name = e.target.value)} />
+          <Input placeholder="Calories" onChange={(e) => (calories = e.target.value)} />
+          <Input placeholder="Protein g" onChange={(e) => (protein = e.target.value)} />
+          <Input placeholder="Carbs g" onChange={(e) => (carbs = e.target.value)} />
+          <Input placeholder="Fat g" onChange={(e) => (fat = e.target.value)} />
+        </div>
+      ),
+      onOk: async () => {
+        try {
+          await saveGlobalFood({
+            name,
+            calories: calories ? Number(calories) : null,
+            protein_g: protein ? Number(protein) : null,
+            carbs_g: carbs ? Number(carbs) : null,
+            fat_g: fat ? Number(fat) : null,
+          });
+          message.success('Food added');
+          reload(q);
+        } catch (e: any) {
+          message.error(e.message);
+        }
+      },
+    });
+  };
+
+  return (
+    <>
+      {contextHolder}
+      <Input.Search
+        placeholder="Search name" value={q} onChange={(e) => setQ(e.target.value)}
+        onSearch={(v) => reload(v)} style={{ width: 240, marginRight: 12 }} allowClear
+      />
+      <a onClick={modal} style={{ marginRight: 12 }}>+ Add food</a>
+      <Table<GlobalFood>
+        rowKey="id"
+        size="small"
+        dataSource={rows}
+        pagination={{ pageSize: 15 }}
+        columns={[
+          {
+            title: 'Food', dataIndex: 'name',
+            render: (_: any, r) => (
+              <>
+                {r.name} {r.brand ? <Tag>{r.brand}</Tag> : null}{' '}
+                {r.verified ? <Tag color="green">verified</Tag> : <Tag color="orange">unverified</Tag>}{' '}
+                <Tag>{r.source}</Tag>
+              </>
+            ),
+          },
+          ...macroCols,
+          { title: 'Used', dataIndex: 'usage_count', width: 70 },
+          {
+            title: 'Actions', width: 150,
+            render: (_: any, r) => (
+              <>
+                {!r.verified && (
+                  <a
+                    style={{ marginRight: 12 }}
+                    onClick={async () => {
+                      try { await verifyGlobalFood(r.id); reload(q); } catch (e: any) { msg.error(e.message); }
+                    }}
+                  >
+                    Verify
+                  </a>
+                )}
+                <a
+                  style={{ color: '#cf1322' }}
+                  onClick={async () => {
+                    try { await deleteGlobalFood(r.id); reload(q); } catch (e: any) { msg.error(e.message); }
+                  }}
+                >
+                  Delete
+                </a>
+              </>
+            ),
+          },
+        ]}
+      />
     </>
   );
 }

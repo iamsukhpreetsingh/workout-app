@@ -7,6 +7,7 @@ import CatalogSearch from '../components/CatalogSearch';
 import TagEditorModal from '../components/TagEditorModal';
 import { useColors } from '../theme';
 import { WORKOUT_TEMPLATE_EDITOR } from '../shared/constants/routes';
+import { useHeaderActions } from '../components/HeaderActions';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -21,18 +22,14 @@ export default function WorkoutTemplatesScreen({ navigation }) {
   const [tagFilter, setTagFilter] = useState(null);
   const [showTagEditor, setShowTagEditor] = useState(false);
 
-  React.useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity
-          onPress={() => navigation.navigate(WORKOUT_TEMPLATE_EDITOR, {})}
-          style={{ padding: 8 }}
-        >
-          <Ionicons name="add" size={22} color={colors.primary} />
-        </TouchableOpacity>
-      ),
-    });
-  }, [navigation, colors]);
+  useHeaderActions(navigation, [], (
+    <TouchableOpacity
+      onPress={() => navigation.navigate(WORKOUT_TEMPLATE_EDITOR, {})}
+      style={{ padding: 8 }}
+    >
+      <Ionicons name="add" size={22} color={colors.primary} />
+    </TouchableOpacity>
+  ));
 
   useFocusEffect(
     useCallback(() => {

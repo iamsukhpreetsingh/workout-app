@@ -18,7 +18,18 @@ export {
   getDietPlan,
   isLocalDietPlanId,
   listLocalDietPlans,
+  getPlanVersionForDate,
+  listDietPlanVersions,
 } from '../db/dietPlans';
+export {
+  logFood,
+  deleteFoodLog,
+  listFoodLogsForDate,
+  listFoodLogsBetween,
+  getRecentFoods,
+  FOOD_SOURCES,
+  SOURCE_LABELS,
+} from '../db/foodLog';
 export {
   listLocalSupplementPlans,
 } from '../db/supplementPlans';

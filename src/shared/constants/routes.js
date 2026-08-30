@@ -10,12 +10,17 @@ export const RESET_PASSWORD = 'ResetPassword';
 
 // User-view tabs
 export const TAB_HOME = 'Home';
-export const TAB_HISTORY = 'History';
+export const TAB_DIET = 'Diet';
+export const HISTORY = 'History';
 export const TAB_PLANS = 'Plans';
 export const TAB_PROGRESS = 'Progress';
+export const TAB_PROFILE = 'Profile';
+export const EDIT_PROFILE = 'EditProfile';
 export const MAIN_TABS = 'Main';
 
 // User-view stack screens
+export const DIET_TRENDS = 'DietTrends';
+export const BUILD_DISH = 'BuildDish';
 export const SESSION_DETAIL = 'SessionDetail';
 export const PLAN_DETAIL = 'PlanDetail';
 export const PLAN_EDITOR = 'PlanEditor';
@@ -37,6 +42,7 @@ export const COACHING_PLAN_BUILDER = 'CoachingPlanBuilder';
 export const COACHING_PLAN_DETAIL = 'CoachingPlanDetail';
 export const ASSIGNED_PLAN_DETAIL = 'AssignedPlanDetail';
 export const ACTIVE_WORKOUT = 'ActiveWorkout';
+export const BACKFILL_WORKOUT = 'BackfillWorkout';
 export const PROGRESS_PHOTOS = 'ProgressPhotos';
 export const TRAINER_PROGRESS_PHOTOS = 'TrainerProgressPhotos';
 
@@ -46,7 +52,6 @@ export const TRAINER_TABS = 'TrainerMain';
 export const TAB_CLIENTS = 'Clients';
 export const TAB_WORKOUTS = 'Workouts';
 export const TAB_RECIPES = 'Recipes';
-export const TRAINER_SETTINGS = 'TrainerSettings';
 export const ASSIGN_WORKOUT_PICKER = 'AssignWorkoutPicker';
 export const WORKOUT_TEMPLATE_EDITOR = 'WorkoutTemplateEditor';
 export const TAG_MANAGER = 'TagManager';

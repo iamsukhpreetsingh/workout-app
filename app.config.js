@@ -29,6 +29,7 @@ module.exports = {
   expo: {
     name: "Workout Tracker",
     slug: "workout-tracker",
+    scheme: "workouttracker",
     version: "1.0.0",
     orientation: "portrait",
     userInterfaceStyle: "dark",
