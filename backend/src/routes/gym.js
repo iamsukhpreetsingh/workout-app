@@ -13,6 +13,7 @@ const { registerRoute } = require('../admin/registry');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { requireGymContext, requireGymPermission } = require('../middleware/gymAuth');
 const gyms = require('../data/gyms');
+const storage = require('../data/storageService');
 
 const router = express.Router();
 
@@ -79,7 +80,9 @@ registerRoute(router, {
   category: 'Gym',
 }, [requireAuth, requireGymContext()], async (req, res) => {
   try {
-    res.json(await gyms.getGymById(req.gymContext.gymId));
+    const gym = await gyms.getGymById(req.gymContext.gymId);
+    if (!gym) return res.status(404).json({ error: 'Gym not found' });
+    res.json({ ...gym, profile_completion: gyms.gymProfileCompletion(gym) });
   } catch (e) {
     httpError(res, e);
   }
@@ -258,6 +261,159 @@ registerRoute(router, {
     httpError(res, e, 400);
   }
 }, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+// ── gym logo (onboarding branding) ───────────────────────────────────────
+
+const LOGO_MAX_BYTES = 2 * 1024 * 1024;
+const DATA_URL_RE = /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/s;
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/logo',
+  description: 'Uploads the gym logo (base64 PNG/JPEG/WEBP, max 2MB). Persisted before the previous logo is removed. Requires permission: settings.manage (OWNER).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('settings.manage')], async (req, res) => {
+  try {
+    const { image_base64, content_type } = req.body || {};
+    if (!image_base64) return res.status(400).json({ error: 'image_base64 is required' });
+    let base64 = String(image_base64).trim();
+    let contentType = content_type || null;
+    const dataUrl = base64.match(DATA_URL_RE);
+    if (dataUrl) {
+      contentType = contentType || dataUrl[1];
+      base64 = dataUrl[2];
+    }
+    contentType = contentType || 'image/png';
+    if (!storage.GYM_LOGO_CONTENT_TYPES[contentType]) {
+      return res.status(400).json({ error: 'content_type must be image/png, image/jpeg or image/webp' });
+    }
+    const buffer = Buffer.from(base64, 'base64');
+    if (!buffer.length) return res.status(400).json({ error: 'image_base64 is not valid base64' });
+    if (buffer.length > LOGO_MAX_BYTES) {
+      return res.status(400).json({ error: 'Logo exceeds the 2MB limit' });
+    }
+    // base64 decoders silently skip invalid characters — sniff the decoded
+    // bytes so an upload that is not REALLY the claimed image type is
+    // rejected rather than stored as a broken logo
+    const isPng = buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+    const isJpeg = buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+    const isWebp = buffer.slice(0, 4).toString('ascii') === 'RIFF'
+      && buffer.slice(8, 12).toString('ascii') === 'WEBP';
+    if (!isPng && !isJpeg && !isWebp) {
+      return res.status(400).json({ error: 'image_base64 does not contain a valid PNG, JPEG or WEBP image' });
+    }
+    const gym = await gyms.getGymById(req.gymContext.gymId);
+    if (!gym) return res.status(404).json({ error: 'Gym not found' });
+    const stored = await storage.uploadGymLogo(buffer, gym.id, contentType);
+    await gyms.setGymLogo(gym.id, req.user.id, req.ip, { logo_key: stored.key, logo_provider: stored.provider });
+    // only remove the replaced file AFTER the new one persisted + row updated
+    if (gym.logo_key) {
+      await storage.removeGymLogo({ storage_provider: gym.logo_provider || 'local', storage_key: gym.logo_key });
+    }
+    res.status(201).json({ logo_key: stored.key, provider: stored.provider });
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('settings.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/logo',
+  description: 'Streams the gym logo bytes. Any ACTIVE staff or app-linked member of this gym. 404 when no logo is set.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext()], async (req, res) => {
+  try {
+    const gym = await gyms.getGymById(req.gymContext.gymId);
+    if (!gym || !gym.logo_key) return res.status(404).json({ error: 'No logo' });
+    const ext = gym.logo_key.split('.').pop();
+    const contentType = Object.entries(storage.GYM_LOGO_CONTENT_TYPES)
+      .find(([, e]) => e === `.${ext}`)?.[0] || 'image/png';
+    const out = await storage.getGymLogoStream(
+      { storage_provider: gym.logo_provider || 'local', storage_key: gym.logo_key }, contentType
+    );
+    if (!out) return res.status(404).json({ error: 'Logo file no longer available' });
+    res.setHeader('Content-Type', out.contentType);
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    out.stream.pipe(res);
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext()]);
+
+registerRoute(router, {
+  method: 'DELETE',
+  path: '/:gymId/logo',
+  description: 'Removes the gym logo. Requires permission: settings.manage (OWNER).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('settings.manage')], async (req, res) => {
+  try {
+    const gym = await gyms.getGymById(req.gymContext.gymId);
+    if (!gym) return res.status(404).json({ error: 'Gym not found' });
+    if (gym.logo_key) {
+      await storage.removeGymLogo({ storage_provider: gym.logo_provider || 'local', storage_key: gym.logo_key });
+      await gyms.setGymLogo(gym.id, req.user.id, req.ip, { logo_key: null });
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('settings.manage')]);
+
+// ── gym lifecycle: deactivate / reactivate / leave ───────────────────────
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/deactivate',
+  description: 'Owner deactivates the gym (status INACTIVE — staff and members lose access until reactivated). Requires permission: settings.manage (OWNER).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('settings.manage')], async (req, res) => {
+  try {
+    res.json(await gyms.deactivateGym(req.gymContext.gymId, req.user.id, req.ip));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('settings.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/reactivate',
+  description: 'Reactivates an owner-deactivated (INACTIVE) gym. Only the gym OWNER — resolved directly, since deactivated gyms fail normal gym-context resolution. Platform-suspended gyms cannot self-reactivate.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.json(await gyms.reactivateGym(req.params.gymId, req.user.id, req.ip));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/leave',
+  description: 'Staff member leaves the gym voluntarily. The last active owner cannot leave (transfer ownership or deactivate first).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext()], async (req, res) => {
+  try {
+    if (req.gymContext.isMember) {
+      return res.status(400).json({ error: 'Memberships are managed by the gym — cancellations come with membership plans' });
+    }
+    res.json(await gyms.leaveGym(req.gymContext.gymId, req.user.id, req.ip));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext()]);
 
 // ── audit log ────────────────────────────────────────────────────────────
 

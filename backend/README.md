@@ -186,7 +186,41 @@ Diet & nutrition (all reads require an active/readable association):
 | GET/POST/PATCH/DELETE`/trainer/meal-catalog…`, `/trainer/tags…`  | Trainer dish catalog + tag taxonomy                                                                                                                               |
 | GET/PUT/DELETE`/trainer/clients/:clientId/progression-*`             | Auto-progression overrides                                                                                                                                        |
 
-### 3.5 Admin — `/admin` (role-gated; dashboard: `../admin-dashboard`)
+### 3.5 Gym Management — `/gym` (multi-tenant; portal: `../gym-web`, design: `../GYM_MANAGEMENT_DESIGN.md`)
+
+Gym-scoped roles (OWNER/ADMIN/TRAINER/FRONT_DESK/MEMBER) live in
+`gym_staff`/`gym_members` — never in `users.role`, which only gains
+`gym_staff` as a routing hint. Every route runs
+`requireAuth → requireGymContext() → requireGymPermission(…)`; gym/role ids
+from the client are selectors, never proof (verified against the JWT).
+
+- **Onboarding (Phase 2)**: `POST /gym` creates the gym from the wizard
+  payload (name, timezone, currency, contact, address, `operating_hours`
+  JSONB — normalized to 7 days, `branding` JSONB — hex colors, website);
+  the creator becomes gym-scoped OWNER; duplicate names are allowed
+  (unique machine slug); creation is transactional and touches no personal
+  fitness data. `GET /gym/mine` lists gyms + status (incl. INACTIVE);
+  `GET /gym/:gymId` returns the gym plus `profile_completion`
+  (percent + missing checklist).
+- **Profile updates**: `PATCH /gym/:gymId` (settings.manage) validates
+  timezone/phone/email/website/hours/branding server-side.
+- **Logo**: `POST /gym/:gymId/logo` (base64 PNG/JPEG/WEBP ≤2MB, magic-byte
+  sniffed, stored S3-or-local, replaced file removed after the new one
+  persists), `GET …/logo` (authorized byte stream), `DELETE …/logo`.
+- **Lifecycle**: `POST …/deactivate` (owner; gym → INACTIVE, everyone
+  locked out), `POST …/reactivate` (owner-only, resolved directly because
+  deactivated gyms fail context resolution; SUSPENDED gyms cannot
+  self-reactivate), `POST …/leave` (staff leave; the last active OWNER is
+  blocked — transfer ownership or deactivate first).
+- **Staff / members / audit (Phase 1)**: `GET/POST/PATCH …/staff` (email
+  add, re-hire, last-owner protection), `GET/POST …/members`,
+  `GET/PATCH …/members/:id`, `POST …/members/:id/link-app|unlink-app`
+  (exact-email link, never duplicates), `GET …/audit-log`
+  (append-only), `GET …/permissions` (portal route-guard data).
+- **Standalone users are unaffected**: zero gyms is a fully supported
+  state; membership/payments/attendance/classes are NOT implemented yet.
+
+### 3.6 Admin — `/admin` (role-gated; dashboard: `../admin-dashboard`)
 
 - Auth/bootstrap, user & role management, broadcasts, sync-health views,
   API Explorer (`GET /admin/api-registry`).

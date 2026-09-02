@@ -164,4 +164,93 @@ function localPathExists(key) {
   return fs.existsSync(path.join(PROGRESS_ROOT, key));
 }
 
-module.exports = { upload, getStream, getSignedUrl, remove, getUrl, localPathExists, s3Configured };
+// ── Gym logos (Phase 2 onboarding) ───────────────────────────────────────
+// Same provider split as progress photos (S3 primary, deterministic local
+// fallback), but its own root: bytes are NEVER served statically — only
+// through GET /gym/:gymId/logo after gym-context authorization. Keys are
+// "<gymId>/<filename>"; the local path is resolved and re-checked to start
+// with GYM_LOGO_ROOT so a crafted key can never traverse out.
+const GYM_LOGO_ROOT = path.join(ROOT, 'gym-logos');
+const GYM_LOGO_CONTENT_TYPES = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+};
+
+function gymLogoLocalPath(key) {
+  const resolved = path.resolve(GYM_LOGO_ROOT, key);
+  if (!resolved.startsWith(GYM_LOGO_ROOT + path.sep)) return null;
+  return resolved;
+}
+
+// uploadGymLogo(buffer, gymId, contentType) → { provider, key }
+async function uploadGymLogo(buffer, gymId, contentType = 'image/png') {
+  const ext = GYM_LOGO_CONTENT_TYPES[contentType] || '.png';
+  const key = `${gymId}/logo-${Date.now()}${ext}`;
+  const s3 = getS3();
+  if (s3) {
+    try {
+      await s3.send(new s3Cmds.PutObjectCommand({
+        Bucket: s3Bucket, Key: `gym-logos/${key}`, Body: buffer, ContentType: contentType,
+      }));
+      return { provider: 's3', key };
+    } catch (e) {
+      console.error(`[GymLogoStorage] S3 upload failed (key=${key}): ${e.name || 'Error'} — falling back to local storage`);
+    }
+  }
+  const dest = gymLogoLocalPath(key);
+  if (!dest) throw new Error('invalid gym logo key');
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, buffer);
+  return { provider: 'local', key };
+}
+
+// getGymLogoStream({storage_provider, storage_key}) → { stream, contentType } | null
+async function getGymLogoStream(record, contentType) {
+  if (!record || !record.storage_key) return null;
+  if (record.storage_provider === 's3') {
+    const s3 = getS3();
+    if (!s3) return null;
+    try {
+      const out = await s3.send(new s3Cmds.GetObjectCommand({
+        Bucket: s3Bucket, Key: `gym-logos/${record.storage_key}`,
+      }));
+      return { stream: out.Body, contentType };
+    } catch (e) {
+      if (e.name === 'NoSuchKey') return null;
+      throw e;
+    }
+  }
+  const p = gymLogoLocalPath(record.storage_key);
+  if (!p || !fs.existsSync(p)) return null;
+  return { stream: fs.createReadStream(p), contentType };
+}
+
+// removeGymLogo({storage_provider, storage_key}) — idempotent
+async function removeGymLogo(record) {
+  if (!record || !record.storage_key) return;
+  if (record.storage_provider === 's3') {
+    const s3 = getS3();
+    if (s3) {
+      try {
+        await s3.send(new s3Cmds.DeleteObjectCommand({
+          Bucket: s3Bucket, Key: `gym-logos/${record.storage_key}`,
+        }));
+      } catch (e) {
+        console.error(`[GymLogoStorage] S3 delete failed (key=${record.storage_key}): ${e.name || 'Error'}`);
+      }
+    }
+    return;
+  }
+  try {
+    const p = gymLogoLocalPath(record.storage_key);
+    if (p) fs.unlinkSync(p);
+  } catch {
+    // already gone — idempotent by convention
+  }
+}
+
+module.exports = {
+  upload, getStream, getSignedUrl, remove, getUrl, localPathExists, s3Configured,
+  uploadGymLogo, getGymLogoStream, removeGymLogo, GYM_LOGO_CONTENT_TYPES,
+};
