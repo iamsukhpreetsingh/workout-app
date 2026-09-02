@@ -3,7 +3,7 @@
 // protection; its 400s are surfaced verbatim.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Drawer, Form, Input, Select, Tag, App as AntApp, Modal,
+  Button, Drawer, Form, Input, Select, Tag, App as AntApp, Modal, Typography,
 } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import PageContainer from '../components/PageContainer';
@@ -24,6 +24,8 @@ export default function StaffPage() {
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [addOpen, setAddOpen] = useState(false);
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const [inviteRole, setInviteRole] = useState<string | null>(null);
   const [form] = Form.useForm();
   const [tick, setTick] = useState(0);
 
@@ -53,8 +55,14 @@ export default function StaffPage() {
   const submitAdd = async () => {
     try {
       const v = await form.validateFields();
-      await addStaff(ctx!.gymId, v);
-      message.success('Staff member added');
+      const result = await addStaff(ctx!.gymId, v);
+      if ('invited' in result && result.invited) {
+        // the person has no app account yet — show the one-time invite code
+        setInviteCode(result.invite_code || null);
+        setInviteRole(result.gym_role || v.gym_role);
+      } else {
+        message.success('Staff member added');
+      }
       setAddOpen(false);
       form.resetFields();
       setTick((t) => t + 1);
@@ -159,12 +167,12 @@ export default function StaffPage() {
         width={420}
         open={addOpen}
         onClose={() => setAddOpen(false)}
-        extra={<Button type="primary" onClick={submitAdd}>Add</Button>}
+        extra={<Button type="primary" onClick={submitAdd}>Add / Invite</Button>}
       >
         <Form form={form} layout="vertical">
           <Form.Item
             name="email"
-            label="App account email"
+            label="Email"
             rules={[
               { required: true, message: 'Email is required' },
               { type: 'email', message: 'Invalid email address' },
@@ -176,7 +184,30 @@ export default function StaffPage() {
             <Select options={ASSIGNABLE_ROLES.map((r) => ({ value: r, label: r }))} />
           </Form.Item>
         </Form>
+        <Typography.Text type="secondary">
+          If this email already has an app account, the person is added right away. Otherwise they
+          receive an invitation with a one-time code — their account is created with the chosen role
+          when they accept.
+        </Typography.Text>
       </Drawer>
+
+      <Modal
+        title="Staff invitation created"
+        open={!!inviteCode}
+        onOk={() => { setInviteCode(null); setTick((t) => t + 1); }}
+        onCancel={() => { setInviteCode(null); setTick((t) => t + 1); }}
+        okText="Done"
+        cancelButtonProps={{ style: { display: 'none' } }}
+      >
+        <Typography.Paragraph type="secondary">
+          {inviteRole && <>Share this one-time code with your new {inviteRole}. </>}
+          When they open the portal invite link and register, their account is created with this
+          role. The code is shown only once — only its hash is stored.
+        </Typography.Paragraph>
+        <Typography.Paragraph copyable style={{ fontSize: 16, marginBottom: 0 }}>
+          {inviteCode}
+        </Typography.Paragraph>
+      </Modal>
     </PageContainer>
   );
 }

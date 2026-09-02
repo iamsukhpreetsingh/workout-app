@@ -56,8 +56,12 @@ denied** page — and the backend rejects the request anyway.
   plus an append-only lifecycle timeline), **membership plans**
   (create/edit/archive, duplicate-name and validation rules),
   **memberships overview** (all terms gym-wide with search + filters,
-  incl. FROZEN), staff management (add by email, role change,
-  deactivate/reactivate), trainers list.
+  incl. FROZEN), staff management (add by email — direct add for existing
+  accounts, one-time staff invitation for people without an app account;
+  role change, deactivate/reactivate with a reassignment guard),
+  **trainer assignments** (member Trainer tab: assign/change/unassign with
+  history; Trainers page shows per-trainer assigned-member counts), and the
+  trainer's own roster view.
 - **Placeholders** (`ComingSoon`): payments, attendance, member sub-tabs
   (payments/attendance/trainer/workouts/nutrition/documents/activity),
   workouts, nutrition, classes, communications, reports — their backend

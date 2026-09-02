@@ -281,6 +281,25 @@ from the client are selectors, never proof (verified against the JWT).
   extension: `extend {days 1-365}` pushes expiry and slides scheduled
   renewals. `GET /gym/my/memberships` now carries the current plan term
   (plan_name, membership_status, ends_on) for the mobile My Gym card.
+- **Staff & trainer management (Phase 8)**: staff roles stay gym-scoped
+  (OWNER/ADMIN/TRAINER/FRONT_DESK in `gym_staff`) and are NEVER derived
+  from users.role — a platform trainer (`users.role 'trainer'`) is a
+  different concept, and the same person can be a TRAINER at several gyms.
+  `POST /gym/:gymId/staff` with an email that has NO app account creates a
+  STAFF INVITATION (`gym_staff_invites`, one-time hashed code, 7-day
+  expiry, one PENDING per email per gym) — the public `/gym/invite/:token`
+  preview/accept/decline/register routes dispatch by type; register
+  creates the User AND the staff row atomically. Trainer assignments
+  (`gym_trainer_assignments`): `GET /:gymId/trainers` (assignable ACTIVE
+  TRAINER staff), `POST /:gymId/members/:memberId/trainer` (members.manage;
+  reassignment ENDS the previous assignment, history kept),
+  `POST …/trainer/:id/end`, `GET …/trainer` (member history),
+  `GET /:gymId/trainer-assignments` (gym-wide; a TRAINER is always
+  server-filtered to their own row), `GET /:gymId/trainer/members`
+  (assigned_members.view → the trainer's roster incl. membership status).
+  A trainer with ACTIVE assignments cannot be demoted/deactivated/removed
+  until members are reassigned (409). Non-app members (app_user_id NULL)
+  are first-class: assignments reference gym_members, never users.
 - **Standalone users are unaffected**: zero gyms is a fully supported
   state; membership plans/payments/attendance/classes are NOT implemented yet.
 

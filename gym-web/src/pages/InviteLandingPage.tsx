@@ -15,6 +15,11 @@ import {
   InvitationPreview, hasAccessToken, api, UserProfile,
 } from '../api';
 
+interface InvitationView extends InvitationPreview {
+  type?: 'member' | 'staff';
+  role?: string;
+}
+
 const STATE_MESSAGES: Record<string, { title: string; icon: React.ReactNode }> = {
   EXPIRED: { title: 'This invitation has expired', icon: <ClockCircleOutlined style={{ color: '#faad14' }} /> },
   CANCELLED: { title: 'This invitation was cancelled by the gym', icon: <CloseCircleOutlined style={{ color: '#ff4d4f' }} /> },
@@ -24,7 +29,7 @@ const STATE_MESSAGES: Record<string, { title: string; icon: React.ReactNode }> =
 
 export default function InviteLandingPage({ token }: { token: string }) {
   const { message } = AntApp.useApp();
-  const [invitation, setInvitation] = useState<InvitationPreview | null>(null);
+  const [invitation, setInvitation] = useState<InvitationView | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [mode, setMode] = useState<'decide' | 'register'>('decide');
@@ -95,8 +100,12 @@ export default function InviteLandingPage({ token }: { token: string }) {
         <Card style={{ width: 440 }}>
           <Result
             status="success"
-            title={`You're connected to ${invitation.gymName}`}
-            subTitle="Your app account is now linked to your gym membership. Open the fitness app to see your gym."
+            title={invitation.type === 'staff'
+              ? `Welcome to the ${invitation.gymName} team`
+              : `You're connected to ${invitation.gymName}`}
+            subTitle={invitation.type === 'staff'
+              ? `Your account is ready with the ${invitation.role} role. Sign in to the portal to get started.`
+              : 'Your app account is now linked to your gym membership. Open the fitness app to see your gym.'}
             extra={<Link to="/"><Button type="primary">Open the portal</Button></Link>}
           />
         </Card>
@@ -148,14 +157,17 @@ export default function InviteLandingPage({ token }: { token: string }) {
       <Card style={{ width: 440 }}>
         <div style={{ textAlign: 'center', marginBottom: 16 }}>
           <Typography.Title level={3} style={{ marginBottom: 4 }}>
-            Join {invitation.gymName}
+            {invitation.type === 'staff' ? `Join the ${invitation.gymName} team` : `Join ${invitation.gymName}`}
           </Typography.Title>
           <Typography.Text type="secondary">
-            Create your account to connect your gym membership.
+            {invitation.type === 'staff'
+              ? `You've been invited as ${invitation.role}. Create your account to get started.`
+              : 'Create your account to connect your gym membership.'}
           </Typography.Text>
         </div>
         <Typography.Paragraph style={{ textAlign: 'center' }}>
-          <Tag color="blue">{invitation.memberName}</Tag>
+          {invitation.type === 'staff' && <Tag color="gold">{invitation.role}</Tag>}
+          {invitation.type === 'member' && <Tag color="blue">{invitation.memberName}</Tag>}
           <Tag>{invitation.email}</Tag>
         </Typography.Paragraph>
 
@@ -195,7 +207,7 @@ export default function InviteLandingPage({ token }: { token: string }) {
             <Form.Item name="name" label="Your name" rules={[{ required: true, message: 'Name is required' }]}>
               <Input placeholder="Aman Kumar" />
             </Form.Item>
-            <Form.Item label="Email">
+            <Form.Item label={invitation.type === 'staff' ? 'Work email' : 'Email'}>
               <Input value={invitation.email} disabled />
             </Form.Item>
             <Form.Item

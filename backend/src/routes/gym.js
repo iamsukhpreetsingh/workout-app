@@ -14,6 +14,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { requireGymContext, requireGymPermission } = require('../middleware/gymAuth');
 const gyms = require('../data/gyms');
 const plans = require('../data/membershipPlans');
+const trainers = require('../data/gymTrainers');
 const storage = require('../data/storageService');
 const smtpProvider = require('../email/smtpProvider');
 
@@ -781,6 +782,111 @@ registerRoute(router, {
     httpError(res, e);
   }
 }, [requireAuth, requireGymContext(), requireGymPermission('memberships.view')]);
+
+// ── gym trainer assignments (Phase 8) ────────────────────────────────────
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/trainers',
+  description: "The gym's assignable trainers: ACTIVE staff with the TRAINER role. Requires permission: members.manage (OWNER, ADMIN).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.json(await trainers.listAssignableTrainers(req.gymContext.gymId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/trainer/members',
+  description: "The TRAINER's own roster: members currently assigned to them, with membership status. Server-filtered to the caller's staff row — a trainer can never see another trainer's members. Requires permission: assigned_members.view (TRAINER, OWNER, ADMIN).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('assigned_members.view')], async (req, res) => {
+  try {
+    const staffId = req.gymContext.gymRole === 'TRAINER'
+      ? req.gymContext.staffId
+      : (req.query.trainer_staff_id || req.gymContext.staffId);
+    res.json(await trainers.listAssignedMembersForTrainer(req.gymContext.gymId, staffId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('assigned_members.view')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/trainer-assignments',
+  description: "Gym-wide trainer assignments (optionally ?trainer_staff_id=). Requires permission: members.view or assigned_members.view.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext()], async (req, res) => {
+  try {
+    const c = req.gymContext;
+    const allowed = c.permissions.includes('members.view') || c.permissions.includes('assigned_members.view');
+    if (!allowed) return res.status(403).json({ error: 'Requires permission: members.view' });
+    res.json(await trainers.listGymTrainerAssignments(c.gymId,
+      { trainer_staff_id: c.gymRole === 'TRAINER' ? c.staffId : req.query.trainer_staff_id }));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext()]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/trainer',
+  description: "The member's trainer assignment history. Requires permission: members.view (OWNER, ADMIN, FRONT_DESK).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
+  try {
+    res.json(await trainers.listMemberTrainerAssignments(req.gymContext.gymId, req.params.memberId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/trainer',
+  description: "Assigns a gym trainer to the member (works with or without an app account). Reassigning ends the previous assignment (kept as ENDED history). Requires permission: members.manage (OWNER, ADMIN).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await trainers.assignTrainer(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/trainer/:assignmentId/end',
+  description: 'Ends a trainer assignment (kept as history). Requires permission: members.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.json(await trainers.endTrainerAssignment(
+      req.gymContext.gymId, req.params.memberId, req.params.assignmentId,
+      { userId: req.user.id }, req.ip, { reason: req.body?.reason }, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
 
 // ── audit log ────────────────────────────────────────────────────────────
 

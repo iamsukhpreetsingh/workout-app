@@ -19,6 +19,7 @@ import StatusBadge from '../components/StatusBadge';
 import { ErrorState, ComingSoon } from '../components/States';
 import { MemberFormFields, memberFormToPayload, AppConnectionTag } from './MembersPage';
 import MemberMembershipTab from '../components/MemberMembershipTab';
+import MemberTrainerTab from '../components/MemberTrainerTab';
 import { useGymContext, hasPermission } from '../permissions';
 import {
   getMember, updateMember, linkMemberApp, unlinkMemberApp,
@@ -296,9 +297,7 @@ export default function MemberDetailPage() {
           { key: 'attendance', label: 'Attendance', children: comingSoon(
               'Attendance', 'Phase 1b',
               'Check-in/check-out history for this member arrives with the attendance phase.') },
-          { key: 'trainer', label: 'Trainer', children: comingSoon(
-              'Trainer assignment', 'Phase 2',
-              'Assigning gym trainers to this member arrives with the coaching phase.') },
+          { key: 'trainer', label: 'Trainer', children: <MemberTrainerTab memberId={member.id} /> },
           { key: 'workouts', label: 'Workouts', children: comingSoon(
               'Workouts', 'Phase 2',
               'Gym workout templates assigned to this member arrive with the coaching phase.') },

@@ -12,11 +12,13 @@ const GYM_PERMISSIONS = {
     'plans.manage', 'memberships.view', 'memberships.manage',
     'payments.manage', 'attendance.manage', 'checkin.manage',
     'content.manage', 'communications.manage', 'reports.view', 'settings.manage',
+    'assigned_members.view',
   ],
   ADMIN: [
     'members.view', 'members.create', 'members.manage',
     'memberships.view', 'memberships.manage',
     'attendance.manage', 'content.manage', 'communications.manage',
+    'assigned_members.view',
   ],
   TRAINER: [
     'assigned_members.view', 'workouts.manage',

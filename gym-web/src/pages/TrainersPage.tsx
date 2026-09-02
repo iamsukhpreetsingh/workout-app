@@ -6,7 +6,7 @@ import DataTable from '../components/DataTable';
 import FilterBar from '../components/FilterBar';
 import StatusBadge from '../components/StatusBadge';
 import { useGymContext } from '../permissions';
-import { listStaff, StaffRow } from '../api';
+import { listStaff, listGymTrainerAssignments, StaffRow, TrainerAssignment } from '../api';
 
 export default function TrainersPage() {
   const ctx = useGymContext();
@@ -29,6 +29,25 @@ export default function TrainersPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const [assignments, setAssignments] = useState<TrainerAssignment[]>([]);
+  const [assignmentsLoading, setAssignmentsLoading] = useState(true);
+  const [assignmentsError, setAssignmentsError] = useState<any>(null);
+  const [assignmentsTick, setAssignmentsTick] = useState(0);
+
+  const loadAssignments = useCallback(async () => {
+    setAssignmentsLoading(true);
+    setAssignmentsError(null);
+    try {
+      setAssignments(await listGymTrainerAssignments(ctx!.gymId));
+    } catch (e: any) {
+      setAssignmentsError(e);
+    } finally {
+      setAssignmentsLoading(false);
+    }
+  }, [ctx?.gymId]);
+
+  useEffect(() => { loadAssignments(); }, [loadAssignments, assignmentsTick]);
+
   const trainers = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return rows
@@ -41,8 +60,13 @@ export default function TrainersPage() {
     { title: 'Email', dataIndex: 'email' },
     { title: 'Status', dataIndex: 'status', render: (s: string) => <StatusBadge status={s} /> },
     { title: 'Since', dataIndex: 'created_at', render: (v: string) => String(v).slice(0, 10) },
-    { title: 'Assigned members', key: 'assigned', render: () => '—' },
-  ], []);
+    { title: 'Assigned members', key: 'assigned', render: (_: any, r: StaffRow) => {
+      if (assignmentsLoading) return '…';
+      if (assignmentsError) return '—';
+      const active = assignments.filter((a) => a.trainer_email === r.email && a.status === 'ACTIVE');
+      return active.length ? `${active.length}` : '0';
+    } },
+  ], [assignments, assignmentsLoading, assignmentsError]);
 
   return (
     <PageContainer
@@ -60,7 +84,7 @@ export default function TrainersPage() {
         emptyTitle="No trainers yet"
         emptyDescription={q
           ? 'No trainers match the current search.'
-          : 'Add a staff member with the TRAINER role — assignments follow in a later phase.'}
+          : 'Add a staff member with the TRAINER role, then assign members from their profile.'}
         page={0}
         pageSize={trainers.length || 1}
         hasNext={false}
