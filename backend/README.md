@@ -244,6 +244,23 @@ from the client are selectors, never proof (verified against the JWT).
   blocked for suspended/deactivated gyms and cancelled members, and is
   audited (`member.invite_accepted|declined`). `GET /auth/me` exposes the
   signed-in account's safe profile for the portal's identity probe.
+- **Membership plans (Phase 6)**: `membership_plans` belong to a gym
+  (name unique per gym, duration value+unit day/week/month/year, price in
+  integer minor units, currency, access_level, included PT sessions,
+  DRAFT/ACTIVE/ARCHIVED). Only ACTIVE plans are assignable; ARCHIVED plans
+  block NEW assignments while existing memberships stay valid — every
+  `member_memberships` row SNAPSHOTS plan name/price/currency/duration at
+  assignment, so plan edits never rewrite history. Routes (plans.manage is
+  OWNER; memberships.manage OWNER/ADMIN; memberships.view also FRONT_DESK):
+  `GET/POST/PATCH /gym/:gymId/plans`, `GET /gym/:gymId/memberships`
+  (gym-wide, search+filter+pagination), `GET/POST
+  /gym/:gymId/members/:memberId/memberships` (assign; `replace_active`
+  performs a plan change and keeps the old term as CANCELLED history),
+  `POST …/memberships/:id/cancel`, `POST …/memberships/:id/renew`
+  (early renewal → UPCOMING starting the day after the current term ends,
+  snapshotting the plan's CURRENT price; expired-but-uncancelled terms
+  renew ACTIVE today). Assignment works identically for members with and
+  without app accounts.
 - **Standalone users are unaffected**: zero gyms is a fully supported
   state; membership plans/payments/attendance/classes are NOT implemented yet.
 

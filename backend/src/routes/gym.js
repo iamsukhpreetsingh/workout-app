@@ -13,6 +13,7 @@ const { registerRoute } = require('../admin/registry');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { requireGymContext, requireGymPermission } = require('../middleware/gymAuth');
 const gyms = require('../data/gyms');
+const plans = require('../data/membershipPlans');
 const storage = require('../data/storageService');
 const smtpProvider = require('../email/smtpProvider');
 
@@ -571,6 +572,144 @@ registerRoute(router, {
     httpError(res, e, 400);
   }
 }, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+// ── membership plans (Phase 6) ───────────────────────────────────────────
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/plans',
+  description: 'Lists membership plans (name, price, duration, access level, PT sessions, status). Requires permission: memberships.view (OWNER, ADMIN, FRONT_DESK).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.view')], async (req, res) => {
+  try {
+    res.json(await plans.listPlans(req.gymContext.gymId, { status: req.query.status }));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.view')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/plans',
+  description: 'Creates a membership plan (price in minor units, e.g. paise). Duplicate names within the gym are rejected. Requires permission: plans.manage (OWNER).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('plans.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await plans.createPlan(
+      req.gymContext.gymId, { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('plans.manage')]);
+
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/:gymId/plans/:planId',
+  description: 'Updates a plan (price changes never affect existing memberships — those keep their assignment-time snapshot). Archiving prevents NEW assignments only. Requires permission: plans.manage (OWNER).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('plans.manage')], async (req, res) => {
+  try {
+    res.json(await plans.updatePlan(
+      req.gymContext.gymId, req.params.planId, { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('plans.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/memberships',
+  description: "The member's membership history (snapshotted terms). Requires permission: memberships.view (OWNER, ADMIN, FRONT_DESK).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.view')], async (req, res) => {
+  try {
+    res.json(await plans.listMemberMemberships(req.gymContext.gymId, req.params.memberId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.view')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/memberships',
+  description: "Assigns a plan to the member (ACTIVE or ARCHIVED-plan rules apply; works with or without an app account). Set replace_active=true for a plan change — the current term is cancelled and kept in history. Requires permission: memberships.manage (OWNER, ADMIN).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await plans.assignMembership(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/memberships/:membershipId/cancel',
+  description: 'Cancels a membership (kept in history with reason). Requires permission: memberships.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')], async (req, res) => {
+  try {
+    res.json(await plans.cancelMembership(
+      req.gymContext.gymId, req.params.memberId, req.params.membershipId,
+      { userId: req.user.id }, req.ip, { reason: req.body?.reason }, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/memberships/:membershipId/renew',
+  description: "Renews a membership: snapshots the plan's CURRENT price into a new term (early renewals become UPCOMING, starting when the current term ends; expired terms become ACTIVE today). Historical terms are never modified. Requires permission: memberships.manage (OWNER, ADMIN).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await plans.renewMembership(
+      req.gymContext.gymId, req.params.memberId, req.params.membershipId,
+      { userId: req.user.id }, req.ip, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/memberships',
+  description: "The gym's memberships across all members (search + status filter + offset pagination). Requires permission: memberships.view (OWNER, ADMIN, FRONT_DESK).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.view')], async (req, res) => {
+  try {
+    res.json(await plans.listGymMemberships(req.gymContext.gymId, {
+      q: req.query.q, status: req.query.status,
+      limit: req.query.limit, offset: req.query.offset,
+    }));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.view')]);
 
 // ── audit log ────────────────────────────────────────────────────────────
 

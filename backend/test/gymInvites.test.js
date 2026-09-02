@@ -211,14 +211,16 @@ test('non-existing user: register via invitation creates ONE User and links the 
 
 test('registration failure (email already registered) creates no partial rows', async () => {
   // invited email already belongs to an existing user (PEOPLE.rahul)
-  const before = await query('SELECT COUNT(*)::int AS c FROM users');
+  // scoped to the attacker's email — the full-suite run executes test files
+  // concurrently against the shared database, so global counts race
+  const before = await query('SELECT COUNT(*)::int AS c FROM users WHERE email = $1', [PEOPLE.attacker.email]);
   const member = await createMember(PEOPLE.owner.email, gymA.id, 'ClashCase', PEOPLE.attacker.email);
   const code = await inviteMember(gymA.id, member.id);
   const reg = await api(null, 'POST', `/gym/invite/${code}/register`,
     { name: 'Impostor Rahul', password: 'Whatever1!' });
   const regErr = await reg.json();
   assert.strictEqual(reg.status, 409, `register clash: ${JSON.stringify(regErr)}`);
-  const after = await query('SELECT COUNT(*)::int AS c FROM users');
+  const after = await query('SELECT COUNT(*)::int AS c FROM users WHERE email = $1', [PEOPLE.attacker.email]);
   assert.strictEqual(after.rows[0].c, before.rows[0].c, 'no user row created by the failed registration');
   // member unchanged and unlinked; re-registering with the same invited
   // email keeps failing (it belongs to an existing account) — the correct

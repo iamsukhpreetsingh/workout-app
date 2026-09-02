@@ -51,13 +51,16 @@ denied** page — and the backend rejects the request anyway.
   and app-connection filters; pagination; create drawer), member detail
   (full profile incl. DOB/gender/emergency contact, edit, app-connection
   card with invite / re-invite / withdraw / link / unlink, membership card
-  with leave & reactivate), staff management (add by email, role change,
-  deactivate/reactivate), trainers list.
-- **Placeholders** (`ComingSoon`): memberships & plans, payments,
-  attendance, member sub-tabs (membership/payments/attendance/trainer/
-  workouts/nutrition/documents/activity), workouts, nutrition, classes,
-  communications, reports — their backend phases haven't shipped. No fake
-  data, no dead buttons.
+  with leave & reactivate, **real Membership tab**: assign plan / plan
+  change / cancel / renew with price snapshots), **membership plans**
+  (create/edit/archive, duplicate-name and validation rules),
+  **memberships overview** (all terms gym-wide with search + filters),
+  staff management (add by email, role change, deactivate/reactivate),
+  trainers list.
+- **Placeholders** (`ComingSoon`): payments, attendance, member sub-tabs
+  (payments/attendance/trainer/workouts/nutrition/documents/activity),
+  workouts, nutrition, classes, communications, reports — their backend
+  phases haven't shipped. No fake data, no dead buttons.
 
 ## Member state model
 

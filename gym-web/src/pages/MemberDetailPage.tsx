@@ -18,6 +18,7 @@ import PageContainer from '../components/PageContainer';
 import StatusBadge from '../components/StatusBadge';
 import { ErrorState, ComingSoon } from '../components/States';
 import { MemberFormFields, memberFormToPayload, AppConnectionTag } from './MembersPage';
+import MemberMembershipTab from '../components/MemberMembershipTab';
 import { useGymContext, hasPermission } from '../permissions';
 import {
   getMember, updateMember, linkMemberApp, unlinkMemberApp,
@@ -288,9 +289,7 @@ export default function MemberDetailPage() {
         onChange={(k) => navigate(`/members/${member.id}${k === 'overview' ? '' : `/${k}`}`)}
         items={[
           { key: 'overview', label: 'Overview', children: overview },
-          { key: 'membership', label: 'Membership', children: comingSoon(
-              'Membership', 'Phase 1b',
-              'Plan assignment, renewals, freeze/cancel and expiry tracking for this member arrive with the billing phase.') },
+          { key: 'membership', label: 'Membership', children: <MemberMembershipTab memberId={member.id} /> },
           { key: 'payments', label: 'Payments', children: comingSoon(
               'Payments', 'Phase 1b',
               'Recorded payments and receipts for this member arrive with the billing phase.') },

@@ -14,7 +14,7 @@ import {
   DashboardOutlined, TeamOutlined, IdcardOutlined, CreditCardOutlined,
   CheckSquareOutlined, UserOutlined, ThunderboltOutlined, AppleOutlined,
   CalendarOutlined, SoundOutlined, BarChartOutlined, SettingOutlined,
-  PlusOutlined, LogoutOutlined, CrownOutlined,
+  PlusOutlined, LogoutOutlined, CrownOutlined, TagOutlined,
 } from '@ant-design/icons';
 import {
   UserProfile, GymMembershipEntry, getMyGyms, getGymPermissions, getSelectedGymId,
@@ -29,6 +29,8 @@ import Dashboard from './pages/Dashboard';
 import SettingsPage from './pages/SettingsPage';
 import MembersPage from './pages/MembersPage';
 import MemberDetailPage from './pages/MemberDetailPage';
+import MembershipsPage from './pages/MembershipsPage';
+import PlansPage from './pages/PlansPage';
 import StaffPage from './pages/StaffPage';
 import TrainersPage from './pages/TrainersPage';
 import PlaceholderPage from './pages/PlaceholderPage';
@@ -40,6 +42,7 @@ const NAV_ITEMS = [
   { path: '/', label: 'Dashboard', icon: <DashboardOutlined />, perms: [] },
   { path: '/members', label: 'Members', icon: <TeamOutlined />, perms: ['members.view'] },
   { path: '/memberships', label: 'Memberships', icon: <IdcardOutlined />, perms: ['memberships.view'] },
+  { path: '/memberships/plans', label: 'Plans', icon: <TagOutlined />, perms: ['plans.manage'] },
   { path: '/payments', label: 'Payments', icon: <CreditCardOutlined />, perms: ['payments.manage'] },
   { path: '/attendance', label: 'Attendance', icon: <CheckSquareOutlined />, perms: ['attendance.manage', 'checkin.manage'] },
   { path: '/trainers', label: 'Trainers', icon: <UserOutlined />, perms: ['staff.manage'] },
@@ -186,12 +189,8 @@ function Shell() {
       <Route path="/members/:id" element={permGuard(['members.view'], <MemberDetailPage />)} />
       <Route path="/members/:id/:tab" element={permGuard(['members.view'], <MemberDetailPage />)} />
 
-      <Route path="/memberships" element={permGuard(['memberships.view'],
-        <PlaceholderPage section="Memberships" title="Memberships" phase="Phase 1b"
-          description="Membership plan sales, renewals, freeze/cancel and expiry tracking." />)} />
-      <Route path="/memberships/plans" element={permGuard(['memberships.view'],
-        <PlaceholderPage section="Membership plans" title="Membership plans" phase="Phase 1b"
-          description="Define priced plans (duration, sessions, amount) that memberships are sold against." />)} />
+      <Route path="/memberships" element={permGuard(['memberships.view'], <MembershipsPage />)} />
+      <Route path="/memberships/plans" element={permGuard(['plans.manage'], <PlansPage />)} />
 
       <Route path="/payments" element={permGuard(['payments.manage'],
         <PlaceholderPage section="Payments" title="Payments" phase="Phase 1b"
