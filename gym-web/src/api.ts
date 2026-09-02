@@ -403,7 +403,7 @@ export interface MemberMembership {
   price_cents: number;
   currency: string;
   included_pt_sessions?: number;
-  status: 'ACTIVE' | 'UPCOMING' | 'CANCELLED' | 'EXPIRED';
+  status: 'ACTIVE' | 'FROZEN' | 'UPCOMING' | 'CANCELLED' | 'EXPIRED';
   starts_on: string;
   ends_on: string;
   cancelled_at?: string | null;
@@ -429,6 +429,37 @@ export const cancelMembership = (gymId: string, memberId: string, membershipId: 
 export const renewMembership = (gymId: string, memberId: string, membershipId: string) =>
   api<MemberMembership>(`/gym/${gymId}/members/${memberId}/memberships/${membershipId}/renew`,
     { method: 'POST' });
+
+// lifecycle (Phase 7)
+export const freezeMembership = (
+  gymId: string, memberId: string, membershipId: string, body: { starts_on?: string; reason?: string }
+) => api<{ membership: MemberMembership; freeze: any }>(
+  `/gym/${gymId}/members/${memberId}/memberships/${membershipId}/freeze`, { method: 'POST', body }
+);
+
+export const resumeMembership = (
+  gymId: string, memberId: string, membershipId: string, body: { resumed_on?: string; cancel?: boolean } = {}
+) => api<{ membership: MemberMembership; frozen_days: number }>(
+  `/gym/${gymId}/members/${memberId}/memberships/${membershipId}/resume`, { method: 'POST', body }
+);
+
+export const extendMembership = (gymId: string, memberId: string, membershipId: string, days: number) =>
+  api<MemberMembership>(`/gym/${gymId}/members/${memberId}/memberships/${membershipId}/extend`,
+    { method: 'POST', body: { days } });
+
+export interface MembershipEvent {
+  id: string;
+  membership_id: string;
+  event: string;
+  occurred_on: string;
+  details: Record<string, any>;
+  actor_name: string | null;
+  plan_name: string;
+  created_at: string;
+}
+
+export const listMembershipEvents = (gymId: string, memberId: string) =>
+  api<MembershipEvent[]>(`/gym/${gymId}/members/${memberId}/memberships/events`);
 
 export const listGymMemberships = (
   gymId: string,

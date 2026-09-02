@@ -261,6 +261,26 @@ from the client are selectors, never proof (verified against the JWT).
   snapshotting the plan's CURRENT price; expired-but-uncancelled terms
   renew ACTIVE today). Assignment works identically for members with and
   without app accounts.
+- **Membership lifecycle (Phase 7)**: statuses
+  ACTIVE/FROZEN/UPCOMING/CANCELLED/EXPIRED. FREEZE RULE (one consistent
+  rule everywhere): a freeze pauses the term; on resume (or freeze
+  cancel) `ends_on` moves forward by the EXACT number of frozen calendar
+  days (the resume day itself is not frozen) — freeze 01 Aug → resume
+  01 Sep shifts expiry by 31 days. Frozen terms never auto-expire; a term
+  still ending before today after the shift becomes EXPIRED; scheduled
+  (UPCOMING) renewals slide by the same days. Renewal is blocked while
+  frozen; renewing an expired term starts a new ACTIVE term today; a plan
+  change cancels a frozen term and closes its freeze. `membership_freezes`
+  (one open freeze per membership) and append-only `membership_events`
+  (assigned/frozen/resumed/extended/renewed/cancelled/expired) preserve
+  the full lifecycle — never a bare status overwrite. Expiry and
+  UPCOMING→ACTIVE promotion are evaluated lazily in the GYM'S TIMEZONE on
+  every read (idempotent, no cron). Routes (memberships.manage):
+  `POST …/memberships/:id/freeze|resume|extend`; `GET
+  …/memberships/events` (memberships.view) returns the timeline. Manual
+  extension: `extend {days 1-365}` pushes expiry and slides scheduled
+  renewals. `GET /gym/my/memberships` now carries the current plan term
+  (plan_name, membership_status, ends_on) for the mobile My Gym card.
 - **Standalone users are unaffected**: zero gyms is a fully supported
   state; membership plans/payments/attendance/classes are NOT implemented yet.
 

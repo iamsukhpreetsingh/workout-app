@@ -12,7 +12,7 @@ import { usePagedList } from '../hooks/usePagedList';
 import { useGymContext } from '../permissions';
 import { listGymMemberships, formatMoney, MemberMembership } from '../api';
 
-const STATUSES = ['ACTIVE', 'UPCOMING', 'CANCELLED', 'EXPIRED'];
+const STATUSES = ['ACTIVE', 'FROZEN', 'UPCOMING', 'CANCELLED', 'EXPIRED'];
 
 export default function MembershipsPage() {
   const ctx = useGymContext();

@@ -20,6 +20,47 @@ class HttpError extends Error {
   }
 }
 
+// ── lifecycle helpers (Phase 7) ──────────────────────────────────────────
+
+// Append-only lifecycle timeline — called inside the SAME transaction as
+// every status transition, so a status change is never a bare overwrite.
+async function recordEvent(client, gymId, membershipId, event, { details, actor } = {}) {
+  await client.query(
+    `INSERT INTO membership_events (gym_id, membership_id, event, occurred_on, details, actor_user_id)
+     VALUES ($1,$2,$3,(now() AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $1))::date,$4,$5)`,
+    [gymId, membershipId, event, details ? JSON.stringify(details) : '{}', actor?.userId ?? actor ?? null]
+  );
+}
+
+// Lazy, idempotent maintenance evaluated in the GYM's timezone: expire
+// overdue ACTIVE terms (FROZEN never auto-expires — the freeze pauses the
+// clock), then promote UPCOMING terms whose start date has arrived. Runs
+// before reads and inside lifecycle transactions.
+async function runMembershipMaintenance(client, gymId) {
+  const expired = await client.query(
+    `UPDATE member_memberships mm SET status = 'EXPIRED', updated_at = now()
+     FROM gyms g
+     WHERE mm.gym_id = $1 AND g.id = mm.gym_id AND mm.status = 'ACTIVE'
+       AND mm.ends_on < (now() AT TIME ZONE g.timezone)::date
+     RETURNING mm.id`,
+    [gymId]
+  );
+  for (const row of expired.rows) await recordEvent(client, gymId, row.id, 'expired', {});
+  const promoted = await client.query(
+    `UPDATE member_memberships mm SET status = 'ACTIVE', updated_at = now()
+     WHERE mm.gym_id = $1 AND mm.status = 'UPCOMING'
+       AND mm.starts_on <= (SELECT (now() AT TIME ZONE g.timezone)::date FROM gyms g WHERE g.id = mm.gym_id)
+       AND NOT EXISTS (
+         SELECT 1 FROM member_memberships other
+         WHERE other.member_id = mm.member_id AND other.status = 'ACTIVE' AND other.id != mm.id
+       )
+     RETURNING mm.id`,
+    [gymId]
+  );
+  for (const row of promoted.rows) await recordEvent(client, gymId, row.id, 'term_started', {});
+  return { expired: expired.rows.length, promoted: promoted.rows.length };
+}
+
 const DURATION_UNITS = ['day', 'week', 'month', 'year'];
 const ACCESS_LEVELS = ['gym_only', 'gym_classes', 'all_access'];
 const PLAN_STATUSES = ['DRAFT', 'ACTIVE', 'ARCHIVED'];
@@ -167,6 +208,7 @@ async function getPlan(gymId, planId) {
 // ── member memberships ───────────────────────────────────────────────────
 
 async function listMemberMemberships(gymId, memberId) {
+  await transaction(async (client) => runMembershipMaintenance(client, gymId));
   const { rows } = await query(
     `SELECT mm.*, gm.first_name, gm.last_name, gm.member_code,
             gm.app_user_id, gm.status AS member_status
@@ -181,6 +223,7 @@ async function listMemberMemberships(gymId, memberId) {
 
 // Gym-wide current memberships (the Memberships page).
 async function listGymMemberships(gymId, { q, status, limit = 50, offset = 0 } = {}) {
+  await transaction(async (client) => runMembershipMaintenance(client, gymId));
   const vals = [gymId];
   const where = ['mm.gym_id = $1'];
   if (status) { vals.push(status); where.push(`mm.status = $${vals.length}`); }
@@ -241,21 +284,29 @@ async function assignMembership(gymId, memberId, actor, ip, { plan_id, starts_on
       throw new HttpError(409, 'Archived plans cannot be assigned to members');
     }
 
-    // one ACTIVE / UPCOMING term per member
+    // one running term per member — FROZEN counts (a plan change ends the freeze)
     const { rows: current } = await client.query(
-      `SELECT * FROM member_memberships WHERE member_id = $1 AND status = 'ACTIVE' FOR UPDATE`,
+      `SELECT * FROM member_memberships WHERE member_id = $1 AND status IN ('ACTIVE','FROZEN') FOR UPDATE`,
       [memberId]
     );
     if (current.length) {
       if (!replace_active) {
         throw new HttpError(409,
-          `This member already has an ACTIVE membership (${current[0].plan_name}, ends ${current[0].ends_on}). Use a plan change to replace it, or renew.`);
+          `This member already has a running membership (${current[0].plan_name}, ${current[0].status}, ends ${current[0].ends_on}). Use a plan change to replace it, or renew.`);
       }
       await client.query(
         `UPDATE member_memberships SET status = 'CANCELLED', cancelled_at = now(),
            cancel_reason = $2, updated_at = now() WHERE id = $1`,
         [current[0].id, cancel_reason || 'plan_change']
       );
+      // an open freeze on the replaced term ends with it
+      await client.query(
+        `UPDATE membership_freezes SET status = 'CANCELLED', ended_on = (now() AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $2))::date,
+           updated_at = now() WHERE membership_id = $1 AND status = 'ACTIVE'`,
+        [current[0].id, gymId]
+      );
+      await recordEvent(client, gymId, current[0].id, 'cancelled',
+        { details: { reason: cancel_reason || 'plan_change' }, actor });
     }
     const { rows: upcoming } = await client.query(
       `SELECT id FROM member_memberships WHERE member_id = $1 AND status = 'UPCOMING' FOR UPDATE`,
@@ -265,16 +316,19 @@ async function assignMembership(gymId, memberId, actor, ip, { plan_id, starts_on
       throw new HttpError(409, 'This member already has a renewal scheduled — cancel it first');
     }
 
-    // calendar-correct end date, snapshot from the plan at assignment time
+    // calendar-correct dates in the GYM's timezone, snapshot from the plan
+    // at assignment time
     const { rows } = await client.query(
       `INSERT INTO member_memberships
          (gym_id, member_id, plan_id, plan_name, plan_duration_value, plan_duration_unit,
           price_cents, currency, status, starts_on, ends_on)
        SELECT $1, $2, p.id, p.name, p.duration_value, p.duration_unit,
               p.price_cents, p.currency, 'ACTIVE',
-              COALESCE($4::date, CURRENT_DATE),
-              (COALESCE($4::date, CURRENT_DATE) + (p.duration_value || ' ' || p.duration_unit)::interval)::date
-       FROM membership_plans p WHERE p.id = $3 AND p.gym_id = $5
+              COALESCE($4::date, (now() AT TIME ZONE g.timezone)::date),
+              (COALESCE($4::date, (now() AT TIME ZONE g.timezone)::date)
+                 + (p.duration_value || ' ' || p.duration_unit)::interval)::date
+       FROM membership_plans p JOIN gyms g ON g.id = p.gym_id
+       WHERE p.id = $3 AND p.gym_id = $5
        RETURNING *`,
       [gymId, memberId, plan.id, start, gymId]
     );
@@ -285,6 +339,8 @@ async function assignMembership(gymId, memberId, actor, ip, { plan_id, starts_on
                starts_on: rows[0].starts_on, ends_on: rows[0].ends_on,
                replaced: current[0]?.id ?? null },
     });
+    await recordEvent(client, gymId, rows[0].id, current[0] ? 'plan_changed' : 'assigned',
+      { details: { plan: rows[0].plan_name, price_cents: rows[0].price_cents }, actor });
     return rows[0];
   });
 }
@@ -297,7 +353,7 @@ async function cancelMembership(gymId, memberId, membershipId, actor, ip, { reas
     );
     if (!rows.length) throw new HttpError(404, 'Membership not found');
     const m = rows[0];
-    if (m.status !== 'ACTIVE' && m.status !== 'UPCOMING') {
+    if (!['ACTIVE', 'FROZEN', 'UPCOMING'].includes(m.status)) {
       throw new HttpError(400, `A ${m.status} membership cannot be cancelled`);
     }
     const updated = await client.query(
@@ -305,11 +361,20 @@ async function cancelMembership(gymId, memberId, membershipId, actor, ip, { reas
          cancel_reason = $2, updated_at = now() WHERE id = $1 RETURNING *`,
       [m.id, reason || 'member_request']
     );
+    if (m.status === 'FROZEN') {
+      // cancellation during freeze closes the open freeze with the term
+      await client.query(
+        `UPDATE membership_freezes SET status = 'CANCELLED', ended_on = (now() AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $2))::date,
+           updated_at = now() WHERE membership_id = $1 AND status = 'ACTIVE'`,
+        [m.id, gymId]
+      );
+    }
     await gymAudit(client, {
       gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
       action: 'membership.cancelled', entity: 'member_membership', entityId: m.id,
       before: { status: m.status }, after: { status: 'CANCELLED', reason: reason || 'member_request' },
     });
+    await recordEvent(client, gymId, m.id, 'cancelled', { details: { reason: reason || 'member_request' }, actor });
     return updated.rows[0];
   });
 }
@@ -320,12 +385,16 @@ async function cancelMembership(gymId, memberId, membershipId, actor, ip, { reas
 // snapshots the plan's CURRENT price — historical rows are never touched.
 async function renewMembership(gymId, memberId, membershipId, actor, ip, gymAudit) {
   return transaction(async (client) => {
+    await runMembershipMaintenance(client, gymId);
     const { rows } = await client.query(
       `SELECT * FROM member_memberships WHERE id = $1 AND gym_id = $2 AND member_id = $3 FOR UPDATE`,
       [membershipId, gymId, memberId]
     );
     if (!rows.length) throw new HttpError(404, 'Membership not found');
     const current = rows[0];
+    if (current.status === 'FROZEN') {
+      throw new HttpError(400, 'Resume the membership before renewing — a freeze pauses the term');
+    }
     if (current.status === 'CANCELLED') {
       throw new HttpError(400, 'A cancelled membership cannot be renewed — assign a plan instead');
     }
@@ -345,7 +414,11 @@ async function renewMembership(gymId, memberId, membershipId, actor, ip, gymAudi
     if (!planRows.length) throw new HttpError(404, 'The plan for this membership no longer exists');
     const plan = planRows[0]; // may be ARCHIVED — existing members keep their plan
 
-    const today = new Date().toISOString().slice(0, 10);
+    // expiry boundary in the GYM's timezone
+    const tzToday = await client.query(
+      `SELECT (now() AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $1))::date AS d`, [gymId]
+    );
+    const today = tzToday.rows[0].d; // DATE comes back as a calendar string
     const expired = current.ends_on < today;
     const startsOn = expired ? today : nextDay(current.ends_on);
     const status = expired ? 'ACTIVE' : 'UPCOMING';
@@ -376,6 +449,8 @@ async function renewMembership(gymId, memberId, membershipId, actor, ip, gymAudi
                starts_on: created.rows[0].starts_on, ends_on: created.rows[0].ends_on,
                previous: current.id, previous_price_cents: current.price_cents },
     });
+    await recordEvent(client, gymId, created.rows[0].id, 'renewed',
+      { details: { previous: current.id, price_cents: created.rows[0].price_cents }, actor });
     return created.rows[0];
   });
 }
@@ -386,9 +461,197 @@ function nextDay(dateStr) {
   return d.toISOString().slice(0, 10);
 }
 
+// ── membership lifecycle (Phase 7): freeze / resume / extend ─────────────
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Freeze an ACTIVE term. The term pauses; when the freeze ends the expiry
+// moves by the exact number of frozen days (the ONE consistent rule).
+async function freezeMembership(gymId, memberId, membershipId, actor, ip, { starts_on, reason } = {}, gymAudit) {
+  if (starts_on && !DATE_RE.test(String(starts_on))) {
+    throw new HttpError(400, 'starts_on must be a YYYY-MM-DD date');
+  }
+  return transaction(async (client) => {
+    await runMembershipMaintenance(client, gymId);
+    const { rows } = await client.query(
+      `SELECT * FROM member_memberships WHERE id = $1 AND gym_id = $2 AND member_id = $3 FOR UPDATE`,
+      [membershipId, gymId, memberId]
+    );
+    if (!rows.length) throw new HttpError(404, 'Membership not found');
+    const term = rows[0];
+    if (term.status === 'FROZEN') throw new HttpError(409, 'This membership is already frozen');
+    if (term.status !== 'ACTIVE') {
+      throw new HttpError(400, `Only an ACTIVE membership can be frozen (this one is ${term.status})`);
+    }
+    // freeze boundaries: within the running term, not in the future
+    const todayRows = await client.query(
+      `SELECT (now() AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $1))::date AS d`, [gymId]
+    );
+    const today = todayRows.rows[0].d;
+    const start = starts_on || today;
+    if (start > today) throw new HttpError(400, 'A freeze cannot start in the future');
+    if (start < term.starts_on) throw new HttpError(400, 'A freeze cannot start before the membership does');
+    if (start > term.ends_on) throw new HttpError(400, 'This membership has already ended');
+
+    await client.query(
+      `UPDATE member_memberships SET status = 'FROZEN', updated_at = now() WHERE id = $1`,
+      [term.id]
+    );
+    const { rows: freezeRows } = await client.query(
+      `INSERT INTO membership_freezes (gym_id, membership_id, starts_on, reason, created_by)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [gymId, term.id, start, reason || null, actor?.userId ?? actor ?? null]
+    );
+    await gymAudit(client, {
+      gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
+      action: 'membership.frozen', entity: 'member_membership', entityId: term.id,
+      after: { freeze: freezeRows[0].id, starts_on: start },
+    });
+    await recordEvent(client, gymId, term.id, 'frozen',
+      { details: { starts_on: start, reason: reason || null }, actor });
+    return { membership: { ...term, status: 'FROZEN' }, freeze: freezeRows[0] };
+  });
+}
+
+// Resume a frozen term (or cancel the freeze — same mechanics, different
+// label). The expiry moves forward by the exact number of frozen days
+// (the resume date itself is NOT frozen): freeze 01 Aug → resume 01 Sep
+// shifts the expiry by 31 days. If the term still ends before today after
+// the shift it becomes EXPIRED; a scheduled renewal shifts by the same days.
+async function resumeMembership(gymId, memberId, membershipId, actor, ip, { resumed_on, cancel = false } = {}, gymAudit) {
+  if (resumed_on && !DATE_RE.test(String(resumed_on))) {
+    throw new HttpError(400, 'resumed_on must be a YYYY-MM-DD date');
+  }
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT * FROM member_memberships WHERE id = $1 AND gym_id = $2 AND member_id = $3 FOR UPDATE`,
+      [membershipId, gymId, memberId]
+    );
+    if (!rows.length) throw new HttpError(404, 'Membership not found');
+    const term = rows[0];
+    if (term.status !== 'FROZEN') {
+      throw new HttpError(400, `This membership is not frozen (it is ${term.status})`);
+    }
+    const { rows: freezeRows } = await client.query(
+      `SELECT * FROM membership_freezes WHERE membership_id = $1 AND status = 'ACTIVE' FOR UPDATE`,
+      [term.id]
+    );
+    if (!freezeRows.length) {
+      // inconsistent state guard — recover by resuming without a shift
+      const todayRows = await client.query(
+        `SELECT (now() AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $1))::date AS d`, [gymId]
+      );
+      await client.query(
+        `UPDATE member_memberships SET status = 'ACTIVE', updated_at = now() WHERE id = $1`,
+        [term.id]
+      );
+      return { membership: { ...term, status: 'ACTIVE' }, frozen_days: 0 };
+    }
+    const freeze = freezeRows[0];
+    const todayRows = await client.query(
+      `SELECT (now() AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $1))::date AS d`, [gymId]
+    );
+    const today = todayRows.rows[0].d;
+    const resume = resumed_on || today;
+    if (resume > today) throw new HttpError(400, 'The resume date cannot be in the future');
+    if (resume < freeze.starts_on) {
+      throw new HttpError(400, `The freeze started on ${freeze.starts_on} — resume cannot be earlier`);
+    }
+    const frozenDays = Math.max(0, Math.round(
+      (new Date(`${resume}T00:00:00Z`) - new Date(`${freeze.starts_on}T00:00:00Z`)) / 86400000
+    ));
+
+    const updated = await client.query(
+      `UPDATE member_memberships SET
+         ends_on = ends_on + $2::int,
+         status = CASE WHEN ends_on + $2::int < $3::date THEN 'EXPIRED' ELSE 'ACTIVE' END,
+         updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [term.id, frozenDays, today]
+    );
+    await client.query(
+      `UPDATE membership_freezes SET status = $2, ended_on = $3, updated_at = now() WHERE id = $1`,
+      [freeze.id, cancel ? 'CANCELLED' : 'ENDED', resume]
+    );
+    if (frozenDays > 0) {
+      // the scheduled renewal slides with the term
+      await client.query(
+        `UPDATE member_memberships SET starts_on = starts_on + $2::int, ends_on = ends_on + $2::int,
+           updated_at = now() WHERE member_id = $1 AND status = 'UPCOMING'`,
+        [term.member_id, frozenDays]
+      );
+    }
+    await gymAudit(client, {
+      gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
+      action: cancel ? 'membership.freeze_cancelled' : 'membership.resumed',
+      entity: 'member_membership', entityId: term.id,
+      before: { status: 'FROZEN', ends_on: term.ends_on },
+      after: { status: updated.rows?.[0]?.status, ends_on: updated.rows?.[0]?.ends_on, frozen_days: frozenDays },
+    });
+    await recordEvent(client, gymId, term.id, cancel ? 'freeze_cancelled' : 'resumed',
+      { details: { frozen_days: frozenDays, ends_on: updated.rows?.[0]?.ends_on }, actor });
+    return { membership: updated.rows[0], frozen_days: frozenDays };
+  });
+}
+
+// Manual extension: push the expiry out by N days. A scheduled renewal
+// slides by the same days so it still starts the day after the term ends.
+async function extendMembership(gymId, memberId, membershipId, actor, ip, { days } = {}, gymAudit) {
+  const n = Number(days);
+  if (!Number.isInteger(n) || n < 1 || n > 365) {
+    throw new HttpError(400, 'days must be a whole number between 1 and 365');
+  }
+  return transaction(async (client) => {
+    await runMembershipMaintenance(client, gymId);
+    const { rows } = await client.query(
+      `SELECT * FROM member_memberships WHERE id = $1 AND gym_id = $2 AND member_id = $3 FOR UPDATE`,
+      [membershipId, gymId, memberId]
+    );
+    if (!rows.length) throw new HttpError(404, 'Membership not found');
+    const term = rows[0];
+    if (term.status !== 'ACTIVE') {
+      throw new HttpError(400, `Only an ACTIVE membership can be extended (this one is ${term.status})`);
+    }
+    const updated = await client.query(
+      `UPDATE member_memberships SET ends_on = ends_on + $2::int, updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [term.id, n]
+    );
+    await client.query(
+      `UPDATE member_memberships SET starts_on = starts_on + $2::int, ends_on = ends_on + $2::int,
+         updated_at = now() WHERE member_id = $1 AND status = 'UPCOMING'`,
+      [term.member_id, n]
+    );
+    await gymAudit(client, {
+      gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
+      action: 'membership.extended', entity: 'member_membership', entityId: term.id,
+      before: { ends_on: term.ends_on }, after: { ends_on: updated.rows[0].ends_on, days: n },
+    });
+    await recordEvent(client, gymId, term.id, 'extended',
+      { details: { days: n, ends_on: updated.rows[0].ends_on }, actor });
+    return updated.rows[0];
+  });
+}
+
+// The member's lifecycle timeline (spec: Jan active → Aug frozen → …).
+async function listMembershipEvents(gymId, memberId) {
+  await transaction(async (client) => runMembershipMaintenance(client, gymId));
+  const { rows } = await query(
+    `SELECT e.*, u.name AS actor_name, mm.plan_name, mm.starts_on AS term_start
+     FROM membership_events e
+     JOIN member_memberships mm ON mm.id = e.membership_id
+     LEFT JOIN users u ON u.id = e.actor_user_id
+     WHERE e.gym_id = $1 AND mm.member_id = $2
+     ORDER BY e.created_at DESC`,
+    [gymId, memberId]
+  );
+  return rows;
+}
+
 module.exports = {
   DURATION_UNITS, ACCESS_LEVELS, PLAN_STATUSES,
   createPlan, updatePlan, listPlans, getPlan,
   listMemberMemberships, listGymMemberships, getMembership,
   assignMembership, cancelMembership, renewMembership,
+  freezeMembership, resumeMembership, extendMembership, listMembershipEvents,
 };

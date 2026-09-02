@@ -711,6 +711,77 @@ registerRoute(router, {
   }
 }, [requireAuth, requireGymContext(), requireGymPermission('memberships.view')]);
 
+// ── membership lifecycle (Phase 7): freeze / resume / extend / events ────
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/memberships/:membershipId/freeze',
+  description: 'Freezes an ACTIVE membership (pauses the term). On resume the expiry moves by the exact number of frozen days. Requires permission: memberships.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')], async (req, res) => {
+  try {
+    res.json(await plans.freezeMembership(
+      req.gymContext.gymId, req.params.memberId, req.params.membershipId,
+      { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/memberships/:membershipId/resume',
+  description: 'Resumes a frozen membership (or cancels the freeze with cancel=true). The expiry moves by the exact frozen days; the term becomes EXPIRED if it still ends before today. Requires permission: memberships.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')], async (req, res) => {
+  try {
+    res.json(await plans.resumeMembership(
+      req.gymContext.gymId, req.params.memberId, req.params.membershipId,
+      { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/memberships/:membershipId/extend',
+  description: 'Manually extends the term by N days (1-365). A scheduled renewal slides by the same days. Requires permission: memberships.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')], async (req, res) => {
+  try {
+    res.json(await plans.extendMembership(
+      req.gymContext.gymId, req.params.memberId, req.params.membershipId,
+      { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/memberships/events',
+  description: "The member's membership lifecycle timeline (assigned/frozen/resumed/extended/renewed/cancelled/expired). Requires permission: memberships.view (OWNER, ADMIN, FRONT_DESK).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.view')], async (req, res) => {
+  try {
+    res.json(await plans.listMembershipEvents(req.gymContext.gymId, req.params.memberId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.view')]);
+
 // ── audit log ────────────────────────────────────────────────────────────
 
 registerRoute(router, {

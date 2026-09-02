@@ -1,41 +1,67 @@
-// Member's Membership tab — real plan terms. Assign (works with or without
-// an app account), plan change (replaces the ACTIVE term, old one kept as
-// CANCELLED history), cancel, renew. Prices shown are the SNAPSHOTTED
-// amounts the member actually signed up at.
+// Member's Membership tab — the full lifecycle (Phase 7):
+//   Activate(=assign) · Freeze · Resume · Renew · Change Plan · Cancel · Extend
+// Every action preserves history: the timeline below the cards is the
+// append-only lifecycle record (assigned → frozen → resumed → renewed → …).
+// Prices shown are the SNAPSHOTTED amounts the member actually signed up at.
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Button, Table, Tag, Modal, Form, InputNumber, Select, DatePicker, App as AntApp,
-  Typography, Card, Descriptions, Space, Popconfirm, Empty,
+  Button, Table, Tag, Modal, Form, Input, InputNumber, Select, DatePicker, App as AntApp,
+  Typography, Card, Descriptions, Space, Popconfirm, Empty, Timeline,
 } from 'antd';
-import { PlusOutlined, RedoOutlined, StopOutlined } from '@ant-design/icons';
+import {
+  PlusOutlined, RedoOutlined, StopOutlined, PauseCircleOutlined,
+  PlayCircleOutlined, CalendarOutlined,
+} from '@ant-design/icons';
 import dayjs from 'dayjs';
 import StatusBadge from './StatusBadge';
 import { ErrorState, EmptyState } from './States';
 import { useGymContext, hasPermission } from '../permissions';
 import {
   listMemberMemberships, listPlans, assignMembership, cancelMembership, renewMembership,
-  formatMoney, MemberMembership, MembershipPlan,
+  freezeMembership, resumeMembership, extendMembership, listMembershipEvents,
+  formatMoney, MemberMembership, MembershipPlan, MembershipEvent,
 } from '../api';
+
+const EVENT_LABELS: Record<string, string> = {
+  assigned: 'Membership assigned',
+  plan_changed: 'Plan changed',
+  frozen: 'Frozen',
+  resumed: 'Resumed',
+  freeze_cancelled: 'Freeze cancelled',
+  extended: 'Extended',
+  renewed: 'Renewed',
+  cancelled: 'Cancelled',
+  expired: 'Expired',
+  term_started: 'New term started',
+};
 
 export default function MemberMembershipTab({ memberId }: { memberId: string }) {
   const ctx = useGymContext();
   const { message, modal } = AntApp.useApp();
   const [terms, setTerms] = useState<MemberMembership[] | null>(null);
   const [plans, setPlans] = useState<MembershipPlan[]>([]);
+  const [events, setEvents] = useState<MembershipEvent[]>([]);
   const [error, setError] = useState<any>(null);
   const [assignOpen, setAssignOpen] = useState(false);
+  const [freezeOpen, setFreezeOpen] = useState(false);
+  const [extendOpen, setExtendOpen] = useState(false);
   const [form] = Form.useForm();
+  const [freezeForm] = Form.useForm();
+  const [extendForm] = Form.useForm();
   const canManage = hasPermission(ctx, 'memberships.manage');
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [t, p] = await Promise.all([
+      const [t, ev] = await Promise.all([
         listMemberMemberships(ctx!.gymId, memberId),
-        canManage ? listPlans(ctx!.gymId, 'ACTIVE') : Promise.resolve([]),
+        listMembershipEvents(ctx!.gymId, memberId),
       ]);
       setTerms(t);
-      setPlans(p);
+      setEvents(ev);
+      if (canManage) {
+        setPlans(await listPlans(ctx!.gymId, 'ACTIVE'));
+      }
     } catch (e: any) {
       setError(e);
     }
@@ -47,7 +73,10 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
   if (!terms) return <Typography.Text type="secondary">Loading…</Typography.Text>;
 
   const active = terms.find((t) => t.status === 'ACTIVE');
+  const frozen = terms.find((t) => t.status === 'FROZEN');
   const upcoming = terms.find((t) => t.status === 'UPCOMING');
+  const current = active || frozen;
+  const openFreezeStart = events.find((e) => e.event === 'frozen')?.details?.starts_on;
 
   const submitAssign = async () => {
     try {
@@ -55,7 +84,7 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
       await assignMembership(ctx!.gymId, memberId, {
         plan_id: v.plan_id,
         starts_on: v.starts_on ? v.starts_on.format('YYYY-MM-DD') : undefined,
-        replace_active: !!active,
+        replace_active: !!current,
         cancel_reason: 'plan_change',
       });
       message.success('Membership assigned');
@@ -64,6 +93,55 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
     } catch (e: any) {
       if (e?.errorFields) return;
       message.error(e.message || 'Could not assign the membership');
+    }
+  };
+
+  const submitFreeze = async () => {
+    if (!current) return;
+    try {
+      const v = await freezeForm.validateFields();
+      await freezeMembership(ctx!.gymId, memberId, current.id, {
+        starts_on: v.starts_on ? v.starts_on.format('YYYY-MM-DD') : undefined,
+        reason: v.reason || undefined,
+      });
+      message.success('Membership frozen — the expiry will move by the frozen days on resume');
+      setFreezeOpen(false);
+      load();
+    } catch (e: any) {
+      if (e?.errorFields) return;
+      message.error(e.message || 'Could not freeze the membership');
+    }
+  };
+
+  const doResume = (cancel = false) => {
+    if (!frozen) return;
+    modal.confirm({
+      title: cancel ? 'Cancel this freeze?' : 'Resume this membership?',
+      content: 'The expiry moves forward by the exact number of frozen days. The resume day itself is not frozen.',
+      okText: cancel ? 'Cancel freeze' : 'Resume',
+      onOk: async () => {
+        try {
+          const r = await resumeMembership(ctx!.gymId, memberId, frozen.id, { cancel });
+          message.success(`Resumed — ${r.frozen_days} frozen day(s) added to the expiry`);
+          load();
+        } catch (e: any) {
+          message.error(e.message || 'Could not resume');
+        }
+      },
+    });
+  };
+
+  const submitExtend = async () => {
+    if (!active) return;
+    try {
+      const v = await extendForm.validateFields();
+      await extendMembership(ctx!.gymId, memberId, active.id, v.days);
+      message.success(`Extended by ${v.days} days`);
+      setExtendOpen(false);
+      load();
+    } catch (e: any) {
+      if (e?.errorFields) return;
+      message.error(e.message || 'Could not extend');
     }
   };
 
@@ -105,27 +183,46 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {active && (
-        <Card size="small" title="Current membership" extra={<StatusBadge status={active.status} />}>
+      {current && (
+        <Card size="small" title="Current membership" extra={<StatusBadge status={current.status} />}>
           <Descriptions size="small" column={{ xs: 1, md: 2 }}>
-            <Descriptions.Item label="Plan">{active.plan_name}</Descriptions.Item>
+            <Descriptions.Item label="Plan">{current.plan_name}</Descriptions.Item>
             <Descriptions.Item label="Price">
-              {formatMoney(active.price_cents, active.currency)}
+              {formatMoney(current.price_cents, current.currency)}
               <Typography.Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>
                 (locked at signup)
               </Typography.Text>
             </Descriptions.Item>
-            <Descriptions.Item label="Term">{active.starts_on} → {active.ends_on}</Descriptions.Item>
+            <Descriptions.Item label="Start">{current.starts_on}</Descriptions.Item>
+            <Descriptions.Item label="Expiry">{current.ends_on}</Descriptions.Item>
+            {current.status === 'FROZEN' && openFreezeStart && (
+              <Descriptions.Item label="Frozen since">{String(openFreezeStart).slice(0, 10)}</Descriptions.Item>
+            )}
           </Descriptions>
           {canManage && (
             <Space style={{ marginTop: 12 }} wrap>
+              {current.status === 'ACTIVE' && (
+                <>
+                  <Button icon={<PauseCircleOutlined />} onClick={() => {
+                    freezeForm.setFieldsValue({ starts_on: dayjs() });
+                    setFreezeOpen(true);
+                  }}>Freeze</Button>
+                  <Button icon={<CalendarOutlined />} onClick={() => {
+                    extendForm.setFieldsValue({ days: 7 });
+                    setExtendOpen(true);
+                  }}>Extend</Button>
+                </>
+              )}
+              {current.status === 'FROZEN' && (
+                <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => doResume(false)}>Resume</Button>
+              )}
+              <Button icon={<RedoOutlined />} onClick={() => doRenew(current)}>Renew</Button>
               <Button icon={<PlusOutlined />} onClick={() => { form.resetFields(); setAssignOpen(true); }}>
                 Change plan
               </Button>
-              <Button icon={<RedoOutlined />} onClick={() => doRenew(active)}>Renew</Button>
               <Popconfirm title="Cancel this membership?" okButtonProps={{ danger: true }}
-                onConfirm={() => doCancel(active)}>
-                <Button danger icon={<StopOutlined />}>Cancel membership</Button>
+                onConfirm={() => doCancel(current)}>
+                <Button danger icon={<StopOutlined />}>Cancel</Button>
               </Popconfirm>
             </Space>
           )}
@@ -142,7 +239,7 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
         </Card>
       )}
 
-      {!active && !upcoming && (
+      {!current && !upcoming && (
         <Empty
           description={
             <Typography.Text type="secondary">
@@ -151,32 +248,57 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
           }
         >
           {canManage && (
-            <Button type="primary" icon={<PlusOutlined />}
-              onClick={() => { form.resetFields(); setAssignOpen(true); }}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setAssignOpen(true); }}>
               Assign plan
             </Button>
           )}
         </Empty>
       )}
 
-      <Card size="small" title="History">
+      <Card size="small" title="History & lifecycle timeline">
         {terms.length === 0 ? (
           <EmptyState title="No membership history" description="Assigned terms will appear here." />
         ) : (
-          <Table
-            rowKey="id"
-            size="small"
-            pagination={false}
-            dataSource={terms}
-            columns={[
-              { title: 'Plan', dataIndex: 'plan_name' },
-              { title: 'Price', width: 120, render: (_: any, m: MemberMembership) => formatMoney(m.price_cents, m.currency) },
-              { title: 'Term', key: 'term', render: (_: any, m: MemberMembership) => `${m.starts_on} → ${m.ends_on}` },
-              { title: 'Status', dataIndex: 'status', width: 120, render: (s: string) => <StatusBadge status={s} /> },
-              { title: 'Note', dataIndex: 'cancel_reason', render: (v: string) =>
-                v ? <Tag>{v.replace(/_/g, ' ')}</Tag> : null },
-            ]}
-          />
+          <>
+            <Table
+              rowKey="id"
+              size="small"
+              pagination={false}
+              dataSource={terms}
+              columns={[
+                { title: 'Plan', dataIndex: 'plan_name' },
+                { title: 'Price', width: 120, render: (_: any, m: MemberMembership) => formatMoney(m.price_cents, m.currency) },
+                { title: 'Term', key: 'term', render: (_: any, m: MemberMembership) => `${m.starts_on} → ${m.ends_on}` },
+                { title: 'Status', dataIndex: 'status', width: 120, render: (s: string) => <StatusBadge status={s} /> },
+                { title: 'Note', dataIndex: 'cancel_reason', render: (v: string) =>
+                  v ? <Tag>{v.replace(/_/g, ' ')}</Tag> : null },
+              ]}
+            />
+            {events.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <Typography.Text type="secondary" strong>Lifecycle timeline</Typography.Text>
+                <Timeline
+                  style={{ marginTop: 12 }}
+                  items={events.slice(0, 20).map((e) => ({
+                    color: ['cancelled', 'expired'].includes(e.event) ? 'red'
+                      : e.event === 'frozen' ? 'gold' : 'green',
+                    children: (
+                      <>
+                        <Typography.Text strong>{EVENT_LABELS[e.event] || e.event}</Typography.Text>
+                        <Typography.Text type="secondary"> · {e.occurred_on} · {e.plan_name}</Typography.Text>
+                        {e.event === 'resumed' && e.details?.frozen_days != null && (
+                          <Typography.Text type="secondary"> · {e.details.frozen_days} day(s) added to expiry</Typography.Text>
+                        )}
+                        {e.event === 'extended' && e.details?.days != null && (
+                          <Typography.Text type="secondary"> · +{e.details.days} days</Typography.Text>
+                        )}
+                      </>
+                    ),
+                  }))}
+                />
+              </div>
+            )}
+          </>
         )}
       </Card>
 
@@ -185,7 +307,7 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
         open={assignOpen}
         onOk={submitAssign}
         onCancel={() => setAssignOpen(false)}
-        okText={active ? 'Replace & assign' : 'Assign'}
+        okText={current ? 'Replace & assign' : 'Assign'}
       >
         <Form form={form} layout="vertical">
           <Form.Item name="plan_id" label="Plan" rules={[{ required: true, message: 'Pick a plan' }]}>
@@ -201,11 +323,46 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
           <Form.Item name="starts_on" label="Starts on">
             <DatePicker style={{ width: '100%' }} disabledDate={(d) => d && d.isAfter(dayjs(), 'day')} />
           </Form.Item>
-          {active && (
+          {current && (
             <Typography.Paragraph type="warning" style={{ marginBottom: 0 }}>
-              Replacing the current <b>{active.plan_name}</b> term — it is kept in history as CANCELLED.
+              Replacing the current <b>{current.plan_name}</b> term — it is kept in history as CANCELLED.
             </Typography.Paragraph>
           )}
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Freeze membership"
+        open={freezeOpen}
+        onOk={submitFreeze}
+        onCancel={() => setFreezeOpen(false)}
+        okText="Freeze"
+      >
+        <Form form={freezeForm} layout="vertical">
+          <Form.Item name="starts_on" label="Freeze starts" rules={[{ required: true }]}>
+            <DatePicker style={{ width: '100%' }} disabledDate={(d) => d && d.isAfter(dayjs(), 'day')} />
+          </Form.Item>
+          <Form.Item name="reason" label="Reason (optional)">
+            <Input placeholder="injury, travel…" />
+          </Form.Item>
+        </Form>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+          The term pauses while frozen. When you resume, the expiry moves forward by the exact
+          number of frozen days.
+        </Typography.Paragraph>
+      </Modal>
+
+      <Modal
+        title="Extend membership"
+        open={extendOpen}
+        onOk={submitExtend}
+        onCancel={() => setExtendOpen(false)}
+        okText="Extend"
+      >
+        <Form form={extendForm} layout="vertical">
+          <Form.Item name="days" label="Days to add" rules={[{ required: true }]}>
+            <InputNumber min={1} max={365} precision={0} style={{ width: '100%' }} />
+          </Form.Item>
         </Form>
       </Modal>
     </div>

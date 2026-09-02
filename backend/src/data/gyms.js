@@ -843,12 +843,22 @@ async function unlinkMemberFromApp(gymId, memberId, actor, ip) {
   });
 }
 
-// Gym-member view (app-linked): the gyms/memberships this user belongs to.
+// Gym-member view (app-linked): the gyms/memberships this user belongs to,
+// enriched with the CURRENT plan term (Phase 7 — the mobile "My Gym" card:
+// plan name, status, valid-until). Members without a term simply have nulls.
 async function listGymMembershipsForUser(userId) {
   const { rows } = await query(
     `SELECT m.id, m.member_code, m.status, m.joined_at,
-            g.id AS gym_id, g.name AS gym_name, g.slug AS gym_slug
+            g.id AS gym_id, g.name AS gym_name, g.slug AS gym_slug,
+            mm.plan_name, mm.status AS membership_status, mm.starts_on, mm.ends_on
      FROM gym_members m JOIN gyms g ON g.id = m.gym_id
+     LEFT JOIN LATERAL (
+       SELECT plan_name, status, starts_on, ends_on
+       FROM member_memberships t
+       WHERE t.member_id = m.id AND t.status IN ('ACTIVE','FROZEN','UPCOMING')
+       ORDER BY (t.status = 'ACTIVE') DESC, t.starts_on DESC
+       LIMIT 1
+     ) mm ON true
      WHERE m.app_user_id = $1 AND m.status IN ('ACTIVE','PENDING','FROZEN')
      ORDER BY g.name`,
     [userId]
