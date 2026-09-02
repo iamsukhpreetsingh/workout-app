@@ -29,7 +29,6 @@ export const SETTINGS = 'Settings';
 export const SYNC_SETTINGS = 'SyncSettings';
 export const INTAKE_FORM = 'IntakeForm';
 export const PROFILE = 'Profile';
-export const BODY = 'Body';
 export const CLIENT_DETAIL = 'ClientDetail';
 export const ASSIGN_WORKOUT = 'AssignWorkout';
 export const CLIENT_ASSIGNED_DETAIL = 'ClientAssignedDetail';

@@ -61,8 +61,17 @@ module.exports = {
           "isCameraEnabled": true,
           "isLibraryEnabled": true
         }
-      ]
+      ],
+      [
+    "expo-camera",
+    {
+      "cameraPermission": "Allows you to scan product barcodes to log food."
+    }
+  ]
+      
+      
     ],
+    
     extra: {
       eas: {
         projectId: "75628a9b-2245-43c7-88cb-71ba91bc8c1c"

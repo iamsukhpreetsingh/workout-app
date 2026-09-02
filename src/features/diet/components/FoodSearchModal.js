@@ -8,6 +8,7 @@ import { useColors } from '../../../theme';
 import { logFoodEntry, getRecentAndFrequent } from '../../../db/diary';
 import { getAllergenConflicts } from '../../../lib/allergens';
 import { listDishes, dishTotals } from '../../../db/customDishes';
+import BarcodeScannerModal from '../../../components/BarcodeScannerModal';
 
 const NUMS = { fontVariant: ['tabular-nums'] };
 
@@ -32,6 +33,7 @@ export default function FoodSearchModal({
   const [tab, setTab] = useState('search');
   const [query, setQuery] = useState('');
   const [barcode, setBarcode] = useState('');
+  const [scannerOpen, setScannerOpen] = useState(false);
   const [results, setResults] = useState(null); // null = loading
   const [recents, setRecents] = useState({ recent: [], frequent: [] });
   const [dishes, setDishes] = useState([]);
@@ -236,16 +238,23 @@ export default function FoodSearchModal({
                   value={query}
                   onChangeText={setQuery}
                 />
-                <View style={styles.barcodeRow}>
+                  <View style={styles.barcodeRow}>
                   <Text style={styles.barcodeLabel}>Barcode:</Text>
                   <TextInput
                     style={[styles.field, styles.barcodeInput, NUMS]}
-                    placeholder="Scan or type product barcode"
+                    placeholder="Type product barcode"
                     placeholderTextColor={colors.textDim}
                     keyboardType="number-pad"
                     value={barcode}
                     onChangeText={(v) => { setBarcode(v); if (v.trim()) setQuery(''); }}
                   />
+                  <TouchableOpacity
+                    style={styles.scanBtn}
+                    onPress={() => setScannerOpen(true)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="barcode-outline" size={22} color={colors.primary} />
+                  </TouchableOpacity>
                 </View>
               </>
             )}
@@ -341,6 +350,17 @@ export default function FoodSearchModal({
         </View>
       </Modal>
 
+            {/* camera barcode scanner — feeds the existing barcode search path */}
+      <BarcodeScannerModal
+        visible={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onScanned={(code) => {
+          setBarcode(code);
+          setQuery('');
+        }}
+      />
+
+
       {/* quantity confirm for the picked food */}
       <Modal visible={!!picked} transparent animationType="fade" onRequestClose={() => setPicked(null)}>
         <View style={styles.wrap}>
@@ -395,6 +415,11 @@ const makeStyles = (colors) =>
     barcodeRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     barcodeLabel: { color: colors.textDim, fontSize: 11, fontWeight: '700' },
     barcodeInput: { flex: 1, marginBottom: 8 },
+        scanBtn: {
+      width: 42, height: 42, borderRadius: 10,
+      backgroundColor: colors.cardLight,
+      alignItems: 'center', justifyContent: 'center', marginBottom: 8,
+    },
     row: {
       flexDirection: 'row', alignItems: 'center', gap: 10,
       backgroundColor: colors.card, borderRadius: 12, padding: 12, marginBottom: 6,

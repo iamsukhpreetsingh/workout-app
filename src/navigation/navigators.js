@@ -25,7 +25,6 @@ import ProgressScreen from '../screens/ProgressScreen';
 import ExerciseProgressScreen from '../screens/ExerciseProgressScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
-import BodyScreen from '../screens/BodyScreen';
 import ProgressPhotosScreen from '../screens/ProgressPhotosScreen';
 import TrainerProgressPhotosScreen from '../screens/TrainerProgressPhotosScreen';
 import TrainerClientsScreen from '../screens/TrainerClientsScreen';
@@ -130,7 +129,6 @@ function renderDetailScreens(onSwitchView) {
       </Stack.Screen>
       <Stack.Screen name={SYNC_SETTINGS} component={SyncSettingsScreen} options={{ title: 'Data & Sync' }} />
       <Stack.Screen name={INTAKE_FORM} component={IntakeFormScreen} options={{ title: 'Health Profile' }} />
-      <Stack.Screen name={BODY} component={BodyScreen} options={{ title: 'Body' }} />
       <Stack.Screen name={PROGRESS_PHOTOS} component={ProgressPhotosScreen} options={{ title: 'Progress Photos' }} />
       <Stack.Screen name={EDIT_PROFILE} component={EditProfileScreen} options={{ title: 'Edit Profile' }} />
       <Stack.Screen name={CLIENT_DETAIL} component={ClientDetailScreen} options={{ title: 'Client' }} />
@@ -201,6 +199,25 @@ function TabStack({ children, onSwitchView }) {
   );
 }
 
+// Bug 2: selecting a main bottom-navigation tab must open that section's
+// ROOT screen. Without this, each tab's stack kept its last pushed screen
+// (e.g. Diet -> Settings -> Home -> Diet reopened Settings). Implemented as
+// a tabPress listener per tab: if the tab's stack has depth > 1, prevent the
+// default (which preserves history) and navigate to the stack's first route
+// (navigate pops the pushed screens). Back navigation and in-page tab state
+// are unaffected.
+const tabResetListeners = (rootName) => ({
+  route,
+  navigation,
+}) => ({
+  tabPress: (e) => {
+    if ((route.state?.index ?? 0) > 0) {
+      e.preventDefault();
+      navigation.navigate(route.name, { screen: rootName });
+    }
+  },
+});
+
 const TAB_ICONS = {
   [TAB_HOME]: 'home',
   [TAB_DIET]: 'nutrition',
@@ -228,35 +245,35 @@ export function Tabs({ onSwitchView }) {
         title: route.name === TAB_PLANS ? 'Workout Routines' : route.name,
       })}
     >
-      <Tab.Screen name={TAB_HOME}>
+      <Tab.Screen name={TAB_HOME} listeners={tabResetListeners("HomeMain")}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>
             <Stack.Screen name="HomeMain" component={HomeScreen} options={{ title: 'Workout Tracker' }} />
           </TabStack>
         )}
       </Tab.Screen>
-      <Tab.Screen name={TAB_DIET}>
+      <Tab.Screen name={TAB_DIET} listeners={tabResetListeners("DietMain")}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>
             <Stack.Screen name="DietMain" component={DietHomeScreen} options={{ title: 'Diet' }} />
           </TabStack>
         )}
       </Tab.Screen>
-      <Tab.Screen name={TAB_PLANS}>
+      <Tab.Screen name={TAB_PLANS} listeners={tabResetListeners("PlansMain")}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>
             <Stack.Screen name="PlansMain" component={PlansScreen} options={{ title: 'Workout Routines' }} />
           </TabStack>
         )}
       </Tab.Screen>
-      <Tab.Screen name={TAB_PROGRESS}>
+      <Tab.Screen name={TAB_PROGRESS} listeners={tabResetListeners("ProgressMain")}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>
             <Stack.Screen name="ProgressMain" component={ProgressScreen} options={{ title: 'Progress' }} />
           </TabStack>
         )}
       </Tab.Screen>
-      <Tab.Screen name={TAB_PROFILE}>
+      <Tab.Screen name={TAB_PROFILE} listeners={tabResetListeners("ProfileMain")}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>
             <Stack.Screen name="ProfileMain">
@@ -327,28 +344,28 @@ export function TrainerTabs({ onSwitchView }) {
         ),
       })}
     >
-      <Tab.Screen name={TAB_CLIENTS}>
+      <Tab.Screen name={TAB_CLIENTS} listeners={tabResetListeners("ClientsMain")}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>
             <Stack.Screen name="ClientsMain" component={TrainerClientsScreen} options={{ title: 'Clients' }} />
           </TabStack>
         )}
       </Tab.Screen>
-      <Tab.Screen name={TAB_WORKOUTS}>
+      <Tab.Screen name={TAB_WORKOUTS} listeners={tabResetListeners("TrainerWorkoutsMain")}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>
             <Stack.Screen name="TrainerWorkoutsMain" component={WorkoutTemplatesScreen} options={{ title: 'Workouts' }} />
           </TabStack>
         )}
       </Tab.Screen>
-      <Tab.Screen name={TAB_RECIPES}>
+      <Tab.Screen name={TAB_RECIPES} listeners={tabResetListeners("RecipesMain")}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>
             <Stack.Screen name="RecipesMain" component={MealCatalogScreen} options={{ title: 'Recipes' }} />
           </TabStack>
         )}
       </Tab.Screen>
-      <Tab.Screen name={TAB_PROFILE}>
+      <Tab.Screen name={TAB_PROFILE} listeners={tabResetListeners("TrainerProfileMain")}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>
             <Stack.Screen name="TrainerProfileMain">

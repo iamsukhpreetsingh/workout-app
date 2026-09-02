@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { getProgressOverview, getExerciseProgressList } from '../services/workoutService';
 import { getBodyWeightHistory } from '../services/bodyService';
+import BodyScreen from './BodyScreen';
 import { calculateStreak, getCalendarData } from '../lib/streaks';
 import { getVolumeWarnings } from '../lib/volumeWarnings';
 import { getSettings } from '../services/settingsService';
@@ -13,7 +14,7 @@ import { useColors } from '../theme';
 import { kgToLb } from '../shared/utils/units';
 import { useHeaderActions } from '../components/HeaderActions';
 import LoadError from '../shared/components/LoadError';
-import { BODY, EXERCISE_PROGRESS } from '../shared/constants/routes';
+import { EXERCISE_PROGRESS } from '../shared/constants/routes';
 
 export default function ProgressScreen({ navigation }) {
   const colors = useColors();
@@ -31,7 +32,8 @@ export default function ProgressScreen({ navigation }) {
   const styles = {
     container: { flex: 1 },
     heading: { fontSize: 28, fontWeight: '800', marginBottom: 16 },
-    segmentRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+    segmentRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
+    strengthScroll: { flex: 1 },
     segmentBtn: { flex: 1, padding: 12, borderRadius: 10, alignItems: 'center' },
     segmentText: { fontWeight: '600' },
     warningCard: { borderRadius: 12, padding: 12, marginBottom: 12, borderLeftWidth: 3, borderLeftColor: '#FF9500' },
@@ -108,10 +110,12 @@ export default function ProgressScreen({ navigation }) {
     return <LoadError onRetry={() => setRetryTick((t) => t + 1)} />;
   }
 
+  // Strength and Body are TABS of this screen (local UI state) — Body is
+  // rendered inline, never pushed as a separate route (Bug 1)
   return (
-    <ScrollView style={[styles.container, { backgroundColor: colors.bg }]} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+    <View style={[styles.container, { backgroundColor: colors.bg }]}>
 
-      <View style={styles.segmentRow}>
+      <View style={[styles.segmentRow, { paddingHorizontal: 16, marginTop: 8 }]}>
         <TouchableOpacity
           style={[styles.segmentBtn, { backgroundColor: colors.card }, segment === 'strength' && { backgroundColor: colors.primary }]}
           onPress={() => setSegment('strength')}
@@ -120,15 +124,20 @@ export default function ProgressScreen({ navigation }) {
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.segmentBtn, { backgroundColor: colors.card }, segment === 'body' && { backgroundColor: colors.primary }]}
-          onPress={() => {
-            setSegment('body');
-            navigation.navigate(BODY);
-          }}
+          onPress={() => setSegment('body')}
         >
           <Text style={[styles.segmentText, { color: colors.textDim }, segment === 'body' && { color: '#fff' }]}>Body</Text>
         </TouchableOpacity>
       </View>
 
+      {segment === 'body' ? (
+        /* Body tab — rendered INLINE in this screen (local UI state, Bug 1) */
+        <BodyScreen navigation={navigation} />
+      ) : (
+      <ScrollView
+        style={styles.strengthScroll}
+        contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+      >
       {warnings.length > 0 && (
         <View style={[styles.warningCard, { backgroundColor: colors.card }]}>
           {warnings.map((w, i) => (
@@ -216,6 +225,8 @@ export default function ProgressScreen({ navigation }) {
           ))}
         </>
       )}
-    </ScrollView>
+      </ScrollView>
+      )}
+    </View>
   );
 }
