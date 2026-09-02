@@ -1,11 +1,10 @@
 # Gym Portal (`gym-web`)
 
-The web surface for gym **owners and staff** — create a gym, configure its
-profile, and manage it. Standalone Vite + React 18 + TypeScript + AntD 5,
-mirroring `../admin-dashboard` patterns but a **separate trust domain**: it
-authenticates regular `users` through `/auth` (same accounts as the mobile
-app) and speaks to the `/gym` API. Platform-admin trust stays in
-`admin-dashboard`; member-facing features live in the mobile app.
+The web platform for **Gym Management** — a desktop-first React 18 +
+TypeScript + AntD 5 shell with permission-filtered sections, standalone from
+both the mobile app and the platform-admin dashboard (`../admin-dashboard`).
+It authenticates regular `users` through `/auth` (same accounts as the
+mobile app) and speaks to the `/gym` API.
 
 ## Run
 
@@ -15,31 +14,59 @@ npm run dev        # http://localhost:5174 — proxies /auth and /gym to :4000
 npm run build      # tsc -b && vite build
 ```
 
-## What's implemented (Phase 2 — onboarding & setup)
+## Shell & navigation
 
-- **Login / sign-up** — the same account as the mobile app. Creating a gym
-  never touches personal fitness data: workouts, diet, progress and trainer
-  relationships are untouched, and the gym role (OWNER) is scoped to that
-  gym only.
-- **Create Gym wizard** — Gym Name (name/timezone/currency) → Contact
-  Information → Address → Operating Hours (7-day editor, closed days
-  explicit) → Branding (colors) → Review → Create → Dashboard. Client-side
-  validation is convenience; the backend re-validates everything.
-- **Dashboard** — profile-completion dashboard (percent + missing checklist
-  from the server), gym summary, deactivated-gym warning with owner
-  self-service reactivation. Loading skeletons, error alerts with retry,
-  and an explicit empty state when no gym exists yet.
-- **Settings** — Gym Profile (name/timezone/currency/logo/status),
-  Branding, Operating Hours, Contact Information (phone/email/website/
-  address). The logo endpoint streams authorized bytes (token-fetched blob
-  URL), max 2MB PNG/JPEG/WEBP.
-- **Multi-gym** — header switcher; the selected gym id travels as a
-  selector (`X-Gym-Id` / URL), never as proof of authorization.
+Sidebar sections render only when the caller's SERVER-resolved permission
+set (GET `/gym/:gymId/permissions`) includes the section's permission:
+
+| Section | Permission | Owner | Admin | Trainer | Front desk |
+|---|---|---|---|---|---|
+| Dashboard | — | ✓ | ✓ | ✓ | ✓ |
+| Members | `members.view` | ✓ | ✓ | | ✓ |
+| Memberships | `memberships.view` | ✓ | ✓ | | ✓ |
+| Payments | `payments.manage` | ✓ | | | |
+| Attendance | `attendance.manage` / `checkin.manage` | ✓ | ✓ | | ✓ |
+| Trainers / Staff | `staff.manage` | ✓ | | | |
+| Workouts / Nutrition | `content.manage` / `workouts.manage` / `nutrition.manage` | ✓ | ✓ | ✓ | |
+| Classes | `content.manage` | ✓ | ✓ | | |
+| Communications | `communications.manage` | ✓ | ✓ | | |
+| Reports | `reports.view` | ✓ | | | |
+| Settings | `settings.manage` | ✓ | | | |
+
+Reaching a section's URL without its permission renders a **Permission
+denied** page — and the backend rejects the request anyway.
+
+## Routes
+
+`/dashboard(/)` · `/members` · `/members/:id` (+ `/membership`,
+`/payments`, `/attendance`, `/trainer`, `/documents` sub-routes) ·
+`/memberships` (+ `/plans`) · `/payments` · `/attendance` · `/trainers` ·
+`/staff` · `/workouts` · `/nutrition` · `/communications` · `/reports` ·
+`/settings/:tab` · `/create-gym` (onboarding wizard).
+
+## What's real vs. placeholder
+
+- **Real**: gym onboarding wizard, profile/settings (incl. logo), members
+  list (search + status filter + pagination + create drawer), member detail
+  (edit, app-account link/unlink), staff management (add by email, role
+  change, deactivate/reactivate), trainers list.
+- **Placeholders** (`ComingSoon`): memberships & plans, payments,
+  attendance, member sub-tabs, workouts, nutrition, classes,
+  communications, reports — their backend phases haven't shipped. No fake
+  data, no dead buttons.
+
+## UX conventions (reusable components)
+
+`DataTable` (loading/error-with-retry/empty/prev-next pagination), `FilterBar`
+(debounced search + status select), `PageContainer` (breadcrumbs), `StatusBadge`,
+`EmptyState` / `ErrorState` (network failures detected) / `PermissionDenied` /
+`ComingSoon`. List APIs are offset-based without totals — the hook fetches
+`pageSize + 1` rows to know when a next page exists.
 
 ## Deliberately not here yet
 
-Membership plans, payments, attendance, classes, staff UI (API exists),
-trainer assignments — see `../GYM_MANAGEMENT_DESIGN.md` §16 for phasing.
+Membership lifecycle, payments, attendance, classes, trainer assignments —
+see `../GYM_MANAGEMENT_DESIGN.md` §16 for phasing.
 
 ## Security model
 
@@ -47,3 +74,4 @@ The portal hides UI by role, but the **backend is the authority**: every
 `/gym` request re-resolves the caller's staff/member row and gym-scoped
 role from the JWT (`requireGymContext` → `requireGymPermission`). A stolen
 gym id, header, or URL grants nothing.
+

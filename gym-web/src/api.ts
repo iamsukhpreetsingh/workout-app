@@ -176,6 +176,18 @@ export function hasAccessToken(): boolean {
 
 export const getMyGyms = () => api<GymMembershipEntry[]>('/gym/mine');
 
+export interface GymPermissions {
+  gymId: string;
+  gymName: string;
+  gymRole: string;
+  isMember: boolean;
+  permissions: string[];
+}
+
+// The resolved gym context: THE route-guard data source. The portal may
+// hide UI by role, but the backend re-checks every request anyway.
+export const getGymPermissions = (gymId: string) => api<GymPermissions>(`/gym/${gymId}/permissions`);
+
 export const createGym = (payload: Record<string, any>) =>
   api<{ gym: Gym; membershipRole: string | null; profile_completion: ProfileCompletion }>(
     '/gym', { method: 'POST', body: payload }
@@ -238,3 +250,66 @@ export function timezoneOptions(): string[] {
     'Australia/Sydney',
   ];
 }
+
+// ── members ──────────────────────────────────────────────────────────────
+
+export interface GymMember {
+  id: string;
+  gym_id: string;
+  member_code: string;
+  first_name: string;
+  last_name: string | null;
+  email: string | null;
+  phone: string | null;
+  app_user_id: string | null;
+  status: string;
+  joined_at: string;
+  notes: string | null;
+  created_at: string;
+}
+
+export const listMembers = (
+  gymId: string,
+  params: { q?: string; status?: string; limit?: number; offset?: number } = {}
+) => {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set('q', params.q);
+  if (params.status) qs.set('status', params.status);
+  if (params.limit != null) qs.set('limit', String(params.limit));
+  if (params.offset != null) qs.set('offset', String(params.offset));
+  return api<GymMember[]>(`/gym/${gymId}/members?${qs}`);
+};
+
+export const getMember = (gymId: string, memberId: string) =>
+  api<GymMember>(`/gym/${gymId}/members/${memberId}`);
+
+export const createMember = (gymId: string, body: Record<string, any>) =>
+  api<GymMember>(`/gym/${gymId}/members`, { method: 'POST', body });
+
+export const updateMember = (gymId: string, memberId: string, patch: Record<string, any>) =>
+  api<GymMember>(`/gym/${gymId}/members/${memberId}`, { method: 'PATCH', body: patch });
+
+export const linkMemberApp = (gymId: string, memberId: string, email: string) =>
+  api<GymMember>(`/gym/${gymId}/members/${memberId}/link-app`, { method: 'POST', body: { email } });
+
+export const unlinkMemberApp = (gymId: string, memberId: string) =>
+  api<GymMember>(`/gym/${gymId}/members/${memberId}/unlink-app`, { method: 'POST' });
+
+// ── staff ────────────────────────────────────────────────────────────────
+
+export interface StaffRow {
+  id: string;
+  gym_role: string;
+  status: string;
+  created_at: string;
+  name: string;
+  email: string;
+}
+
+export const listStaff = (gymId: string) => api<StaffRow[]>(`/gym/${gymId}/staff`);
+
+export const addStaff = (gymId: string, body: { email: string; gym_role: string }) =>
+  api<StaffRow>(`/gym/${gymId}/staff`, { method: 'POST', body });
+
+export const updateStaff = (gymId: string, staffId: string, patch: { gym_role?: string; status?: string }) =>
+  api<StaffRow>(`/gym/${gymId}/staff/${staffId}`, { method: 'PATCH', body: patch });

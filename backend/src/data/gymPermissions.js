@@ -10,8 +10,8 @@ const GYM_PERMISSIONS = {
     'gym.manage', 'staff.manage', 'audit.view',
     'members.view', 'members.create', 'members.manage',
     'plans.manage', 'memberships.view', 'memberships.manage',
-    'payments.manage', 'attendance.manage',
-    'content.manage', 'reports.view', 'settings.manage',
+    'payments.manage', 'attendance.manage', 'checkin.manage',
+    'content.manage', 'communications.manage', 'reports.view', 'settings.manage',
   ],
   ADMIN: [
     'members.view', 'members.create', 'members.manage',
