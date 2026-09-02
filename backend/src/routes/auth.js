@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const users = require('../data/users');
@@ -19,7 +20,11 @@ function signAccessToken(user) {
 }
 
 function signRefreshToken(user, jti) {
-  return jwt.sign({ id: user.id, jti }, process.env.JWT_SECRET, {
+  // jti MUST be unique per token: refresh_tokens.token is UNIQUE, and two
+  // logins of the same account within the same second otherwise produce a
+  // byte-identical token (HS256 is deterministic) → login 500. Random jti
+  // makes every refresh token distinct.
+  return jwt.sign({ id: user.id, jti: jti ?? crypto.randomUUID() }, process.env.JWT_SECRET, {
     expiresIn: `${REFRESH_TTL_DAYS}d`,
   });
 }

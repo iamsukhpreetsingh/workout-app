@@ -86,6 +86,7 @@ app.post('/uploads/dish-photo', requireAuth, async (req, res) => {
 app.use('/auth', authRoutes);
 app.use('/auth', passwordResetRoutes);
 app.use('/trainer', trainerRoutes);
+app.use('/gym', require('./src/routes/gym'));
 app.use('/client', clientRoutes);
 
 // ── Admin dashboard API (separate auth; every route role-guarded) ──────

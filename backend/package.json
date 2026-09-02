@@ -23,5 +23,6 @@
     "jsonwebtoken": "^9.0.2",
     "nodemailer": "^9.0.6",
     "pg": "^8.12.0"
-  }
+  },
+  "test": "node --test test/admin.test.js test/passwordReset.test.js test/adminMgmt.test.js test/exerciseCatalog.test.js test/nutrition.test.js test/nutritionTargets.test.js test/dateSemantics.test.js test/gymAuth.test.js"
 }
