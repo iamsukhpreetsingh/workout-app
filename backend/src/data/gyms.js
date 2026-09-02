@@ -12,6 +12,7 @@
 //  - The last ACTIVE OWNER of a gym can never be demoted/removed.
 const { pool, query, transaction } = require('../db/pool');
 const { hasPermission } = require('./gymPermissions');
+const crypto = require('crypto');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -468,40 +469,102 @@ async function updateGymStaff(gymId, staffId, actor, ip, { gym_role, status }) {
 
 // ── members ──────────────────────────────────────────────────────────────
 
+const GENDERS = ['male', 'female', 'other', 'prefer_not_to_say'];
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 function memberCreateValidation(data) {
   const first = String(data.first_name || '').trim();
   if (!first || first.length > 80) throw new HttpError(400, 'first_name is required (max 80 characters)');
   if (data.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) {
     throw new HttpError(400, 'invalid email');
   }
+  if (data.phone && !PHONE_RE.test(String(data.phone))) {
+    throw new HttpError(400, 'invalid phone number (digits, spaces and +()-. only)');
+  }
   if (data.status && !MEMBER_STATUSES.includes(data.status)) throw new HttpError(400, 'invalid status');
+  if (data.gender && !GENDERS.includes(data.gender)) throw new HttpError(400, 'invalid gender');
+  if (data.date_of_birth) {
+    // pg returns DATE columns as Date objects on read; normalize before
+    // validating so an unchanged dob in an update doesn't false-fail
+    const dobStr = data.date_of_birth instanceof Date
+      ? data.date_of_birth.toISOString().slice(0, 10)
+      : String(data.date_of_birth).slice(0, 10);
+    if (!ISO_DATE_RE.test(dobStr)) {
+      throw new HttpError(400, 'date_of_birth must be a YYYY-MM-DD date');
+    }
+    const dob = new Date(`${dobStr}T00:00:00Z`);
+    if (Number.isNaN(dob.getTime()) || dob > new Date()) {
+      throw new HttpError(400, 'date_of_birth must be a real date in the past');
+    }
+  }
+  if (data.emergency_contact_phone && !PHONE_RE.test(String(data.emergency_contact_phone))) {
+    throw new HttpError(400, 'invalid emergency contact phone');
+  }
+  if (data.profile !== undefined && data.profile != null &&
+      (typeof data.profile !== 'object' || Array.isArray(data.profile))) {
+    throw new HttpError(400, 'profile must be an object');
+  }
+}
+
+// Members carry TWO independent state axes (spec: never combine):
+//   membership     = status column
+//   app connection = derived from app_user_id + app_invite_status
+function memberToClient(row) {
+  if (!row) return row;
+  const app_connection = row.app_user_id
+    ? 'CONNECTED'
+    : row.app_invite_status === 'pending' ? 'INVITATION_PENDING' : 'NOT_CONNECTED';
+  return { ...row, app_connection };
 }
 
 async function createGymMember(gymId, actor, ip, data) {
   memberCreateValidation(data);
   return transaction(async (client) => {
+    // duplicate guard: one member row per email per gym (other gyms are
+    // unaffected — the same person can be a member of many gyms). Members
+    // without an email are always allowed (email is optional).
+    if (data.email) {
+      const emailNorm = String(data.email).trim().toLowerCase();
+      const { rows: dupes } = await client.query(
+        `SELECT id, member_code, status FROM gym_members
+         WHERE gym_id = $1 AND lower(email) = $2 AND status != 'CANCELLED'`,
+        [gymId, emailNorm]
+      );
+      if (dupes.length) {
+        throw new HttpError(409,
+          `A member with this email already exists at this gym (${dupes[0].member_code})`);
+      }
+    }
     const { rows } = await client.query(
       `INSERT INTO gym_members
-         (gym_id, first_name, last_name, email, phone, status, notes, joined_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8::date, CURRENT_DATE))
+         (gym_id, first_name, last_name, email, phone, status, notes, joined_at,
+          date_of_birth, gender, emergency_contact_name, emergency_contact_phone, profile)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8::date, CURRENT_DATE),$9,$10,$11,$12,$13)
        RETURNING *`,
       [gymId, String(data.first_name).trim(), data.last_name ?? null,
        data.email ?? null, data.phone ?? null,
-       data.status || 'ACTIVE', data.notes ?? null, data.joined_at ?? null]
+       data.status || 'ACTIVE', data.notes ?? null, data.joined_at ?? null,
+       data.date_of_birth ?? null, data.gender ?? null,
+       data.emergency_contact_name ?? null, data.emergency_contact_phone ?? null,
+       data.profile ? JSON.stringify(data.profile) : '{}']
     );
     await gymAudit(client, {
       gymId, actorUserId: actor?.userId ?? null, actorLabel: actor?.label ?? null, ip,
       action: 'member.created', entity: 'gym_member', entityId: rows[0].id,
       after: { name: rows[0].first_name, email: rows[0].email, status: rows[0].status },
     });
-    return rows[0];
+    return memberToClient(rows[0]);
   });
 }
 
-async function listGymMembers(gymId, { status, q, limit = 50, offset = 0 }) {
+async function listGymMembers(gymId, { status, connection, q, limit = 50, offset = 0 }) {
   const vals = [gymId];
   const where = ['gym_id = $1'];
   if (status) { vals.push(status); where.push(`status = $${vals.length}`); }
+  // APP CONNECTION is a separate axis from membership status
+  if (connection === 'CONNECTED') where.push('app_user_id IS NOT NULL');
+  else if (connection === 'NOT_CONNECTED') where.push(`app_user_id IS NULL AND app_invite_status = 'none'`);
+  else if (connection === 'INVITATION_PENDING') where.push(`app_user_id IS NULL AND app_invite_status = 'pending'`);
   if (q) {
     vals.push(`%${q}%`);
     where.push(`(first_name ILIKE $${vals.length} OR last_name ILIKE $${vals.length}
@@ -515,7 +578,7 @@ async function listGymMembers(gymId, { status, q, limit = 50, offset = 0 }) {
      ORDER BY created_at DESC ${limitSql} ${offsetSql}`,
     vals
   );
-  return rows;
+  return rows.map(memberToClient);
 }
 
 async function getGymMember(gymId, memberId) {
@@ -523,16 +586,17 @@ async function getGymMember(gymId, memberId) {
     'SELECT * FROM gym_members WHERE id = $1 AND gym_id = $2',
     [memberId, gymId]
   );
-  return rows[0] || null;
+  return memberToClient(rows[0] || null);
 }
 
 async function updateGymMember(gymId, memberId, actor, ip, patch) {
-  const allowed = ['first_name', 'last_name', 'email', 'phone', 'status', 'notes', 'joined_at'];
+  const allowed = ['first_name', 'last_name', 'email', 'phone', 'status', 'notes', 'joined_at',
+    'date_of_birth', 'gender', 'emergency_contact_name', 'emergency_contact_phone', 'profile'];
   const sets = [];
   const vals = [memberId, gymId];
   for (const [k, v] of Object.entries(patch || {})) {
     if (!allowed.includes(k) || v === undefined) continue;
-    vals.push(v);
+    vals.push(v instanceof Object && !(v instanceof Date) ? JSON.stringify(v) : v);
     sets.push(`${k} = $${vals.length}`);
   }
   if (!sets.length) throw new HttpError(400, 'No valid fields to update');
@@ -542,6 +606,20 @@ async function updateGymMember(gymId, memberId, actor, ip, patch) {
     );
     if (!beforeRows.length) throw new HttpError(404, 'Member not found');
     memberCreateValidation({ ...beforeRows[0], ...patch });
+    // duplicate-email guard on contact-detail changes (see createGymMember)
+    const emailChanged = patch.email !== undefined &&
+      String(patch.email || '').trim().toLowerCase() !== String(beforeRows[0].email || '').toLowerCase();
+    if (emailChanged && patch.email) {
+      const { rows: dupes } = await client.query(
+        `SELECT id, member_code FROM gym_members
+         WHERE gym_id = $1 AND lower(email) = $2 AND id != $3 AND status != 'CANCELLED'`,
+        [gymId, String(patch.email).trim().toLowerCase(), memberId]
+      );
+      if (dupes.length) {
+        throw new HttpError(409,
+          `Another member of this gym already uses this email (${dupes[0].member_code})`);
+      }
+    }
     const { rows } = await client.query(
       `UPDATE gym_members SET ${sets.join(', ')}, updated_at = now()
        WHERE id = $1 AND gym_id = $2 RETURNING *`,
@@ -553,7 +631,136 @@ async function updateGymMember(gymId, memberId, actor, ip, patch) {
       before: { status: beforeRows[0].status, email: beforeRows[0].email },
       after: { status: rows[0].status, email: rows[0].email },
     });
-    return rows[0];
+    return memberToClient(rows[0]);
+  });
+}
+
+// ── member lifecycle: leave (cancel) / reactivate ────────────────────────
+
+// "Member leaves": membership → CANCELLED. The row (and all of the
+// member's history) is kept, and any linked app User account is NEVER
+// touched — the link survives a reactivation.
+async function cancelGymMember(gymId, memberId, actor, ip, { reason } = {}) {
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      'SELECT * FROM gym_members WHERE id = $1 AND gym_id = $2 FOR UPDATE',
+      [memberId, gymId]
+    );
+    if (!rows.length) throw new HttpError(404, 'Member not found');
+    if (rows[0].status === 'CANCELLED') return memberToClient(rows[0]); // idempotent
+    const { rows: updated } = await client.query(
+      `UPDATE gym_members SET status = 'CANCELLED', updated_at = now()
+       WHERE id = $1 AND gym_id = $2 RETURNING *`,
+      [memberId, gymId]
+    );
+    await gymAudit(client, {
+      gymId, actorUserId: actor?.userId ?? null, actorLabel: actor?.label ?? null, ip,
+      action: 'member.cancelled', entity: 'gym_member', entityId: memberId,
+      before: { status: rows[0].status },
+      after: { status: 'CANCELLED', reason: reason ?? null },
+    });
+    return memberToClient(updated[0]);
+  });
+}
+
+// "Member reactivates": back to ACTIVE. Only a non-ACTIVE member can be
+// reactivated; the app link (if any) is untouched.
+async function reactivateGymMember(gymId, memberId, actor, ip) {
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      'SELECT * FROM gym_members WHERE id = $1 AND gym_id = $2 FOR UPDATE',
+      [memberId, gymId]
+    );
+    if (!rows.length) throw new HttpError(404, 'Member not found');
+    if (rows[0].status === 'ACTIVE') return memberToClient(rows[0]); // idempotent
+    const { rows: updated } = await client.query(
+      `UPDATE gym_members SET status = 'ACTIVE', updated_at = now()
+       WHERE id = $1 AND gym_id = $2 RETURNING *`,
+      [memberId, gymId]
+    );
+    await gymAudit(client, {
+      gymId, actorUserId: actor?.userId ?? null, actorLabel: actor?.label ?? null, ip,
+      action: 'member.reactivated', entity: 'gym_member', entityId: memberId,
+      before: { status: rows[0].status }, after: { status: 'ACTIVE' },
+    });
+    return memberToClient(updated[0]);
+  });
+}
+
+// ── app invitations (NOT_CONNECTED → INVITATION_PENDING → CONNECTED) ─────
+
+// Invite (or re-invite) a member to connect an app account. Requires the
+// member to have an email. The invite code is returned ONCE (for the
+// portal to show/copy) and only its SHA-256 hash is stored.
+async function inviteMemberApp(gymId, memberId, actor, ip, { email } = {}) {
+  return transaction(async (client) => {
+    const { rows: memberRows } = await client.query(
+      'SELECT * FROM gym_members WHERE id = $1 AND gym_id = $2 FOR UPDATE',
+      [memberId, gymId]
+    );
+    if (!memberRows.length) throw new HttpError(404, 'Member not found');
+    const member = memberRows[0];
+    if (member.app_user_id) {
+      throw new HttpError(400, 'This member is already connected to an app account');
+    }
+    const inviteEmail = String(email || member.email || '').trim().toLowerCase();
+    if (!inviteEmail) {
+      throw new HttpError(400, 'The member needs an email address to receive an invitation');
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(inviteEmail)) {
+      throw new HttpError(400, 'invalid email');
+    }
+    const code = crypto.randomBytes(16).toString('hex'); // shown once, stored hashed
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+
+    // expire any previous pending invite (partial unique: one PENDING/member)
+    await client.query(
+      `UPDATE gym_member_invites SET status = 'EXPIRED', updated_at = now()
+       WHERE member_id = $1 AND status = 'PENDING'`,
+      [memberId]
+    );
+    await client.query(
+      `INSERT INTO gym_member_invites (gym_id, member_id, email, code_hash, invited_by)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [gymId, memberId, inviteEmail, codeHash, actor?.userId ?? actor ?? null]
+    );
+    await client.query(
+      `UPDATE gym_members SET app_invite_status = 'pending', app_invite_sent_at = now(),
+       email = COALESCE(email, $3), updated_at = now() WHERE id = $1 AND gym_id = $2`,
+      [memberId, gymId, inviteEmail]
+    );
+    await gymAudit(client, {
+      gymId, actorUserId: actor?.userId ?? null, actorLabel: actor?.label ?? null, ip,
+      action: 'member.invited', entity: 'gym_member', entityId: memberId,
+      after: { email: inviteEmail },
+    });
+    return { invite_code: code, email: inviteEmail };
+  });
+}
+
+// Withdraw a pending invitation — the member returns to NOT_CONNECTED.
+async function cancelMemberInvite(gymId, memberId, actor, ip) {
+  return transaction(async (client) => {
+    const { rows: memberRows } = await client.query(
+      'SELECT * FROM gym_members WHERE id = $1 AND gym_id = $2 FOR UPDATE',
+      [memberId, gymId]
+    );
+    if (!memberRows.length) throw new HttpError(404, 'Member not found');
+    await client.query(
+      `UPDATE gym_member_invites SET status = 'CANCELLED', updated_at = now()
+       WHERE member_id = $1 AND status = 'PENDING'`,
+      [memberId]
+    );
+    await client.query(
+      `UPDATE gym_members SET app_invite_status = 'none', updated_at = now()
+       WHERE id = $1 AND gym_id = $2`,
+      [memberId, gymId]
+    );
+    await gymAudit(client, {
+      gymId, actorUserId: actor?.userId ?? null, actorLabel: actor?.label ?? null, ip,
+      action: 'member.invite_cancelled', entity: 'gym_member', entityId: memberId,
+    });
+    return { ok: true };
   });
 }
 
@@ -589,9 +796,15 @@ async function linkMemberToApp(gymId, memberId, actor, ip, { email }) {
       throw new HttpError(409, 'That app account is already linked to another member of this gym');
     }
     const { rows } = await client.query(
-      `UPDATE gym_members SET app_user_id = $3, updated_at = now()
+      `UPDATE gym_members SET app_user_id = $3, app_invite_status = 'none', updated_at = now()
        WHERE id = $1 AND gym_id = $2 RETURNING *`,
       [member.id, gymId, user.id]
+    );
+    // consume any pending invitation — the app account IS the connection
+    await client.query(
+      `UPDATE gym_member_invites SET status = 'ACCEPTED', accepted_at = now(), updated_at = now()
+       WHERE member_id = $1 AND status = 'PENDING'`,
+      [member.id]
     );
     await gymAudit(client, {
       gymId, actorUserId: actor?.userId ?? null, actorLabel: actor?.label ?? null, ip,
@@ -599,7 +812,7 @@ async function linkMemberToApp(gymId, memberId, actor, ip, { email }) {
       before: { app_user_id: member.app_user_id },
       after: { app_user_id: user.id, user_email: user.email },
     });
-    return rows[0];
+    return memberToClient(rows[0]);
   });
 }
 
@@ -622,7 +835,7 @@ async function unlinkMemberFromApp(gymId, memberId, actor, ip) {
       action: 'member.unlinked_app', entity: 'gym_member', entityId: memberId,
       before, after: { app_user_id: null },
     });
-    return rows[0];
+    return memberToClient(rows[0]);
   });
 }
 
@@ -662,6 +875,7 @@ module.exports = {
   leaveGym, deactivateGym, reactivateGym,
   listGymStaff, addGymStaff, updateGymStaff,
   createGymMember, listGymMembers, getGymMember, updateGymMember,
+  cancelGymMember, reactivateGymMember, inviteMemberApp, cancelMemberInvite,
   linkMemberToApp, unlinkMemberFromApp, listGymMembershipsForUser,
   listAuditLog, gymAudit,
 };

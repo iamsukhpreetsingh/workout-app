@@ -139,9 +139,12 @@ export default function StaffPage() {
             searchPlaceholder="Search name or email…"
             q={q}
             onQ={setQ}
-            status={statusFilter}
-            onStatus={setStatusFilter}
-            statusOptions={['ACTIVE', 'INACTIVE', 'REMOVED'].map((s) => ({ value: s, label: s }))}
+            filter={{
+              placeholder: 'Status',
+              value: statusFilter,
+              onChange: setStatusFilter,
+              options: ['ACTIVE', 'INACTIVE', 'REMOVED'].map((s) => ({ value: s, label: s })),
+            }}
             extra={
               <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>
                 Add staff

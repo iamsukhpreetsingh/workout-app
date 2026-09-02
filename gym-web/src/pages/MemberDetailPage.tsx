@@ -1,21 +1,28 @@
-// Member detail — Overview tab is real (profile, edit, app-account
-// linking); Membership / Payments / Attendance / Trainer / Documents are
-// later-phase placeholders with their own sub-routes.
+// Member detail — Overview is real (profile, edit, app-connection card with
+// invite / cancel-invite / link / unlink, membership card with leave /
+// reactivate). Membership, Payments, Attendance, Trainer, Workouts,
+// Nutrition, Documents and Activity tabs are later-phase placeholders with
+// their own sub-routes. Everything here works with appUserId = NULL.
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Descriptions, Tabs, Button, Tag, Drawer, Modal, Input, App as AntApp, Spin, Typography, Form,
+  Descriptions, Tabs, Button, Tag, Drawer, Modal, Input, App as AntApp, Spin,
+  Typography, Card, Space, Popconfirm, Form,
 } from 'antd';
-import { EditOutlined, LinkOutlined, DisconnectOutlined } from '@ant-design/icons';
+import {
+  EditOutlined, LinkOutlined, DisconnectOutlined, UserAddOutlined,
+  PlayCircleOutlined, UserDeleteOutlined,
+} from '@ant-design/icons';
 import { useNavigate, useParams, useLocation, Navigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import PageContainer from '../components/PageContainer';
 import StatusBadge from '../components/StatusBadge';
-import { ErrorState, PermissionDenied, ComingSoon } from '../components/States';
-import { MemberFormFields } from './MembersPage';
+import { ErrorState, ComingSoon } from '../components/States';
+import { MemberFormFields, memberFormToPayload, AppConnectionTag } from './MembersPage';
 import { useGymContext, hasPermission } from '../permissions';
-import { getMember, updateMember, linkMemberApp, unlinkMemberApp, GymMember } from '../api';
-
-const MEMBER_TABS = ['overview', 'membership', 'payments', 'attendance', 'trainer', 'documents'];
+import {
+  getMember, updateMember, linkMemberApp, unlinkMemberApp,
+  cancelMember, reactivateMember, inviteMemberApp, cancelMemberInvite, GymMember,
+} from '../api';
 
 export default function MemberDetailPage() {
   const { id } = useParams();
@@ -30,6 +37,7 @@ export default function MemberDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkEmail, setLinkEmail] = useState('');
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -63,10 +71,7 @@ export default function MemberDetailPage() {
   const submitEdit = async () => {
     try {
       const v = await form.validateFields();
-      const updated = await updateMember(ctx!.gymId, member.id, {
-        ...v,
-        joined_at: v.joined_at ? v.joined_at.format('YYYY-MM-DD') : undefined,
-      });
+      const updated = await updateMember(ctx!.gymId, member.id, memberFormToPayload(v));
       setMember(updated);
       message.success('Member updated');
       setEditOpen(false);
@@ -88,6 +93,16 @@ export default function MemberDetailPage() {
     }
   };
 
+  const doInvite = async () => {
+    try {
+      const result = await inviteMemberApp(ctx!.gymId, member.id);
+      setInviteCode(result.invite_code);
+      await load();
+    } catch (e: any) {
+      message.error(e.message || 'Could not create invitation');
+    }
+  };
+
   const confirmUnlink = () => {
     modal.confirm({
       title: 'Unlink the app account?',
@@ -106,56 +121,121 @@ export default function MemberDetailPage() {
   };
 
   const overview = (
-    <>
-      <Descriptions column={{ xs: 1, md: 2 }} bordered size="small">
-        <Descriptions.Item label="Member code">{member.member_code}</Descriptions.Item>
-        <Descriptions.Item label="Status"><StatusBadge status={member.status} /></Descriptions.Item>
-        <Descriptions.Item label="Email">{member.email || '—'}</Descriptions.Item>
-        <Descriptions.Item label="Phone">{member.phone || '—'}</Descriptions.Item>
-        <Descriptions.Item label="Joined">{member.joined_at}</Descriptions.Item>
-        <Descriptions.Item label="App account">
-          {member.app_user_id
-            ? <Tag color="blue">Linked</Tag>
-            : <Tag>Not linked</Tag>}
-        </Descriptions.Item>
-        <Descriptions.Item label="Notes" span={2}>{member.notes || '—'}</Descriptions.Item>
-      </Descriptions>
-      {canManage && (
-        <div style={{ marginTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Card size="small" title="Profile">
+        <Descriptions column={{ xs: 1, md: 2 }} size="small">
+          <Descriptions.Item label="Member ID">{member.member_code}</Descriptions.Item>
+          <Descriptions.Item label="Phone">{member.phone || '—'}</Descriptions.Item>
+          <Descriptions.Item label="Email">{member.email || '—'}</Descriptions.Item>
+          <Descriptions.Item label="Date of birth">{member.date_of_birth || '—'}</Descriptions.Item>
+          <Descriptions.Item label="Gender">{member.gender || '—'}</Descriptions.Item>
+          <Descriptions.Item label="Joined">{member.joined_at}</Descriptions.Item>
+          <Descriptions.Item label="Emergency contact">
+            {member.emergency_contact_name
+              ? `${member.emergency_contact_name}${member.emergency_contact_phone ? ` · ${member.emergency_contact_phone}` : ''}`
+              : '—'}
+          </Descriptions.Item>
+          <Descriptions.Item label="Notes">{member.notes || '—'}</Descriptions.Item>
+        </Descriptions>
+        {canManage && (
           <Button
             icon={<EditOutlined />}
+            style={{ marginTop: 12 }}
             onClick={() => {
               form.setFieldsValue({
                 ...member,
                 joined_at: member.joined_at ? dayjs(member.joined_at) : undefined,
+                date_of_birth: member.date_of_birth ? dayjs(member.date_of_birth) : undefined,
               });
               setEditOpen(true);
             }}
           >
-            Edit
+            Edit details
           </Button>
-          {!member.app_user_id && (
-            <Button icon={<LinkOutlined />} onClick={() => setLinkOpen(true)} disabled={!member.email}>
-              Link app account
+        )}
+      </Card>
+
+      <Card size="small" title="Membership">
+        <Space wrap align="center">
+          <StatusBadge status={member.status} />
+          {canManage && member.status === 'ACTIVE' && (
+            <Popconfirm
+              title="Mark this member as having left?"
+              description="The record and its history are kept — the membership becomes CANCELLED."
+              okButtonProps={{ danger: true }}
+              onConfirm={async () => {
+                try {
+                  setMember(await cancelMember(ctx!.gymId, member.id));
+                  message.success('Membership cancelled');
+                } catch (e: any) { message.error(e.message || 'Could not cancel'); }
+              }}
+            >
+              <Button danger icon={<UserDeleteOutlined />}>Member left</Button>
+            </Popconfirm>
+          )}
+          {canManage && member.status !== 'ACTIVE' && (
+            <Button icon={<PlayCircleOutlined />} onClick={async () => {
+              try {
+                setMember(await reactivateMember(ctx!.gymId, member.id));
+                message.success('Membership reactivated');
+              } catch (e: any) { message.error(e.message || 'Could not reactivate'); }
+            }}>
+              Reactivate
             </Button>
           )}
-          {member.app_user_id && (
+        </Space>
+      </Card>
+
+      <Card size="small" title="App connection">
+        <Space wrap align="center">
+          <AppConnectionTag connection={member.app_connection} />
+          {canManage && member.app_connection === 'NOT_CONNECTED' && (
+            <>
+              <Button icon={<UserAddOutlined />} onClick={doInvite} disabled={!member.email}>
+                Invite to app
+              </Button>
+              <Button icon={<LinkOutlined />} onClick={() => setLinkOpen(true)} disabled={!member.email}>
+                Link app account
+              </Button>
+            </>
+          )}
+          {canManage && member.app_connection === 'INVITATION_PENDING' && (
+            <>
+              <Button icon={<UserAddOutlined />} onClick={doInvite}>Re-invite</Button>
+              <Button danger icon={<DisconnectOutlined />} onClick={async () => {
+                try {
+                  await cancelMemberInvite(ctx!.gymId, member.id);
+                  message.success('Invitation withdrawn');
+                  await load();
+                } catch (e: any) { message.error(e.message || 'Could not withdraw'); }
+              }}>
+                Withdraw invite
+              </Button>
+            </>
+          )}
+          {canManage && member.app_connection === 'CONNECTED' && (
             <Button danger icon={<DisconnectOutlined />} onClick={confirmUnlink}>
               Unlink app account
             </Button>
           )}
-          {!member.email && (
+          {canManage && !member.email && member.app_connection !== 'CONNECTED' && (
             <Typography.Text type="secondary">
-              Add an email to link an app account.
+              Add an email to invite or link an app account.
             </Typography.Text>
           )}
-        </div>
-      )}
+        </Space>
+        {member.app_connection === 'INVITATION_PENDING' && member.app_invite_sent_at && (
+          <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+            Invited {String(member.app_invite_sent_at).slice(0, 10)}
+          </Typography.Paragraph>
+        )}
+      </Card>
 
-      <Drawer title="Edit member" width={420} open={editOpen} onClose={() => setEditOpen(false)}
+      <Drawer title="Edit member" width={440} open={editOpen} onClose={() => setEditOpen(false)}
         extra={<Button type="primary" onClick={submitEdit}>Save</Button>}>
         <MemberFormFields form={form} />
       </Drawer>
+
       <Modal
         title="Link app account"
         open={linkOpen}
@@ -166,13 +246,26 @@ export default function MemberDetailPage() {
         <Typography.Paragraph type="secondary">
           Matches the app account by EXACT email. The member record is linked, never duplicated.
         </Typography.Paragraph>
-        <Input
-          placeholder="member@email.com"
-          value={linkEmail}
-          onChange={(e) => setLinkEmail(e.target.value)}
-        />
+        <Input placeholder="member@email.com" value={linkEmail} onChange={(e) => setLinkEmail(e.target.value)} />
       </Modal>
-    </>
+
+      <Modal
+        title="Invitation created"
+        open={!!inviteCode}
+        onOk={() => setInviteCode(null)}
+        onCancel={() => setInviteCode(null)}
+        okText="Done"
+        cancelButtonProps={{ style: { display: 'none' } }}
+      >
+        <Typography.Paragraph type="secondary">
+          Share this one-time code with the member. It is shown only once — for privacy, only its
+          hash is stored.{member.email ? ` An email was attempted to ${member.email} if SMTP is configured.` : ''}
+        </Typography.Paragraph>
+        <Typography.Paragraph copyable style={{ fontSize: 16, marginBottom: 0 }}>
+          {inviteCode}
+        </Typography.Paragraph>
+      </Modal>
+    </div>
   );
 
   const comingSoon = (what: string, phase: string, description: string) => (
@@ -188,7 +281,7 @@ export default function MemberDetailPage() {
         { label: 'Members', to: '/members' },
         { label: name },
       ]}
-      extra={<StatusBadge status={member.status} />}
+      extra={<Space><StatusBadge status={member.status} /><AppConnectionTag connection={member.app_connection} /></Space>}
     >
       <Tabs
         activeKey={tab}
@@ -207,13 +300,20 @@ export default function MemberDetailPage() {
           { key: 'trainer', label: 'Trainer', children: comingSoon(
               'Trainer assignment', 'Phase 2',
               'Assigning gym trainers to this member arrives with the coaching phase.') },
+          { key: 'workouts', label: 'Workouts', children: comingSoon(
+              'Workouts', 'Phase 2',
+              'Gym workout templates assigned to this member arrive with the coaching phase.') },
+          { key: 'nutrition', label: 'Nutrition', children: comingSoon(
+              'Nutrition', 'Phase 2',
+              'Gym nutrition plans assigned to this member arrive with the coaching phase.') },
           { key: 'documents', label: 'Documents', children: comingSoon(
               'Documents', 'Phase 3',
               'Membership forms, ID documents and consent files arrive with the operations phase.') },
+          { key: 'activity', label: 'Activity', children: comingSoon(
+              'Activity', 'Phase 1b',
+              'A timeline of this member\u2019s memberships, payments and visits arrives with later phases.') },
         ]}
       />
     </PageContainer>
   );
 }
-
-export { MEMBER_TABS };

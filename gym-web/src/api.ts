@@ -262,7 +262,15 @@ export interface GymMember {
   email: string | null;
   phone: string | null;
   app_user_id: string | null;
+  // independent axes: membership status vs app connection
   status: string;
+  app_connection: 'CONNECTED' | 'NOT_CONNECTED' | 'INVITATION_PENDING';
+  app_invite_sent_at?: string | null;
+  date_of_birth?: string | null;
+  gender?: string | null;
+  emergency_contact_name?: string | null;
+  emergency_contact_phone?: string | null;
+  profile?: Record<string, any> | null;
   joined_at: string;
   notes: string | null;
   created_at: string;
@@ -270,11 +278,12 @@ export interface GymMember {
 
 export const listMembers = (
   gymId: string,
-  params: { q?: string; status?: string; limit?: number; offset?: number } = {}
+  params: { q?: string; status?: string; connection?: string; limit?: number; offset?: number } = {}
 ) => {
   const qs = new URLSearchParams();
   if (params.q) qs.set('q', params.q);
   if (params.status) qs.set('status', params.status);
+  if (params.connection) qs.set('connection', params.connection);
   if (params.limit != null) qs.set('limit', String(params.limit));
   if (params.offset != null) qs.set('offset', String(params.offset));
   return api<GymMember[]>(`/gym/${gymId}/members?${qs}`);
@@ -294,6 +303,22 @@ export const linkMemberApp = (gymId: string, memberId: string, email: string) =>
 
 export const unlinkMemberApp = (gymId: string, memberId: string) =>
   api<GymMember>(`/gym/${gymId}/members/${memberId}/unlink-app`, { method: 'POST' });
+
+// member lifecycle: leave (cancel membership) / reactivate
+export const cancelMember = (gymId: string, memberId: string, reason?: string) =>
+  api<GymMember>(`/gym/${gymId}/members/${memberId}/cancel`, { method: 'POST', body: { reason } });
+
+export const reactivateMember = (gymId: string, memberId: string) =>
+  api<GymMember>(`/gym/${gymId}/members/${memberId}/reactivate`, { method: 'POST' });
+
+// app invitations: NOT_CONNECTED → INVITATION_PENDING → CONNECTED
+export const inviteMemberApp = (gymId: string, memberId: string, email?: string) =>
+  api<{ invite_code: string; email: string }>(
+    `/gym/${gymId}/members/${memberId}/invite-app`, { method: 'POST', body: email ? { email } : {} }
+  );
+
+export const cancelMemberInvite = (gymId: string, memberId: string) =>
+  api<{ ok: boolean }>(`/gym/${gymId}/members/${memberId}/cancel-invite`, { method: 'POST' });
 
 // ── staff ────────────────────────────────────────────────────────────────
 

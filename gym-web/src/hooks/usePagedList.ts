@@ -19,15 +19,20 @@ export interface PagedList<T> {
   setQ: (v: string) => void;
   status: string | undefined;
   setStatus: (v: string | undefined) => void;
+  extra: Record<string, string | undefined>;
+  setExtra: (patch: Record<string, string | undefined>) => void;
 }
 
 export function usePagedList<T>(
-  fetcher: (params: { q?: string; status?: string; limit: number; offset: number }) => Promise<T[]>,
+  fetcher: (params: {
+    q?: string; status?: string; limit: number; offset: number;
+  } & Record<string, any>) => Promise<T[]>,
   pageSize = 20
 ): PagedList<T> {
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
-  const [status, setStatus] = useState<string | undefined>(undefined);
+  const [status, setStatusState] = useState<string | undefined>(undefined);
+  const [extra, setExtraState] = useState<Record<string, string | undefined>>({});
   const [page, setPage] = useState(0);
   const [rows, setRows] = useState<T[]>([]);
   const [hasNext, setHasNext] = useState(false);
@@ -45,8 +50,15 @@ export function usePagedList<T>(
     return () => clearTimeout(debounceRef.current);
   }, [qInput]);
 
+  const setStatus = (v: string | undefined) => { setStatusState(v); setPage(0); };
+  const setExtra = (patch: Record<string, string | undefined>) => {
+    setExtraState((prev) => ({ ...prev, ...patch }));
+    setPage(0);
+  };
+
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
+  const extraKey = JSON.stringify(extra);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +69,7 @@ export function usePagedList<T>(
         const data = await fetcherRef.current({
           q: q || undefined,
           status,
+          ...JSON.parse(extraKey),
           limit: pageSize + 1,
           offset: page * pageSize,
         });
@@ -71,13 +84,13 @@ export function usePagedList<T>(
       }
     })();
     return () => { cancelled = true; };
-  }, [q, status, page, pageSize, tick]);
+  }, [q, status, page, pageSize, tick, extraKey]);
 
   const reload = useCallback(() => setTick((t) => t + 1), []);
 
   return {
     rows, loading, error, networkError: isNetworkError(error), reload,
     page, setPage, hasNext, q: qInput, setQ: setQInput,
-    status, setStatus,
+    status, setStatus, extra, setExtra,
   };
 }

@@ -47,13 +47,28 @@ denied** page — and the backend rejects the request anyway.
 ## What's real vs. placeholder
 
 - **Real**: gym onboarding wizard, profile/settings (incl. logo), members
-  list (search + status filter + pagination + create drawer), member detail
-  (edit, app-account link/unlink), staff management (add by email, role
-  change, deactivate/reactivate), trainers list.
+  list (search by name/email/phone/member ID; independent membership-status
+  and app-connection filters; pagination; create drawer), member detail
+  (full profile incl. DOB/gender/emergency contact, edit, app-connection
+  card with invite / re-invite / withdraw / link / unlink, membership card
+  with leave & reactivate), staff management (add by email, role change,
+  deactivate/reactivate), trainers list.
 - **Placeholders** (`ComingSoon`): memberships & plans, payments,
-  attendance, member sub-tabs, workouts, nutrition, classes,
+  attendance, member sub-tabs (membership/payments/attendance/trainer/
+  workouts/nutrition/documents/activity), workouts, nutrition, classes,
   communications, reports — their backend phases haven't shipped. No fake
   data, no dead buttons.
+
+## Member state model
+
+Two independent axes (never combined): **membership**
+(`ACTIVE/PENDING/FROZEN/EXPIRED/CANCELLED` on `gym_members.status`) and
+**app connection** (`CONNECTED` = linked `app_user_id`, `INVITATION_PENDING`
+= pending invite, else `NOT_CONNECTED` — derived, never stored as one
+column). A member needs no app account at any point; inviting stores only a
+SHA-256 hash of the one-time code, and linking consumes the pending invite.
+Leaving (cancel) keeps the record, its history and the app link; rejoining
+never duplicates users.
 
 ## UX conventions (reusable components)
 

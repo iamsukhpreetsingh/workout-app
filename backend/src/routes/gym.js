@@ -14,6 +14,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { requireGymContext, requireGymPermission } = require('../middleware/gymAuth');
 const gyms = require('../data/gyms');
 const storage = require('../data/storageService');
+const smtpProvider = require('../email/smtpProvider');
 
 const router = express.Router();
 
@@ -166,7 +167,7 @@ registerRoute(router, {
 }, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
   try {
     res.json(await gyms.listGymMembers(req.gymContext.gymId, {
-      status: req.query.status, q: req.query.q,
+      status: req.query.status, connection: req.query.connection, q: req.query.q,
       limit: req.query.limit, offset: req.query.offset,
     }));
   } catch (e) {
@@ -414,6 +415,94 @@ registerRoute(router, {
     httpError(res, e, 400);
   }
 }, [requireAuth, requireGymContext()]);
+
+// ── member lifecycle & app invitations ───────────────────────────────────
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/cancel',
+  description: 'Member leaves: membership → CANCELLED. The member record and history are kept; a linked app account is never touched. Requires permission: members.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.json(await gyms.cancelGymMember(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
+      { reason: req.body?.reason }
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/reactivate',
+  description: 'Member reactivates: membership → ACTIVE (app link untouched). Requires permission: members.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.json(await gyms.reactivateGymMember(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/invite-app',
+  description: 'Invites the member to connect an app account (NOT_CONNECTED → INVITATION_PENDING). The invite code is returned once and only stored hashed; an email is sent when SMTP is configured. Requires permission: members.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    const result = await gyms.inviteMemberApp(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip, req.body || {}
+    );
+    // best-effort delivery: a missing/broken SMTP never fails the invite —
+    // the code is still shown in the portal for manual sharing
+    if (process.env.SMTP_USER && process.env.SMTP_PASSWORD) {
+      const { getGymById } = gyms;
+      const gym = await getGymById(req.gymContext.gymId);
+      smtpProvider.send({
+        to: result.email,
+        subject: `Your invite to the ${gym ? gym.name : 'gym'} app`,
+        text: `You have been invited to connect your app account to ${gym ? gym.name : 'the gym'}. ` +
+          `Your invite code: ${result.invite_code}`,
+        html: `<p>You have been invited to connect your app account to <b>${gym ? gym.name : 'the gym'}</b>.</p>` +
+          `<p>Your invite code: <code>${result.invite_code}</code></p>`,
+      }).catch((err) => {
+        console.error(`[Gym] invite email failed (member=${req.params.memberId}): ${err.name || 'Error'}`);
+      });
+    }
+    res.status(201).json(result);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/cancel-invite',
+  description: 'Withdraws a pending app invitation (INVITATION_PENDING → NOT_CONNECTED). Requires permission: members.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.json(await gyms.cancelMemberInvite(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
 
 // ── audit log ────────────────────────────────────────────────────────────
 

@@ -217,8 +217,22 @@ from the client are selectors, never proof (verified against the JWT).
   `GET/PATCH …/members/:id`, `POST …/members/:id/link-app|unlink-app`
   (exact-email link, never duplicates), `GET …/audit-log`
   (append-only), `GET …/permissions` (portal route-guard data).
+- **Member management (Phase 4)**: members carry profile fields
+  (date_of_birth, gender, emergency contact, free-form `profile` JSONB —
+  no government IDs or health data) and `GM-`-prefixed member codes.
+  Duplicate guard: one non-CANCELLED member per email per gym (the same
+  email at a different gym is a different member); missing email/phone are
+  fine. TWO INDEPENDENT state axes: membership `status`
+  (ACTIVE/PENDING/FROZEN/EXPIRED/CANCELLED) and derived `app_connection`
+  (CONNECTED / NOT_CONNECTED / INVITATION_PENDING). Lifecycle routes
+  (members.manage): `POST …/cancel` (member leaves → CANCELLED; record,
+  history and app link kept; the underlying User is never touched),
+  `POST …/reactivate` (→ ACTIVE), `POST …/invite-app` (one-time code shown
+  once, stored SHA-256-hashed in `gym_member_invites`; optional fire-and-
+  forget SMTP email), `POST …/cancel-invite`; linking consumes the pending
+  invite. List filters: `status=` (membership) and `connection=` (app).
 - **Standalone users are unaffected**: zero gyms is a fully supported
-  state; membership/payments/attendance/classes are NOT implemented yet.
+  state; membership plans/payments/attendance/classes are NOT implemented yet.
 
 ### 3.6 Admin — `/admin` (role-gated; dashboard: `../admin-dashboard`)
 
