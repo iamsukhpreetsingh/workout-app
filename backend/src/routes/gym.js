@@ -70,6 +70,74 @@ registerRoute(router, {
   }
 }, [requireAuth, requireRole(['user', 'trainer', 'gym_staff'])]);
 
+// ── invitation acceptance bridge (public token routes — no gym context) ──
+// Registered BEFORE '/:gymId' so 'invite' is never captured as a gym id.
+// The plaintext code is the bearer token; nothing else authorizes linking.
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/invite/:token',
+  description: 'Public invitation preview for the landing page: gym name, member name, invited email and invitation state. Requires no authentication — the one-time code itself is the credential. Returns 404 for unknown codes.',
+  requiresAuth: false,
+  allowedRoles: ['public'],
+  category: 'Gym',
+}, async (req, res) => {
+  try {
+    const invitation = await gyms.getInvitationByToken(req.params.token);
+    if (!invitation) return res.status(404).json({ error: 'Invitation not found' });
+    res.json(invitation);
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/invite/:token/accept',
+  description: 'Scenario 1 — the person already has an app account: they sign in and accept. The account email must match the invited email exactly (identity verification); the existing User is linked to the existing GymMember, never duplicated.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.json(await gyms.acceptInvitation(req.params.token, req.user.id, req.ip));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/invite/:token/decline',
+  description: 'The invited person declines. Public (the token proves possession); the invitation becomes DECLINED and the member returns to NOT_CONNECTED.',
+  requiresAuth: false,
+  allowedRoles: ['public'],
+  category: 'Gym',
+}, async (req, res) => {
+  try {
+    res.json(await gyms.declineInvitation(req.params.token, req.ip));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/invite/:token/register',
+  description: 'Scenario 2 — the person has NO app account: registration THROUGH the invitation. Creates the User (role user) AND links the existing GymMember atomically; fails with 409 (no partial rows) if the email is already registered — the person then signs in and accepts instead.',
+  requiresAuth: false,
+  allowedRoles: ['public'],
+  category: 'Gym',
+}, async (req, res) => {
+  try {
+    const { name, password } = req.body || {};
+    const result = await gyms.registerViaInvitation(req.params.token, req.ip, { name, password });
+    res.status(201).json(result);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
 // ── gym settings ─────────────────────────────────────────────────────────
 
 registerRoute(router, {

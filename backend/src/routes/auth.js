@@ -198,6 +198,29 @@ const { query } = require('../db/pool');
 registerRoute(
   router,
   {
+    method: 'GET',
+    path: '/me',
+    description: "The authenticated account's safe profile (id, name, email, role). Used by the web portal to resolve the signed-in identity (e.g. invitation acceptance).",
+    requiresAuth: true,
+    allowedRoles: ['user', 'trainer', 'gym_staff'],
+    category: 'Auth',
+  },
+  [requireAuth],
+  async (req, res) => {
+    try {
+      const user = await users.getUserById(req.user.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      const { password_hash, ...safeUser } = user;
+      res.json(safeUser);
+    } catch (e) {
+      res.status(500).json({ error: e.message || 'Unexpected error' });
+    }
+  }
+);
+
+registerRoute(
+  router,
+  {
     method: 'PATCH',
     path: '/profile',
     description: "Updates the authenticated user's display name (the only editable core profile field; email is the auth identity and is not editable here).",

@@ -23,6 +23,7 @@ import {
 import { GymContext, hasPermission } from './permissions';
 import { PermissionDenied } from './components/States';
 import LoginPage from './pages/LoginPage';
+import InviteLandingPage from './pages/InviteLandingPage';
 import CreateGymWizard from './pages/CreateGymWizard';
 import Dashboard from './pages/Dashboard';
 import SettingsPage from './pages/SettingsPage';
@@ -105,6 +106,11 @@ function Shell() {
       }
     })();
   }, [refreshGyms]);
+
+  // public invitation landing page — rendered OUTSIDE the shell and before
+  // any auth gating (works signed-out, signed-in, or with no gym at all)
+  const inviteMatch = location.pathname.match(/^\/invite\/(.+)$/);
+  if (inviteMatch) return <InviteLandingPage token={inviteMatch[1]} />;
 
   if (booting) {
     return (

@@ -14,6 +14,9 @@ const { pool, query, transaction } = require('../db/pool');
 const { hasPermission } = require('./gymPermissions');
 const crypto = require('crypto');
 
+// an accepted invitation never outlives this window
+const INVITE_TTL_DAYS = 7;
+
 class HttpError extends Error {
   constructor(status, message) {
     super(message);
@@ -712,6 +715,7 @@ async function inviteMemberApp(gymId, memberId, actor, ip, { email } = {}) {
     }
     const code = crypto.randomBytes(16).toString('hex'); // shown once, stored hashed
     const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 86400 * 1000);
 
     // expire any previous pending invite (partial unique: one PENDING/member)
     await client.query(
@@ -720,9 +724,9 @@ async function inviteMemberApp(gymId, memberId, actor, ip, { email } = {}) {
       [memberId]
     );
     await client.query(
-      `INSERT INTO gym_member_invites (gym_id, member_id, email, code_hash, invited_by)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [gymId, memberId, inviteEmail, codeHash, actor?.userId ?? actor ?? null]
+      `INSERT INTO gym_member_invites (gym_id, member_id, email, code_hash, invited_by, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [gymId, memberId, inviteEmail, codeHash, actor?.userId ?? actor ?? null, expiresAt]
     );
     await client.query(
       `UPDATE gym_members SET app_invite_status = 'pending', app_invite_sent_at = now(),
@@ -852,6 +856,219 @@ async function listGymMembershipsForUser(userId) {
   return rows;
 }
 
+// ── invitation acceptance bridge (Gym ⇄ fitness app) ─────────────────────
+//
+// The plaintext code is a bearer token (128-bit random, shown once, stored
+// hashed). Acceptance is identity-verified: the accepting account's email
+// must match the invited email EXACTLY. Arbitrary linking ("put user X into
+// gymMember GM100") is impossible — there is no such route; staff linking
+// requires members.manage, personal linking requires the invitation token.
+
+function hashInviteCode(code) {
+  return crypto.createHash('sha256').update(String(code || '')).digest('hex');
+}
+
+async function findInvitationForAccept(client, code) {
+  const { rows } = await client.query(
+    `SELECT i.*, g.name AS gym_name, g.status AS gym_status,
+            m.first_name, m.last_name, m.status AS member_status, m.id AS member_id
+     FROM gym_member_invites i
+     JOIN gyms g ON g.id = i.gym_id
+     JOIN gym_members m ON m.id = i.member_id
+     WHERE i.code_hash = $1
+     ORDER BY i.created_at DESC LIMIT 1`,
+    [hashInviteCode(code)]
+  );
+  return rows[0] || null;
+}
+
+// public, token-keyed view of an invitation (portal landing page data)
+async function getInvitationByToken(code) {
+  const invite = await query(
+    `SELECT i.id, i.email, i.status, i.expires_at, i.created_at, i.accepted_at,
+            g.name AS gym_name, g.status AS gym_status,
+            m.first_name, m.last_name, m.status AS member_status
+     FROM gym_member_invites i
+     JOIN gyms g ON g.id = i.gym_id
+     JOIN gym_members m ON m.id = i.member_id
+     WHERE i.code_hash = $1
+     ORDER BY i.created_at DESC LIMIT 1`,
+    [hashInviteCode(code)]
+  );
+  if (!invite.rows.length) return null;
+  const row = invite.rows[0];
+  let status = row.status;
+  if (status === 'PENDING' && new Date(row.expires_at) < new Date()) status = 'EXPIRED';
+  return {
+    gymName: row.gym_name,
+    gymStatus: row.gym_status,
+    memberName: [row.first_name, row.last_name].filter(Boolean).join(' '),
+    memberStatus: row.member_status,
+    email: row.email,
+    status,
+    invitedAt: row.created_at,
+    acceptedAt: row.accepted_at,
+  };
+}
+
+// all shared validations for accept/register; returns the locked invite row
+async function lockAcceptableInvitation(client, code) {
+  const invite = await findInvitationForAccept(client, code);
+  if (!invite) throw new HttpError(404, 'Invitation not found');
+  if (invite.status === 'PENDING' && new Date(invite.expires_at) < new Date()) {
+    await client.query(
+      `UPDATE gym_member_invites SET status = 'EXPIRED', updated_at = now() WHERE id = $1`,
+      [invite.id]
+    );
+    throw new HttpError(410, 'This invitation has expired. Ask your gym to send a new one.');
+  }
+  if (invite.status === 'ACCEPTED') throw new HttpError(409, 'This invitation was already accepted');
+  if (invite.status === 'DECLINED') throw new HttpError(410, 'This invitation was declined');
+  if (invite.status === 'CANCELLED') throw new HttpError(410, 'This invitation was cancelled by the gym');
+  if (invite.status === 'EXPIRED') throw new HttpError(410, 'This invitation has expired. Ask your gym to send a new one.');
+  if (invite.gym_status === 'SUSPENDED') throw new HttpError(403, 'This gym is currently unavailable');
+  if (invite.gym_status === 'INACTIVE') throw new HttpError(403, 'This gym is deactivated — ask your gym to reactivate it first');
+  if (invite.member_status === 'CANCELLED') {
+    throw new HttpError(410, 'This membership is no longer active — the invitation cannot be used');
+  }
+  return invite;
+}
+
+// Scenario 1: the person ALREADY has an app account. They log in and open
+// the invitation; the account's email must match the invited email.
+async function acceptInvitation(code, userId, ip) {
+  return transaction(async (client) => {
+    const invite = await lockAcceptableInvitation(client, code);
+    const { rows: userRows } = await client.query(
+      'SELECT id, email FROM users WHERE id = $1', [userId]
+    );
+    if (!userRows.length) throw new HttpError(401, 'Account not found');
+    const user = userRows[0];
+    if (String(user.email).toLowerCase() !== String(invite.email).toLowerCase()) {
+      // identity verification: the invitation belongs to a specific email
+      throw new HttpError(403,
+        `This invitation was sent to ${invite.email}. Sign in with that account to accept it.`);
+    }
+    const { rows: memberRows } = await client.query(
+      'SELECT * FROM gym_members WHERE id = $1 AND gym_id = $2 FOR UPDATE',
+      [invite.member_id, invite.gym_id]
+    );
+    if (!memberRows.length) throw new HttpError(404, 'Member not found');
+    if (memberRows[0].app_user_id) {
+      throw new HttpError(409, 'This member is already connected to an app account');
+    }
+    const { rows: clash } = await client.query(
+      `SELECT id FROM gym_members
+       WHERE gym_id = $1 AND app_user_id = $2 AND id != $3
+         AND status IN ('ACTIVE','PENDING','FROZEN')`,
+      [invite.gym_id, user.id, memberRows[0].id]
+    );
+    if (clash.length) {
+      throw new HttpError(409, 'That app account is already linked to another member of this gym');
+    }
+    await client.query(
+      `UPDATE gym_members SET app_user_id = $2, app_invite_status = 'none', updated_at = now()
+       WHERE id = $1`,
+      [memberRows[0].id, user.id]
+    );
+    await client.query(
+      `UPDATE gym_member_invites SET status = 'ACCEPTED', accepted_at = now(),
+         accepted_user_id = $2, updated_at = now() WHERE id = $1`,
+      [invite.id, user.id]
+    );
+    await gymAudit(client, {
+      gymId: invite.gym_id, actorUserId: user.id, ip,
+      action: 'member.invite_accepted', entity: 'gym_member', entityId: memberRows[0].id,
+      after: { app_user_id: user.id, email: user.email },
+    });
+    return {
+      ok: true,
+      gymName: invite.gym_name,
+      member: memberToClient({ ...memberRows[0], app_user_id: user.id }),
+    };
+  });
+}
+
+// the invited person declines (public — the token itself proves possession)
+async function declineInvitation(code, ip) {
+  return transaction(async (client) => {
+    const invite = await lockAcceptableInvitation(client, code);
+    await client.query(
+      `UPDATE gym_member_invites SET status = 'DECLINED', updated_at = now() WHERE id = $1`,
+      [invite.id]
+    );
+    await client.query(
+      `UPDATE gym_members SET app_invite_status = 'none', updated_at = now() WHERE id = $1`,
+      [invite.member_id]
+    );
+    await gymAudit(client, {
+      gymId: invite.gym_id, actorLabel: `invited: ${invite.email}`, ip,
+      action: 'member.invite_declined', entity: 'gym_member', entityId: invite.member_id,
+    });
+    return { ok: true };
+  });
+}
+
+// Scenario 2: the person has NO app account. Registration happens THROUGH
+// the invitation token — the new User is created AND linked atomically,
+// so the historical GymMember record is connected, never duplicated.
+async function registerViaInvitation(code, ip, { name, password }) {
+  if (!name || !String(name).trim()) throw new HttpError(400, 'Name is required');
+  if (!password || String(password).length < 8) {
+    throw new HttpError(400, 'Password must be at least 8 characters');
+  }
+  const bcrypt = require('bcryptjs');
+  const passwordHash = await bcrypt.hash(String(password), 11);
+  return transaction(async (client) => {
+    const invite = await lockAcceptableInvitation(client, code);
+    const emailNorm = String(invite.email).toLowerCase();
+    const { rows: existing } = await client.query(
+      'SELECT id FROM users WHERE lower(email) = $1', [emailNorm]
+    );
+    if (existing.length) {
+      // registration failure must leave NO partial rows — user exists →
+      // they should log in and accept instead
+      throw new HttpError(409,
+        'An account with this email already exists. Sign in with it to accept the invitation.');
+    }
+    const { rows: userRows } = await client.query(
+      `INSERT INTO users (email, password_hash, name, role)
+       VALUES ($1, $2, $3, 'user') RETURNING id, email, name`,
+      [emailNorm, passwordHash, String(name).trim()]
+    );
+    const user = userRows[0];
+    const { rows: memberRows } = await client.query(
+      'SELECT * FROM gym_members WHERE id = $1 AND gym_id = $2 FOR UPDATE',
+      [invite.member_id, invite.gym_id]
+    );
+    if (!memberRows.length) throw new HttpError(404, 'Member not found');
+    if (memberRows[0].app_user_id) {
+      throw new HttpError(409, 'This member is already connected to an app account');
+    }
+    await client.query(
+      `UPDATE gym_members SET app_user_id = $2, app_invite_status = 'none', updated_at = now()
+       WHERE id = $1`,
+      [memberRows[0].id, user.id]
+    );
+    await client.query(
+      `UPDATE gym_member_invites SET status = 'ACCEPTED', accepted_at = now(),
+         accepted_user_id = $2, updated_at = now() WHERE id = $1`,
+      [invite.id, user.id]
+    );
+    await gymAudit(client, {
+      gymId: invite.gym_id, actorUserId: user.id, ip,
+      action: 'member.invite_accepted', entity: 'gym_member', entityId: memberRows[0].id,
+      after: { registered_via_invitation: true, app_user_id: user.id },
+    });
+    return {
+      ok: true,
+      gymName: invite.gym_name,
+      user: { id: user.id, email: user.email, name: user.name },
+      member: memberToClient({ ...memberRows[0], app_user_id: user.id }),
+    };
+  });
+}
+
 // ── audit read ───────────────────────────────────────────────────────────
 async function listAuditLog(gymId, { limit = 100, offset = 0, action } = {}) {
   const vals = [gymId];
@@ -876,6 +1093,7 @@ module.exports = {
   listGymStaff, addGymStaff, updateGymStaff,
   createGymMember, listGymMembers, getGymMember, updateGymMember,
   cancelGymMember, reactivateGymMember, inviteMemberApp, cancelMemberInvite,
+  getInvitationByToken, acceptInvitation, declineInvitation, registerViaInvitation,
   linkMemberToApp, unlinkMemberFromApp, listGymMembershipsForUser,
   listAuditLog, gymAudit,
 };

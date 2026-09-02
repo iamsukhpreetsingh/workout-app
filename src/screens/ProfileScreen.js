@@ -7,6 +7,7 @@ import { useColors } from '../theme';
 import { useHeaderActions } from '../components/HeaderActions';
 import { TAB_CLIENTS, EDIT_PROFILE, INTAKE_FORM } from '../shared/constants/routes';
 import ChangePasswordCard from '../components/ChangePasswordCard';
+import MyGymCard from '../components/MyGymCard';
 
 // Profile identity/info only — app preferences stay in Settings.
 export default function ProfileScreen({ navigation, inTrainerView = false, onSwitchView }) {
@@ -162,6 +163,10 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer, logout, inTr
         <Ionicons name="create-outline" size={16} color={colors.primary} />
         <Text style={styles.editBtnText}>Edit Profile</Text>
       </TouchableOpacity>
+
+      {/* My Gym — only renders for app-linked gym members; standalone users
+          (the default) never see it and never needed a gym to sign up */}
+      {!inTrainerView && <MyGymCard />}
 
       {/* Health Profile — moved from Settings (same screen, same data) */}
       {!isTrainer && (

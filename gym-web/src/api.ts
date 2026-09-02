@@ -320,6 +320,33 @@ export const inviteMemberApp = (gymId: string, memberId: string, email?: string)
 export const cancelMemberInvite = (gymId: string, memberId: string) =>
   api<{ ok: boolean }>(`/gym/${gymId}/members/${memberId}/cancel-invite`, { method: 'POST' });
 
+// ── public invitation bridge (token-keyed; no gym context) ───────────────
+
+export interface InvitationPreview {
+  gymName: string;
+  gymStatus: string;
+  memberName: string;
+  memberStatus: string;
+  email: string;
+  status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'CANCELLED';
+  invitedAt: string;
+  acceptedAt: string | null;
+}
+
+export const getInvitation = (token: string) =>
+  api<InvitationPreview>(`/gym/invite/${encodeURIComponent(token)}`);
+
+export const acceptInvitationByToken = (token: string) =>
+  api<{ ok: boolean; gymName: string }>(`/gym/invite/${encodeURIComponent(token)}/accept`, { method: 'POST' });
+
+export const declineInvitationByToken = (token: string) =>
+  api<{ ok: boolean }>(`/gym/invite/${encodeURIComponent(token)}/decline`, { method: 'POST' });
+
+export const registerViaInvitation = (token: string, name: string, password: string) =>
+  api<{ ok: boolean; gymName: string; user: UserProfile }>(
+    `/gym/invite/${encodeURIComponent(token)}/register`, { method: 'POST', body: { name, password } }
+  );
+
 // ── staff ────────────────────────────────────────────────────────────────
 
 export interface StaffRow {

@@ -70,6 +70,17 @@ SHA-256 hash of the one-time code, and linking consumes the pending invite.
 Leaving (cancel) keeps the record, its history and the app link; rejoining
 never duplicates users.
 
+## Invitation bridge (public landing page)
+
+`/#/invite/<one-time-code>` renders **outside the shell** for signed-out
+visitors: gym name, member name and invited email, with three paths —
+**Create Account** (register-through-invitation: the backend creates the
+User and links the existing GymMember atomically), **sign in then accept**
+(existing accounts; the backend verifies the account email matches the
+invited email), and **Decline**. Expired / cancelled / declined /
+already-accepted codes render their own honest states; the code is consumed
+on acceptance and only its hash is stored server-side.
+
 ## UX conventions (reusable components)
 
 `DataTable` (loading/error-with-retry/empty/prev-next pagination), `FilterBar`

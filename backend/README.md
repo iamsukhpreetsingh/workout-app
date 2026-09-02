@@ -231,6 +231,19 @@ from the client are selectors, never proof (verified against the JWT).
   once, stored SHA-256-hashed in `gym_member_invites`; optional fire-and-
   forget SMTP email), `POST …/cancel-invite`; linking consumes the pending
   invite. List filters: `status=` (membership) and `connection=` (app).
+- **Invitation bridge (Phase 5)**: the plaintext one-time code IS the
+  bearer token (128-bit, shown once, SHA-256-hashed in
+  `gym_member_invites` with a 7-day `expires_at`). Public token routes —
+  registered BEFORE `/:gymId`: `GET /gym/invite/:token` (landing-page
+  preview), `POST …/decline` (→ DECLINED, member back to NOT_CONNECTED),
+  `POST …/register` (creates the User AND links the existing GymMember
+  atomically; 409 with no partial rows if the email already exists),
+  `POST …/accept` (requireAuth; the account email must match the invited
+  email EXACTLY — arbitrary linking is impossible). Invitation lifecycle:
+  PENDING → ACCEPTED | DECLINED | EXPIRED | CANCELLED; acceptance is
+  blocked for suspended/deactivated gyms and cancelled members, and is
+  audited (`member.invite_accepted|declined`). `GET /auth/me` exposes the
+  signed-in account's safe profile for the portal's identity probe.
 - **Standalone users are unaffected**: zero gyms is a fully supported
   state; membership plans/payments/attendance/classes are NOT implemented yet.
 
