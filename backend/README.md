@@ -350,6 +350,23 @@ from the client are selectors, never proof (verified against the JWT).
   /gym/my/workouts/saved/:id/update`, `DELETE /gym/my/workouts/saved/:id`
   (all auth-only; member resolved by JWT; all /my routes registered
   BEFORE /:gymId patterns so 'my' is never read as a gym id).
+- **Gym nutrition management (Phase 12)**: gym-owned
+  `gym_nutrition_items` in three kinds — RECIPE / MEAL_PLAN /
+  DIET_RECOMMENDATION — with uniform `content.entries` lines, optional
+  nutrition `targets` (calories/macros), tags, DRAFT/PUBLISHED/ARCHIVED,
+  a `recommended` distribution flag and a `version` counter bumped on
+  content edits. Mirrors Phase 11 exactly: direct assignments reference
+  gym_members (app_user_id NULL valid; stored until the member connects;
+  duplicate ACTIVE assignment 409; drafts/archived not assignable;
+  leave/reconnect safe) and snapshot saves (`gym_nutrition_saves` hold a
+  full JSONB copy + saved_version; duplicate save 409; gym edits never
+  move a personal copy — explicit update only). Mobile:
+  `GET /gym/my/nutrition` (recommended + assigned + saved with
+  `update_available` across ACTIVE memberships), `POST
+  /gym/my/nutrition/:id/save`, `GET /gym/my/nutrition/saved`, `POST
+  /gym/my/nutrition/saved/:id/update`, `DELETE /gym/my/nutrition/saved/:id`
+  (all auth-only; registered before /:gymId patterns). The Diet screen
+  exposes a compact "Gym Recommended →" strip + modal — no redesign.
 - **Standalone users are unaffected**: zero gyms is a fully supported
   state; classes are NOT implemented yet.
 
@@ -505,6 +522,7 @@ Errors to expect: 409 duplicate receipt / payment-exceeds-balance ·
 | Gym billing (Phase 9) | `membership_charges` (dues; auto-created from membership terms with the assignment-time price snapshot; manual charges), `membership_payments` (IMMUTABLE receipts; `receipt_number` unique and permanent; method CASH/UPI/CARD/BANK_TRANSFER/OTHER; backdating allowed, future-dating rejected), `payment_refunds` (additive corrections against a payment; never an edit). Charge status DUE/PARTIAL/PAID/OVERDUE/REFUNDED is DERIVED from payments minus refunds at read time — overdue is judged in the gym's timezone. Payments reference `gym_members`, so `app_user_id = NULL` is fully valid |
 | Gym attendance (Phase 10) | `gym_attendance` (member-scoped; source QR_CHECK_IN/FRONT_DESK/WORKOUT_COMPLETION/ADMIN_MANUAL; `check_in_at` instant + `local_date` derived in the gym's timezone; `client_time`/`time_corrected` for offline device-clock corrections) + `gym_members.qr_token` (unique 128-bit QR identity, rotatable) |
 | Gym workouts (Phase 11) | `gym_workouts` (gym-owned; version bumps on content edits; `recommended` flag = general distribution), `gym_workout_exercises` (stored BY NAME — catalog-independent), `gym_workout_assignments` (direct, member-scoped, UNIQUE(workout, member, ACTIVE)), `gym_workout_saves` (member personal library; full JSONB snapshot + `saved_version`) |
+| Gym nutrition (Phase 12) | `gym_nutrition_items` (gym-owned; kinds RECIPE/MEAL_PLAN/DIET_RECOMMENDATION; content.entries + optional targets; versioned; recommended flag), `gym_nutrition_assignments` (member-scoped, UNIQUE(item, member, ACTIVE)), `gym_nutrition_saves` (JSONB snapshot + saved_version) |
 | Misc                  | `measurement_entries`, `backup_personal_records`, `backup_progress_photos` (+S3/local storage), `diet_trainer_notes`, `sync_status_reports`, `restore_runs`                                                                                                                                                                                                                                                             |
 
 Indexes exist for every hot query path (user+date on diaries, plan+date on

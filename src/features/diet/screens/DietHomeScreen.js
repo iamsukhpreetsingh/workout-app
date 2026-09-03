@@ -13,6 +13,7 @@ import { CLIENT_DIET_PLAN_DETAIL } from '../../../shared/constants/routes';
 import { useColors } from '../../../theme';
 import { todayLocalISO, isFutureDate } from '../../../lib/checkinDates';
 import { listEntriesForDate, deleteFoodEntry, updateFoodEntry } from '../../../db/diary';
+import GymNutritionRow from '../../../components/GymNutritionRow';
 import { getSettings, updateSettings } from '../../../db/settings';
 import FoodSearchModal from '../components/FoodSearchModal';
 import SetTargetsModal from '../components/SetTargetsModal';
@@ -209,6 +210,10 @@ export default function DietHomeScreen({ navigation }) {
       contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await reloadEntries(); setRefreshing(false); }} tintColor={colors.primary} />}
     >
+      {/* Phase 12 — compact "Gym Recommended" strip (renders nothing for
+          standalone users; the Diet experience below is untouched) */}
+      <GymNutritionRow />
+
       {/* date nav — backfill past days allowed, future never loggable */}
       <View style={styles.dateNav}>
         <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} onPress={() => setViewDate(shiftDateStr(viewDate, -1))}>

@@ -63,7 +63,9 @@ denied** page — and the backend rejects the request anyway.
   and delete records), **workouts** (gym-owned content with an ordered
   exercise-by-name editor, versioned originals with
   archive/restore/recommend; member Workouts tab: assign/end with
-  history), staff
+  history), **nutrition** (gym-owned recipes/meal plans/diet
+  recommendations with targets, versioning, archive/restore/recommend;
+  member Nutrition tab: assign/end with history), staff
   management (add by email — direct add for existing accounts, one-time
   staff invitation for people without an app account; role change,
   deactivate/reactivate with a reassignment guard), **trainer

@@ -34,6 +34,7 @@ import PlansPage from './pages/PlansPage';
 import PaymentsPage from './pages/PaymentsPage';
 import AttendancePage from './pages/AttendancePage';
 import WorkoutsPage from './pages/WorkoutsPage';
+import NutritionPage from './pages/NutritionPage';
 import StaffPage from './pages/StaffPage';
 import TrainersPage from './pages/TrainersPage';
 import PlaceholderPage from './pages/PlaceholderPage';
@@ -203,9 +204,7 @@ function Shell() {
       <Route path="/staff" element={permGuard(['staff.manage'], <StaffPage />)} />
 
       <Route path="/workouts" element={permGuard(['content.manage', 'workouts.manage'], <WorkoutsPage />)} />
-      <Route path="/nutrition" element={permGuard(['content.manage', 'nutrition.manage'],
-        <PlaceholderPage section="Nutrition" title="Nutrition" phase="Phase 2"
-          description="Gym nutrition plans assigned to members by gym trainers." />)} />
+      <Route path="/nutrition" element={permGuard(['content.manage', 'nutrition.manage'], <NutritionPage />)} />
       <Route path="/classes" element={permGuard(['content.manage'],
         <PlaceholderPage section="Classes" title="Classes" phase="Phase 3"
           description="Class schedule, capacity and member bookings." />)} />

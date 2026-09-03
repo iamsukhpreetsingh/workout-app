@@ -19,6 +19,7 @@ const trainers = require('../data/gymTrainers');
 const billing = require('../data/gymBilling');
 const attendance = require('../data/gymAttendance');
 const workouts = require('../data/gymWorkouts');
+const nutrition = require('../data/gymNutrition');
 const storage = require('../data/storageService');
 const smtpProvider = require('../email/smtpProvider');
 
@@ -328,6 +329,138 @@ registerRoute(router, {
   }
 }, [requireAuth]);
 
+
+// ── mobile: gym nutrition surfaces (auth only — registered before /:gymId)
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/nutrition',
+  description: "Everything the connected member can see across their ACTIVE gym memberships: recommended (published + flagged) and directly assigned gym nutrition items, plus their saved personal-library copies with an update_available hint. Requires authentication only.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.json(await nutrition.listForMember(req.user.id));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/my/nutrition/:itemId/save',
+  description: "Saves a gym nutrition item to the member's personal library as a full SNAPSHOT at the current version — gym edits never move the copy. Duplicate saves 409. The member must hold an ACTIVE membership at the item's gym.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const itemGym = await query(
+      'SELECT gym_id FROM gym_nutrition_items WHERE id = $1', [req.params.itemId]
+    );
+    if (!itemGym.rows.length) return res.status(404).json({ error: 'Item not found' });
+    const gymId = itemGym.rows[0].gym_id;
+    const membership = await gyms.listGymMembershipsForUser(req.user.id)
+      .then((list) => list.find((m) => m.gym_id === gymId && m.status === 'ACTIVE'));
+    if (!membership) return res.status(403).json({ error: 'You are not an active member of this gym' });
+    res.status(201).json(await nutrition.saveItemForMember(
+      gymId, membership.id, req.params.itemId, { userId: req.user.id }, req.ip, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/nutrition/saved',
+  description: "The member's saved nutrition copies (snapshots) with an update_available hint. Requires authentication.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT s.id AS save_id, s.saved_version, s.snapshot, s.saved_at, s.updated_at,
+              n.id AS item_id, n.title, n.version AS current_version, n.status AS item_status,
+              g.name AS gym_name
+       FROM gym_nutrition_saves s
+       JOIN gym_nutrition_items n ON n.id = s.item_id
+       JOIN gyms g ON g.id = s.gym_id
+       WHERE s.member_id IN (SELECT id FROM gym_members WHERE app_user_id = $1)
+       ORDER BY s.saved_at DESC`,
+      [req.user.id]
+    );
+    res.json(rows.rows.map((r) => ({
+      ...r,
+      snapshot: typeof r.snapshot === 'string' ? JSON.parse(r.snapshot) : r.snapshot,
+      update_available: r.item_status === 'PUBLISHED' && r.current_version > r.saved_version,
+    })));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/my/nutrition/saved/:saveId/update',
+  description: 'Explicitly pulls the CURRENT gym version into the saved copy — the gym can never move a member copy automatically. Requires authentication.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const memberRows = await query(
+      'SELECT id, gym_id FROM gym_members WHERE app_user_id = $1', [req.user.id]
+    );
+    let done = null;
+    for (const m of memberRows.rows) {
+      try {
+        done = await nutrition.updateSavedItem(
+          m.gym_id, m.id, req.params.saveId, { userId: req.user.id }, req.ip, gyms.gymAudit
+        );
+        break;
+      } catch (e) {
+        if (e.status && e.status !== 404) throw e;
+      }
+    }
+    if (!done) return res.status(404).json({ error: 'Saved item not found' });
+    res.json(done);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'DELETE',
+  path: '/my/nutrition/saved/:saveId',
+  description: "Removes an item from the member's personal library. Requires authentication.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const memberRows = await query(
+      'SELECT id, gym_id FROM gym_members WHERE app_user_id = $1', [req.user.id]
+    );
+    let done = null;
+    for (const m of memberRows.rows) {
+      try {
+        done = await nutrition.deleteSavedItem(
+          m.gym_id, m.id, req.params.saveId, { userId: req.user.id }, req.ip, gyms.gymAudit
+        );
+        break;
+      } catch (e) {
+        if (e.status && e.status !== 404) throw e;
+      }
+    }
+    if (!done) return res.status(404).json({ error: 'Saved item not found' });
+    res.json(done);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
 
 // ── gym settings ─────────────────────────────────────────────────────────
 
@@ -1535,6 +1668,114 @@ registerRoute(router, {
 
 
 
+
+// ── gym nutrition management (Phase 12) ──────────────────────────────────
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/nutrition',
+  description: "Lists the gym's nutrition items (kind/status/q/recommended filters) with assignment/save counts. Requires permission: members.view or content.manage.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext()], async (req, res) => {
+  try {
+    const c = req.gymContext;
+    const allowed = c.permissions.includes('members.view') || c.permissions.includes('content.manage') || c.permissions.includes('assigned_members.view');
+    if (!allowed) return res.status(403).json({ error: 'Requires permission: members.view' });
+    res.json(await nutrition.listItems(c.gymId, {
+      status: req.query.status, q: req.query.q, kind: req.query.kind, recommended: req.query.recommended,
+    }));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext()]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/nutrition',
+  description: 'Creates gym-owned nutrition content (kind RECIPE/MEAL_PLAN/DIET_RECOMMENDATION; content.entries lines; optional nutrition targets; tags; DRAFT/PUBLISHED; recommended flag). Requires permission: content.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('content.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await nutrition.createItem(
+      req.gymContext.gymId, { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('content.manage')]);
+
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/:gymId/nutrition/:itemId',
+  description: 'Updates a nutrition item. Content edits bump the VERSION — member saves keep their snapshot. Publish/archive does not bump. Requires permission: content.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('content.manage')], async (req, res) => {
+  try {
+    res.json(await nutrition.updateItem(
+      req.gymContext.gymId, req.params.itemId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('content.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/nutrition-assignments',
+  description: "Directly assigns a PUBLISHED nutrition item to a member (works with app_user_id NULL — stored until the member connects). Duplicates rejected; archived/draft rejected. Requires permission: members.manage (OWNER, ADMIN).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await nutrition.assignItem(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/nutrition-assignments',
+  description: "The member's nutrition assignment history. Requires permission: members.view.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
+  try {
+    res.json(await nutrition.listMemberAssignments(req.gymContext.gymId, req.params.memberId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/nutrition-assignments/:assignmentId/end',
+  description: 'Ends a nutrition assignment (kept as history). Requires permission: members.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.json(await nutrition.endAssignment(
+      req.gymContext.gymId, req.params.assignmentId,
+      { userId: req.user.id }, req.ip, { reason: req.body?.reason }, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
 
 // ── audit log ────────────────────────────────────────────────────────────
 
