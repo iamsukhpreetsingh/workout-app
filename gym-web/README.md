@@ -56,18 +56,17 @@ denied** page — and the backend rejects the request anyway.
   plus an append-only lifecycle timeline), **membership plans**
   (create/edit/archive, duplicate-name and validation rules),
   **memberships overview** (all terms gym-wide with search + filters,
-  incl. FROZEN), **billing** (Payments dashboard with revenue/collected/
-  due/overdue cards + receipt ledger for OWNER/ADMIN; member Payments tab
-  with dues, immutable receipts, refunds and add-charge), staff management (add by email — direct add for existing
-  accounts, one-time staff invitation for people without an app account;
-  role change, deactivate/reactivate with a reassignment guard),
-  **trainer assignments** (member Trainer tab: assign/change/unassign with
-  history; Trainers page shows per-trainer assigned-member counts), and the
+  incl. FROZEN), **billing** (see "Billing & payments" below), staff
+  management (add by email — direct add for existing accounts, one-time
+  staff invitation for people without an app account; role change,
+  deactivate/reactivate with a reassignment guard), **trainer
+  assignments** (member Trainer tab: assign/change/unassign with history;
+  Trainers page shows per-trainer assigned-member counts), and the
   trainer's own roster view.
-- **Placeholders** (`ComingSoon`): payments, attendance, member sub-tabs
-  (payments/attendance/trainer/workouts/nutrition/documents/activity),
-  workouts, nutrition, classes, communications, reports — their backend
-  phases haven't shipped. No fake data, no dead buttons.
+- **Placeholders** (`ComingSoon`): attendance, member sub-tabs
+  (attendance/workouts/nutrition/documents/activity), workouts, nutrition,
+  classes, communications, reports — their backend phases haven't shipped.
+  No fake data, no dead buttons.
 
 ## Member state model
 
@@ -103,6 +102,46 @@ on acceptance and only its hash is stored server-side.
 
 Membership lifecycle, payments, attendance, classes, trainer assignments —
 see `../GYM_MANAGEMENT_DESIGN.md` §16 for phasing.
+
+## Billing & payments (Phase 9)
+
+### Where the code lives
+
+| File | Contents |
+|---|---|
+| `src/api.ts` | `Charge`, `Payment`, `BillingSummary`, `Receipt` types; `getBillingSummary`, `listGymPayments`, `listGymCharges`, `getMemberBilling`, `createCharge`, `recordPayment`, `refundPayment`, `getReceipt`; `formatMoney` (integer paise → ₹ string) |
+| `src/pages/PaymentsPage.tsx` | `/payments` — four summary cards (Revenue this month / Collected / Due / Overdue) + the receipt ledger (search, method filter, prev/next paging). OWNER/ADMIN only |
+| `src/components/MemberPaymentsTab.tsx` | The member's Payments tab: dues table with balances, receipts table, **Record payment** modal (charge picker pre-filled with the outstanding balance, amount, method, backdate picker), **Add charge** modal (payments.manage), per-receipt **Receipt** (printable view) and **Refund** (payments.manage) actions |
+| `src/pages/MemberDetailPage.tsx` | Mounts `MemberPaymentsTab` as the member's Payments tab |
+
+### How to use it (portal)
+
+1. **Sell a membership** (Members → member → Membership tab → Assign plan).
+   The backend automatically opens a DUE charge for the term's price —
+   nothing to enter.
+2. **Collect money** (member → Payments tab → Record payment): pick the
+   charge (the amount defaults to the outstanding balance), choose the
+   method (CASH/UPI/CARD/BANK_TRANSFER/OTHER), optionally backdate. The
+   charge flips DUE → PAID (or PARTIAL if partially paid) and a receipt
+   number like `RCPT-20260903-F511FB` is issued.
+3. **Print a receipt**: Receipt button on any receipt — gym name, member
+   (+ "Not connected" tag for non-app members), plan, amount, date, method,
+   covered period, receipt number.
+4. **Fix mistakes with refunds, never edits** (owner/admin): Refund on a
+   receipt, partial or full. Fully refunded receipts read REFUNDED.
+5. **Watch the money**: Payments page — revenue this month, collected
+   (net of refunds), due and overdue totals.
+
+### Why it is built this way
+
+- **Immutable receipts**: there is no edit/delete path in the UI or the
+  API, so a receipt regenerated years later is identical — and a plan price
+  change can never rewrite what a member actually paid.
+- **Derived status**: DUE/PARTIAL/PAID/OVERDUE are computed from the
+  ledger at read time, so the books cannot drift from the data.
+- **Non-app members are first-class**: every billing row references the
+  gym member, not an app account — Aman with no app pays cash exactly like
+  an app-connected member.
 
 ## Security model
 

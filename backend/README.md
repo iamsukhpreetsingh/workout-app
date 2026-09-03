@@ -301,7 +301,131 @@ from the client are selectors, never proof (verified against the JWT).
   until members are reassigned (409). Non-app members (app_user_id NULL)
   are first-class: assignments reference gym_members, never users.
 - **Standalone users are unaffected**: zero gyms is a fully supported
-  state; membership plans/payments/attendance/classes are NOT implemented yet.
+  state; attendance/classes are NOT implemented yet.
+
+#### 3.5.1 Billing & payment ledger (Phase 9) — in detail
+
+**Why this design.** The spec's hard requirement is *historical integrity*:
+a plan price change must never modify a historical payment or receipt, and
+financial records must be immutable/auditable. Storing a single mutable
+"payment" row (amount editable, status editable) fails that: every edit is
+a silent rewrite of money history. So billing is split into three
+append-only ledgers and all statuses are DERIVED at read time:
+
+1. `membership_charges` — what a member OWES. Auto-created inside the same
+   transaction as every membership sale/renewal (using the membership's own
+   price snapshot columns), so a sale can never exist without its dues.
+   Manual charges (merch, PT top-ups, penalties) via the API.
+2. `membership_payments` — RECEIPTS (money actually received). The API has
+   no update and no delete path for payments, ever. A receipt number
+   (`RCPT-<paid_date>-<id6>`) is assigned at creation and never changes.
+3. `payment_refunds` — corrections are ADDITIVE refund entries against a
+   payment; the original receipt is never touched.
+
+Derived statuses (computed by `chargeStatus`/`paymentStatus` in
+`gymBilling.js`): charge = DUE / PARTIAL / PAID / OVERDUE (due_on passed in
+the GYM's timezone) / REFUNDED; payment = PAID / PARTIAL (partially
+refunded) / REFUNDED. Because statuses are computed, the books can never
+drift from the ledger rows.
+
+Payments reference the **member** (and optionally the charge/membership) —
+never a user — so `GymMember.appUserId = NULL` is fully valid end to end:
+Aman Kumar, App: Not Connected, Premium Monthly ₹2,000, paid 02 Sep by UPI
+is a completely normal record (covered by a dedicated test).
+
+**Why the guards exist** (each maps to a spec edge case, each test-pinned):
+
+| Guard | Reason |
+|---|---|
+| Payment > outstanding balance → 409 | overpayments would silently create credit; issue a refund or a separate charge instead |
+| Identical (charge, amount, method, date) → 409 unless `allow_duplicate` | the classic double-entry at the desk; genuine repeats can force it |
+| `paid_on` in the future → 400; backdating allowed | cash collected yesterday and entered today is normal; pre-dating is not |
+| Charge must belong to the payer's member row (checked FOR UPDATE in-transaction) | "wrong member / wrong membership" is structurally impossible, not just UI-hidden |
+| Currency must match the charge | no silent FX/mixing inside one dues entry |
+| Charges of cancelled/frozen/expired memberships stay collectible | cancelling a membership does not erase money owed |
+
+**Files (what contains what):**
+
+- `backend/migrations/050_gym_billing.sql` — the three tables above +
+  `payment_receipt_seq`. Charges/payments/refunds cascade with their gym.
+  `membership_payments.receipt_number` is UNIQUE (one number forever).
+- `backend/src/data/gymBilling.js` — all billing logic:
+  - `createChargeForMembership(client, …)` — called by
+    `membershipPlans.assignMembership`/`renewMembership` INSIDE their
+    transaction; uses the term's snapshot columns so later plan edits are
+    irrelevant.
+  - `createManualCharge`, `listMemberCharges`, `getCharge`,
+    `listChargesForLedger` (dues ledger for the dashboard).
+  - `recordPayment` — the guarded insert (see table above) + receipt
+    number assignment; reads the balance back ON THE TRANSACTION CLIENT
+    (a pool read inside the open transaction would not see the uncommitted
+    row — this exact bug was caught by the tests).
+  - `refundPayment` — additive refund with over-refund protection.
+  - `getReceipt` — DERIVED receipt (gym name/address, member + app-connected
+    flag, plan, amount, date, method, covered period, receipt number).
+  - `getBillingSummary` — revenue this month / collected (net of refunds) /
+    due / overdue, all in the gym's timezone.
+- `backend/src/routes/gym.js` (billing block) — thin HTTP wrappers;
+  permission per route listed below.
+- `backend/src/data/gymPermissions.js` — new `payments.record` permission:
+  OWNER + ADMIN + FRONT_DESK (the desk can take money at the counter but
+  deliberately has NO `payments.manage`, so the financial dashboard and
+  refunds are 403 for it — matching "front desk cannot access financial
+  reports").
+- `backend/test/gymBilling.test.js` — 14 integration tests covering every
+  edge case in this section.
+- Portal: `gym-web/src/api.ts` (typed client), `gym-web/src/pages/PaymentsPage.tsx`
+  (dashboard + ledger), `gym-web/src/components/MemberPaymentsTab.tsx`
+  (member tab: dues, record payment, receipts, refunds, add charge).
+
+**What changed in EXISTING code (and why):**
+
+- `membershipPlans.assignMembership` / `renewMembership` — each now calls
+  `billing.createChargeForMembership(...)` in the same transaction, so the
+  dues ledger is populated automatically; no extra step, no missed sales.
+- `gymPermissions.js` — added `payments.record` (see above); `payments.manage`
+  remains OWNER/ADMIN.
+- Nothing else moved: members, memberships, plans and the lifecycle logic
+  are untouched by billing (billing only reads their snapshots).
+
+**How to use it (API walkthrough, base = `/gym`):**
+
+```text
+# 1. Sell a membership → a DUE charge is created automatically
+POST /gym/:gymId/members/:memberId/memberships   { plan_id }
+GET  /gym/:gymId/members/:memberId/payments
+     → { charges: [{ status: 'DUE', outstanding_cents: 200000, … }], payments: [] }
+
+# 2. Record the money (front desk can do this)
+POST /gym/:gymId/members/:memberId/payments
+     { charge_id, amount_cents: 200000, method: 'UPI', paid_on: '2026-09-02' }
+     → 201 { receipt_number: 'RCPT-20260902-XXXXXX', status: 'PAID', … }
+
+# 3. Partial payment (charge becomes PARTIAL, balance readable)
+POST …/payments  { charge_id, amount_cents: 50000, method: 'CASH', paid_on }
+# charge status now PARTIAL, outstanding_cents = 150000; a second payment completes it
+
+# 4. Print the receipt (works years later, byte-identical)
+GET /gym/:gymId/members/:memberId/payments/:paymentId/receipt
+
+# 5. Correction = refund (never an edit); partial → payment reads PARTIAL,
+#    full → REFUNDED, over-refund → 400
+POST /gym/:gymId/members/:memberId/payments/:paymentId/refund
+     { amount_cents, reason }
+
+# 6. Manual dues (owner/admin)
+POST /gym/:gymId/members/:memberId/charges { description, amount_cents, due_on? }
+
+# 7. Dashboard + ledgers (owner/admin only for the summary)
+GET /gym/:gymId/payments/summary
+GET /gym/:gymId/payments?q=&method=&from=&to=
+GET /gym/:gymId/charges?status=OVERDUE
+```
+
+Errors to expect: 409 duplicate receipt / payment-exceeds-balance ·
+400 future date, bad method, currency mismatch, over-refund ·
+404 charge not found for this member (wrong-member attempts) ·
+403 front desk on `/payments/summary`.
 
 ### 3.6 Admin — `/admin` (role-gated; dashboard: `../admin-dashboard`)
 
@@ -328,6 +452,7 @@ from the client are selectors, never proof (verified against the JWT).
 | Targets               | `user_nutrition_targets` (versioned; `target_source` automatic/self/trainer_override, `target_mode` daily/weekly_average, `set_by`, `override_note`, `recommended_snapshot`)                                                                                                                                                                                                                                            |
 | Monitoring            | `trainer_nutrition_prefs` (per relationship, default OFF), `diet_target_notifications` (idempotency ledger: UNIQUE(trainer, client, date, direction))                                                                                                                                                                                                                                                                           |
 | Backups (mobile sync) | `backup_sessions/exercises/sets`, `client_workout_plans`, `backup_custom_exercises`, `user_recipes`, `backup_diet_plans/days/meals/meal_items/**_versions`, `backup_diet_checkins`, `diet_item_swaps`, `backup_food_log_entries` (legacy), `backup_food_log_entries` → `food_log_entries` (log-first), `backup_custom_dishes` → `custom_dishes(+ingredients)` — all `UNIQUE(user_id, local_entity_id)` |
+| Gym billing (Phase 9) | `membership_charges` (dues; auto-created from membership terms with the assignment-time price snapshot; manual charges), `membership_payments` (IMMUTABLE receipts; `receipt_number` unique and permanent; method CASH/UPI/CARD/BANK_TRANSFER/OTHER; backdating allowed, future-dating rejected), `payment_refunds` (additive corrections against a payment; never an edit). Charge status DUE/PARTIAL/PAID/OVERDUE/REFUNDED is DERIVED from payments minus refunds at read time — overdue is judged in the gym's timezone. Payments reference `gym_members`, so `app_user_id = NULL` is fully valid |
 | Misc                  | `measurement_entries`, `backup_personal_records`, `backup_progress_photos` (+S3/local storage), `diet_trainer_notes`, `sync_status_reports`, `restore_runs`                                                                                                                                                                                                                                                             |
 
 Indexes exist for every hot query path (user+date on diaries, plan+date on
