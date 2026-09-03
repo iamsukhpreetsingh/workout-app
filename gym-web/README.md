@@ -60,7 +60,10 @@ denied** page — and the backend rejects the request anyway.
   **attendance** (front-desk dashboard: QR scan, search-and-mark,
   today/week/month counts, peak hours, inactive members; member Attendance
   tab with a ✓/− calendar and the member's QR card; owners can backdate
-  and delete records), staff
+  and delete records), **workouts** (gym-owned content with an ordered
+  exercise-by-name editor, versioned originals with
+  archive/restore/recommend; member Workouts tab: assign/end with
+  history), staff
   management (add by email — direct add for existing accounts, one-time
   staff invitation for people without an app account; role change,
   deactivate/reactivate with a reassignment guard), **trainer

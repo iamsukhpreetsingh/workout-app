@@ -33,6 +33,7 @@ import MembershipsPage from './pages/MembershipsPage';
 import PlansPage from './pages/PlansPage';
 import PaymentsPage from './pages/PaymentsPage';
 import AttendancePage from './pages/AttendancePage';
+import WorkoutsPage from './pages/WorkoutsPage';
 import StaffPage from './pages/StaffPage';
 import TrainersPage from './pages/TrainersPage';
 import PlaceholderPage from './pages/PlaceholderPage';
@@ -201,9 +202,7 @@ function Shell() {
       <Route path="/trainers" element={permGuard(['staff.manage'], <TrainersPage />)} />
       <Route path="/staff" element={permGuard(['staff.manage'], <StaffPage />)} />
 
-      <Route path="/workouts" element={permGuard(['content.manage', 'workouts.manage'],
-        <PlaceholderPage section="Workouts" title="Workouts" phase="Phase 2"
-          description="Gym workout templates assigned to members by gym trainers." />)} />
+      <Route path="/workouts" element={permGuard(['content.manage', 'workouts.manage'], <WorkoutsPage />)} />
       <Route path="/nutrition" element={permGuard(['content.manage', 'nutrition.manage'],
         <PlaceholderPage section="Nutrition" title="Nutrition" phase="Phase 2"
           description="Gym nutrition plans assigned to members by gym trainers." />)} />

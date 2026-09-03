@@ -328,6 +328,28 @@ from the client are selectors, never proof (verified against the JWT).
   `…/members/:id/attendance/history` + `GET/POST …/members/:id/qr(/rotate)`
   (members.view / members.manage). Mobile: `POST /gym/my/attendance/workout`
   and `GET /gym/my/attendance/history` (auth only, member resolved by JWT).
+- **Gym workout management (Phase 11)**: gym-owned content, separate from
+  personal user workouts and trainer templates. `gym_workouts` (+ ordered
+  `gym_workout_exercises` stored BY NAME with plain sets/reps/duration —
+  catalog deletions can never break them), `difficulty`/`goal` enums,
+  tags, DRAFT/PUBLISHED/ARCHIVED, and a `version` counter that increments
+  on every CONTENT edit (publish/archive does not bump). Distribution:
+  direct assignment (`POST …/members/:id/workout-assignments`,
+  members.manage — duplicate ACTIVE assignment per (member, workout)
+  rejected; drafts/archived not assignable; assignment rows survive
+  member leave/reconnect) and general recommendation (`recommended` flag
+  on PUBLISHED workouts — visible to all app-connected members with an
+  ACTIVE membership term via `GET /gym/my/workouts`). Member saves
+  (`gym_workout_saves`): a FULL JSONB SNAPSHOT at the current version —
+  the personal copy never changes when the gym edits the original;
+  duplicate saves 409; an explicit update endpoint re-snapshots to the
+  current version (v1 stays v1 until the member chooses v3). Mobile:
+  `GET /gym/my/workouts` (recommended + assigned + saved with
+  `update_available` hints across all ACTIVE memberships), `POST
+  /gym/my/workouts/:id/save`, `GET /gym/my/workouts/saved`, `POST
+  /gym/my/workouts/saved/:id/update`, `DELETE /gym/my/workouts/saved/:id`
+  (all auth-only; member resolved by JWT; all /my routes registered
+  BEFORE /:gymId patterns so 'my' is never read as a gym id).
 - **Standalone users are unaffected**: zero gyms is a fully supported
   state; classes are NOT implemented yet.
 
@@ -482,6 +504,7 @@ Errors to expect: 409 duplicate receipt / payment-exceeds-balance ·
 | Backups (mobile sync) | `backup_sessions/exercises/sets`, `client_workout_plans`, `backup_custom_exercises`, `user_recipes`, `backup_diet_plans/days/meals/meal_items/**_versions`, `backup_diet_checkins`, `diet_item_swaps`, `backup_food_log_entries` (legacy), `backup_food_log_entries` → `food_log_entries` (log-first), `backup_custom_dishes` → `custom_dishes(+ingredients)` — all `UNIQUE(user_id, local_entity_id)` |
 | Gym billing (Phase 9) | `membership_charges` (dues; auto-created from membership terms with the assignment-time price snapshot; manual charges), `membership_payments` (IMMUTABLE receipts; `receipt_number` unique and permanent; method CASH/UPI/CARD/BANK_TRANSFER/OTHER; backdating allowed, future-dating rejected), `payment_refunds` (additive corrections against a payment; never an edit). Charge status DUE/PARTIAL/PAID/OVERDUE/REFUNDED is DERIVED from payments minus refunds at read time — overdue is judged in the gym's timezone. Payments reference `gym_members`, so `app_user_id = NULL` is fully valid |
 | Gym attendance (Phase 10) | `gym_attendance` (member-scoped; source QR_CHECK_IN/FRONT_DESK/WORKOUT_COMPLETION/ADMIN_MANUAL; `check_in_at` instant + `local_date` derived in the gym's timezone; `client_time`/`time_corrected` for offline device-clock corrections) + `gym_members.qr_token` (unique 128-bit QR identity, rotatable) |
+| Gym workouts (Phase 11) | `gym_workouts` (gym-owned; version bumps on content edits; `recommended` flag = general distribution), `gym_workout_exercises` (stored BY NAME — catalog-independent), `gym_workout_assignments` (direct, member-scoped, UNIQUE(workout, member, ACTIVE)), `gym_workout_saves` (member personal library; full JSONB snapshot + `saved_version`) |
 | Misc                  | `measurement_entries`, `backup_personal_records`, `backup_progress_photos` (+S3/local storage), `diet_trainer_notes`, `sync_status_reports`, `restore_runs`                                                                                                                                                                                                                                                             |
 
 Indexes exist for every hot query path (user+date on diaries, plan+date on

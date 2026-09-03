@@ -4,9 +4,11 @@
 //   Premium Annual   [ACTIVE]
 //   Valid until 31 Dec 2026
 //
-// Data comes from GET /gym/my/memberships, which resolves the caller's
-// gym_members rows (and their current plan term) server-side. A standalone
-// user gets [] and the card renders nothing — a gym is never required.
+// Data comes from GET /gym/my/memberships (current plan term) and
+// GET /gym/my/workouts (assigned + recommended gym workouts — Phase 11).
+// A standalone user gets [] and the card renders nothing — a gym is never
+// required. Assignment rows live on the gym member, so workouts assigned
+// BEFORE the app account was linked show up here too.
 // Historical record integrity is unaffected by when the app account was
 // linked: the term predating the link shows exactly the same.
 import React, { useState } from 'react';
@@ -27,12 +29,21 @@ const STATUS_COLORS = {
 export default function MyGymCard() {
   const colors = useColors();
   const [memberships, setMemberships] = useState(null); // null = loading
+  const [workoutCounts, setWorkoutCounts] = useState({});
 
   React.useEffect(() => {
     let cancelled = false;
     api('/gym/my/memberships')
       .then((rows) => { if (!cancelled) setMemberships(Array.isArray(rows) ? rows : []); })
       .catch(() => { if (!cancelled) setMemberships([]); });
+    api('/gym/my/workouts')
+      .then((perGym) => {
+        if (cancelled || !Array.isArray(perGym)) return;
+        const counts = {};
+        for (const g of perGym) counts[g.gym_id] = (g.assigned?.length || 0) + (g.recommended?.length || 0);
+        setWorkoutCounts(counts);
+      })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -64,6 +75,11 @@ export default function MyGymCard() {
               {m.ends_on ? (
                 <Text style={styles.gymMeta}>
                   {frozen ? 'Frozen — valid until' : 'Valid until'} {String(m.ends_on).slice(0, 10)}
+                </Text>
+              ) : null}
+              {workoutCounts[m.gym_id] ? (
+                <Text style={[styles.gymMeta, { color: colors.primary }]}>
+                  {workoutCounts[m.gym_id]} gym workout{workoutCounts[m.gym_id] > 1 ? 's' : ''} available
                 </Text>
               ) : null}
             </View>

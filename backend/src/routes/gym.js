@@ -12,11 +12,13 @@ const express = require('express');
 const { registerRoute } = require('../admin/registry');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { requireGymContext, requireGymPermission } = require('../middleware/gymAuth');
+const { query } = require('../db/pool');
 const gyms = require('../data/gyms');
 const plans = require('../data/membershipPlans');
 const trainers = require('../data/gymTrainers');
 const billing = require('../data/gymBilling');
 const attendance = require('../data/gymAttendance');
+const workouts = require('../data/gymWorkouts');
 const storage = require('../data/storageService');
 const smtpProvider = require('../email/smtpProvider');
 
@@ -58,6 +60,39 @@ registerRoute(router, {
     httpError(res, e);
   }
 }, [requireAuth, requireRole(['user', 'trainer', 'gym_staff'])]);
+
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/invite/:token/decline',
+  description: 'The invited person declines. Public (the token proves possession); the invitation becomes DECLINED and the member returns to NOT_CONNECTED.',
+  requiresAuth: false,
+  allowedRoles: ['public'],
+  category: 'Gym',
+}, async (req, res) => {
+  try {
+    res.json(await gyms.declineInvitation(req.params.token, req.ip));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/invite/:token/register',
+  description: 'Scenario 2 — the person has NO app account: registration THROUGH the invitation. Creates the User (role user) AND links the existing GymMember atomically; fails with 409 (no partial rows) if the email is already registered — the person then signs in and accepts instead.',
+  requiresAuth: false,
+  allowedRoles: ['public'],
+  category: 'Gym',
+}, async (req, res) => {
+  try {
+    const { name, password } = req.body || {};
+    const result = await gyms.registerViaInvitation(req.params.token, req.ip, { name, password });
+    res.status(201).json(result);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+});
 
 registerRoute(router, {
   method: 'GET',
@@ -112,35 +147,187 @@ registerRoute(router, {
 
 registerRoute(router, {
   method: 'POST',
-  path: '/invite/:token/decline',
-  description: 'The invited person declines. Public (the token proves possession); the invitation becomes DECLINED and the member returns to NOT_CONNECTED.',
-  requiresAuth: false,
-  allowedRoles: ['public'],
+  path: '/my/attendance/workout',
+  description: "The app member marks their own gym attendance after completing a workout (source WORKOUT_COMPLETION). Resolves the caller's member rows by app_user_id — no gym id from the client. Only succeeds when a membership term is ACTIVE; duplicates return the existing visit. Requires authentication only.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
   category: 'Gym',
-}, async (req, res) => {
+}, [requireAuth], async (req, res) => {
   try {
-    res.json(await gyms.declineInvitation(req.params.token, req.ip));
+    const memberships = await gyms.listGymMembershipsForUser(req.user.id);
+    const results = [];
+    for (const m of memberships.filter((x) => x.membership_status === 'ACTIVE')) {
+      try {
+        results.push({
+          gym_id: m.gym_id, gym_name: m.gym_name,
+          ...(await attendance.recordCheckIn(
+            m.gym_id, m.id, 'WORKOUT_COMPLETION', { userId: req.user.id }, req.ip, {}, gyms.gymAudit
+          )),
+        });
+      } catch (e) {
+        results.push({ gym_id: m.gym_id, gym_name: m.gym_name, ok: false, reason: e.status ? e.message : 'failed' });
+      }
+    }
+    res.json({ eligible: memberships.some((x) => x.membership_status === 'ACTIVE'), results });
   } catch (e) {
     httpError(res, e, 400);
   }
-});
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/attendance/history',
+  description: "The app member's own ✓/− calendar across their gyms (last 90 days, gym-local). Requires authentication only.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const memberships = await gyms.listGymMembershipsForUser(req.user.id);
+    const out = [];
+    for (const m of memberships) {
+      out.push({
+        gym_id: m.gym_id, gym_name: m.gym_name, member_code: m.member_code,
+        history: await attendance.memberAttendanceCalendar(m.gym_id, m.id, 90),
+      });
+    }
+    res.json(out);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/workouts',
+  description: "Everything the connected member can see across their ACTIVE gym memberships: recommended (published + flagged) and directly assigned gym workouts, plus their saved personal-library copies with an update_available hint. Members without an ACTIVE membership get nothing.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.json(await workouts.listForMember(req.user.id));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
 
 registerRoute(router, {
   method: 'POST',
-  path: '/invite/:token/register',
-  description: 'Scenario 2 — the person has NO app account: registration THROUGH the invitation. Creates the User (role user) AND links the existing GymMember atomically; fails with 409 (no partial rows) if the email is already registered — the person then signs in and accepts instead.',
-  requiresAuth: false,
-  allowedRoles: ['public'],
+  path: '/my/workouts/:workoutId/save',
+  description: "Saves a gym workout to the member's personal library as a full SNAPSHOT at the current version — the copy never changes when the gym edits the original. Duplicate saves are rejected (409). Requires authentication; the member must belong to the workout's gym.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
   category: 'Gym',
-}, async (req, res) => {
+}, [requireAuth], async (req, res) => {
   try {
-    const { name, password } = req.body || {};
-    const result = await gyms.registerViaInvitation(req.params.token, req.ip, { name, password });
-    res.status(201).json(result);
+    const workoutGym = await query(
+      'SELECT gym_id, status FROM gym_workouts WHERE id = $1', [req.params.workoutId]
+    );
+    if (!workoutGym.rows.length) return res.status(404).json({ error: 'Workout not found' });
+    const gymId = workoutGym.rows[0].gym_id;
+    const membership = await gyms.listGymMembershipsForUser(req.user.id)
+      .then((list) => list.find((m) => m.gym_id === gymId && m.status === 'ACTIVE'));
+    if (!membership) return res.status(403).json({ error: 'You are not an active member of this gym' });
+    const saved = await workouts.saveWorkoutForMember(
+      gymId, membership.id, req.params.workoutId, { userId: req.user.id }, req.ip, gyms.gymAudit
+    );
+    res.status(201).json(saved);
   } catch (e) {
     httpError(res, e, 400);
   }
-});
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/workouts/saved',
+  description: "The member's saved personal-library copies (snapshots) with an update_available hint when the gym original has a newer version. Requires authentication.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT s.id AS save_id, s.saved_version, s.snapshot, s.saved_at, s.updated_at,
+              w.id AS workout_id, w.title, w.version AS current_version, w.status AS workout_status,
+              g.name AS gym_name
+       FROM gym_workout_saves s
+       JOIN gym_workouts w ON w.id = s.workout_id
+       JOIN gyms g ON g.id = s.gym_id
+       WHERE s.member_id IN (SELECT id FROM gym_members WHERE app_user_id = $1)
+       ORDER BY s.saved_at DESC`,
+      [req.user.id]
+    );
+    res.json(rows.rows.map((r) => ({
+      ...r,
+      update_available: r.workout_status === 'PUBLISHED' && r.current_version > r.saved_version,
+    })));
+  } catch (e) {
+    console.error('[DBG saved-list]', e.stack);
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/my/workouts/saved/:saveId/update',
+  description: 'Explicitly pulls the CURRENT gym version into the saved copy (new snapshot + saved_version). The gym can never move a member copy automatically. Requires authentication.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const memberRows = await query(
+      'SELECT id, gym_id FROM gym_members WHERE app_user_id = $1', [req.user.id]
+    );
+    let done = null;
+    for (const m of memberRows.rows) {
+      try {
+        done = await workouts.updateSavedWorkout(
+          m.gym_id, m.id, req.params.saveId, { userId: req.user.id }, req.ip, gyms.gymAudit
+        );
+        break;
+      } catch (e) {
+        if (e.status && e.status !== 404) throw e;
+      }
+    }
+    if (!done) return res.status(404).json({ error: 'Saved workout not found' });
+    res.json(done);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'DELETE',
+  path: '/my/workouts/saved/:saveId',
+  description: "Removes a workout from the member's personal library. Requires authentication.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const memberRows = await query(
+      'SELECT id, gym_id FROM gym_members WHERE app_user_id = $1', [req.user.id]
+    );
+    let done = null;
+    for (const m of memberRows.rows) {
+      try {
+        done = await workouts.deleteSavedWorkout(
+          m.gym_id, m.id, req.params.saveId, { userId: req.user.id }, req.ip, gyms.gymAudit
+        );
+        break;
+      } catch (e) {
+        if (e.status && e.status !== 404) throw e;
+      }
+    }
+    if (!done) return res.status(404).json({ error: 'Saved workout not found' });
+    res.json(done);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
 
 // ── gym settings ─────────────────────────────────────────────────────────
 
@@ -1212,57 +1399,142 @@ registerRoute(router, {
 
 // ── mobile (app-linked member self-service) ──────────────────────────────
 
-registerRoute(router, {
-  method: 'POST',
-  path: '/my/attendance/workout',
-  description: "The app member marks their own gym attendance after completing a workout (source WORKOUT_COMPLETION). Resolves the caller's member rows by app_user_id — no gym id from the client. Only succeeds when a membership term is ACTIVE; duplicates return the existing visit. Requires authentication only.",
-  requiresAuth: true,
-  allowedRoles: ['user', 'trainer', 'gym_staff'],
-  category: 'Gym',
-}, [requireAuth], async (req, res) => {
-  try {
-    const memberships = await gyms.listGymMembershipsForUser(req.user.id);
-    const results = [];
-    for (const m of memberships.filter((x) => x.membership_status === 'ACTIVE')) {
-      try {
-        results.push({
-          gym_id: m.gym_id, gym_name: m.gym_name,
-          ...(await attendance.recordCheckIn(
-            m.gym_id, m.id, 'WORKOUT_COMPLETION', { userId: req.user.id }, req.ip, {}, gyms.gymAudit
-          )),
-        });
-      } catch (e) {
-        results.push({ gym_id: m.gym_id, gym_name: m.gym_name, ok: false, reason: e.status ? e.message : 'failed' });
-      }
-    }
-    res.json({ eligible: memberships.some((x) => x.membership_status === 'ACTIVE'), results });
-  } catch (e) {
-    httpError(res, e, 400);
-  }
-}, [requireAuth]);
+
+
+// ── gym workout management (Phase 11) ────────────────────────────────────
 
 registerRoute(router, {
   method: 'GET',
-  path: '/my/attendance/history',
-  description: "The app member's own ✓/− calendar across their gyms (last 90 days, gym-local). Requires authentication only.",
+  path: '/:gymId/workouts',
+  description: "Lists the gym's workouts (status/q/recommended filters) with exercise/assignment/save counts. Requires permission: members.view or content.manage.",
   requiresAuth: true,
   allowedRoles: ['user', 'trainer', 'gym_staff'],
   category: 'Gym',
-}, [requireAuth], async (req, res) => {
+}, [requireAuth, requireGymContext()], async (req, res) => {
   try {
-    const memberships = await gyms.listGymMembershipsForUser(req.user.id);
-    const out = [];
-    for (const m of memberships) {
-      out.push({
-        gym_id: m.gym_id, gym_name: m.gym_name, member_code: m.member_code,
-        history: await attendance.memberAttendanceCalendar(m.gym_id, m.id, 90),
-      });
-    }
-    res.json(out);
+    const c = req.gymContext;
+    const allowed = c.permissions.includes('members.view') || c.permissions.includes('content.manage') || c.permissions.includes('assigned_members.view');
+    if (!allowed) return res.status(403).json({ error: 'Requires permission: members.view' });
+    res.json(await workouts.listWorkouts(c.gymId, {
+      status: req.query.status, q: req.query.q, recommended: req.query.recommended,
+    }));
   } catch (e) {
     httpError(res, e, 400);
   }
-}, [requireAuth]);
+}, [requireAuth, requireGymContext()]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/workouts',
+  description: 'Creates a gym-owned workout (title, description, exercises by name with sets/reps/duration, difficulty, goal, tags, status DRAFT/PUBLISHED, recommended flag). Requires permission: content.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('content.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await workouts.createWorkout(
+      req.gymContext.gymId, { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('content.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/workouts/:workoutId',
+  description: 'Full workout with its ordered exercises. Requires permission: members.view or content.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext()], async (req, res) => {
+  try {
+    const c = req.gymContext;
+    const allowed = c.permissions.includes('members.view') || c.permissions.includes('content.manage') || c.permissions.includes('assigned_members.view');
+    if (!allowed) return res.status(403).json({ error: 'Requires permission: members.view' });
+    const w = await workouts.getWorkout(c.gymId, req.params.workoutId);
+    if (!w) return res.status(404).json({ error: 'Workout not found' });
+    res.json(w);
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext()]);
+
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/:gymId/workouts/:workoutId',
+  description: 'Updates a workout. Content edits (title/description/exercises/difficulty/goal/duration/tags) bump the VERSION — member saves keep their snapshot version. Publish/archive is a status change and does not bump. Requires permission: content.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('content.manage')], async (req, res) => {
+  try {
+    res.json(await workouts.updateWorkout(
+      req.gymContext.gymId, req.params.workoutId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('content.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/workout-assignments',
+  description: 'Directly assigns a PUBLISHED gym workout to a member (works with app_user_id NULL — stored until the member connects). Duplicates rejected; archived/draft workouts rejected. Requires permission: members.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await workouts.assignWorkout(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/workout-assignments',
+  description: "The member's workout assignment history. Requires permission: members.view.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
+  try {
+    res.json(await workouts.listMemberWorkoutAssignments(req.gymContext.gymId, req.params.memberId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/workout-assignments/:assignmentId/end',
+  description: 'Ends a workout assignment (kept as history). Requires permission: members.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.json(await workouts.endWorkoutAssignment(
+      req.gymContext.gymId, req.params.assignmentId,
+      { userId: req.user.id }, req.ip, { reason: req.body?.reason }, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+// ── mobile: connected member surfaces (auth only, member resolved by JWT) ─
+
+
+
+
+
 
 // ── audit log ────────────────────────────────────────────────────────────
 

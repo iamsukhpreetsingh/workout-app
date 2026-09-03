@@ -22,6 +22,7 @@ import MemberMembershipTab from '../components/MemberMembershipTab';
 import MemberTrainerTab from '../components/MemberTrainerTab';
 import MemberPaymentsTab from '../components/MemberPaymentsTab';
 import MemberAttendanceTab from '../components/MemberAttendanceTab';
+import MemberWorkoutsTab from '../components/MemberWorkoutsTab';
 import { useGymContext, hasPermission } from '../permissions';
 import {
   getMember, updateMember, linkMemberApp, unlinkMemberApp,
@@ -296,9 +297,7 @@ export default function MemberDetailPage() {
           { key: 'payments', label: 'Payments', children: <MemberPaymentsTab memberId={member.id} /> },
           { key: 'attendance', label: 'Attendance', children: <MemberAttendanceTab memberId={member.id} /> },
           { key: 'trainer', label: 'Trainer', children: <MemberTrainerTab memberId={member.id} /> },
-          { key: 'workouts', label: 'Workouts', children: comingSoon(
-              'Workouts', 'Phase 2',
-              'Gym workout templates assigned to this member arrive with the coaching phase.') },
+          { key: 'workouts', label: 'Workouts', children: <MemberWorkoutsTab memberId={member.id} /> },
           { key: 'nutrition', label: 'Nutrition', children: comingSoon(
               'Nutrition', 'Phase 2',
               'Gym nutrition plans assigned to this member arrive with the coaching phase.') },
