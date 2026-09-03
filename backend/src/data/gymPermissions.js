@@ -10,13 +10,13 @@ const GYM_PERMISSIONS = {
     'gym.manage', 'staff.manage', 'audit.view',
     'members.view', 'members.create', 'members.manage',
     'plans.manage', 'memberships.view', 'memberships.manage',
-    'payments.manage', 'attendance.manage', 'checkin.manage',
+    'payments.manage', 'payments.record', 'attendance.manage', 'checkin.manage',
     'content.manage', 'communications.manage', 'reports.view', 'settings.manage',
     'assigned_members.view',
   ],
   ADMIN: [
     'members.view', 'members.create', 'members.manage',
-    'memberships.view', 'memberships.manage',
+    'memberships.view', 'memberships.manage', 'payments.record',
     'attendance.manage', 'content.manage', 'communications.manage',
     'assigned_members.view',
   ],
@@ -26,6 +26,7 @@ const GYM_PERMISSIONS = {
   ],
   FRONT_DESK: [
     'members.view', 'members.create', 'memberships.view', 'checkin.manage',
+    'payments.record',
   ],
   MEMBER: [
     'own.profile.view', 'own.membership.view',

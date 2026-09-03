@@ -12,6 +12,7 @@
 //  - works identically for members with and without app accounts — nothing
 //    in this module ever touches app_user_id.
 const { query, transaction } = require('../db/pool');
+const billing = require('./gymBilling');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -341,6 +342,8 @@ async function assignMembership(gymId, memberId, actor, ip, { plan_id, starts_on
     });
     await recordEvent(client, gymId, rows[0].id, current[0] ? 'plan_changed' : 'assigned',
       { details: { plan: rows[0].plan_name, price_cents: rows[0].price_cents }, actor });
+    // billing: every sale opens a DUE charge from the term's price snapshot
+    await billing.createChargeForMembership(client, gymId, memberId, rows[0], actor);
     return rows[0];
   });
 }
@@ -451,6 +454,7 @@ async function renewMembership(gymId, memberId, membershipId, actor, ip, gymAudi
     });
     await recordEvent(client, gymId, created.rows[0].id, 'renewed',
       { details: { previous: current.id, price_cents: created.rows[0].price_cents }, actor });
+    await billing.createChargeForMembership(client, gymId, memberId, created.rows[0], actor);
     return created.rows[0];
   });
 }
@@ -586,10 +590,10 @@ async function resumeMembership(gymId, memberId, membershipId, actor, ip, { resu
       action: cancel ? 'membership.freeze_cancelled' : 'membership.resumed',
       entity: 'member_membership', entityId: term.id,
       before: { status: 'FROZEN', ends_on: term.ends_on },
-      after: { status: updated.rows?.[0]?.status, ends_on: updated.rows?.[0]?.ends_on, frozen_days: frozenDays },
+      after: { status: updated.rows[0].status, ends_on: updated.rows[0].ends_on, frozen_days: frozenDays },
     });
     await recordEvent(client, gymId, term.id, cancel ? 'freeze_cancelled' : 'resumed',
-      { details: { frozen_days: frozenDays, ends_on: updated.rows?.[0]?.ends_on }, actor });
+      { details: { frozen_days: frozenDays, ends_on: updated.rows[0].ends_on }, actor });
     return { membership: updated.rows[0], frozen_days: frozenDays };
   });
 }

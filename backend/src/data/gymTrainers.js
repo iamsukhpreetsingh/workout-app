@@ -120,7 +120,6 @@ async function endTrainerAssignment(gymId, memberId, assignmentId, actor, ip, { 
       action: 'trainer.unassigned', entity: 'gym_trainer_assignment', entityId: assignmentId,
       before: { status: 'ACTIVE' }, after: { status: 'ENDED', reason: reason || 'unassigned' },
     });
-    if (!updated || !updated.rows) console.error('[DBG end] updated:', updated);
     return updated.rows[0];
   });
 }

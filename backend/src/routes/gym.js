@@ -15,6 +15,7 @@ const { requireGymContext, requireGymPermission } = require('../middleware/gymAu
 const gyms = require('../data/gyms');
 const plans = require('../data/membershipPlans');
 const trainers = require('../data/gymTrainers');
+const billing = require('../data/gymBilling');
 const storage = require('../data/storageService');
 const smtpProvider = require('../email/smtpProvider');
 
@@ -887,6 +888,149 @@ registerRoute(router, {
     httpError(res, e, 400);
   }
 }, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+// ── billing & payment ledger (Phase 9) ───────────────────────────────────
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/payments/summary',
+  description: "Billing dashboard: revenue this month, collected (net of refunds), outstanding due and overdue — computed in the gym's timezone. Requires permission: payments.manage (OWNER, ADMIN). Front desk deliberately has no access to financial reports.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')], async (req, res) => {
+  try {
+    res.json(await billing.getBillingSummary(req.gymContext.gymId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/payments',
+  description: 'Payment ledger (receipts): member, amount, date, method, membership/period, receipt number and refund-adjusted status. Search by member/receipt, filter by method and date range. Requires permission: payments.record (OWNER, ADMIN, FRONT_DESK).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.record')], async (req, res) => {
+  try {
+    res.json(await billing.listGymPayments(req.gymContext.gymId, {
+      q: req.query.q, method: req.query.method, from: req.query.from, to: req.query.to,
+      limit: req.query.limit, offset: req.query.offset,
+    }));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.record')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/charges',
+  description: 'Charge ledger (dues) with derived status DUE/PARTIAL/PAID/OVERDUE/REFUNDED. Requires permission: payments.record.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.record')], async (req, res) => {
+  try {
+    res.json(await billing.listChargesForLedger(req.gymContext.gymId, {
+      status: req.query.status, q: req.query.q, limit: req.query.limit, offset: req.query.offset,
+    }));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.record')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/payments',
+  description: "The member's charges and payment receipts. Requires permission: members.view (front desk included).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
+  try {
+    const [charges, payments] = await Promise.all([
+      billing.listMemberCharges(req.gymContext.gymId, req.params.memberId),
+      billing.listMemberPayments(req.gymContext.gymId, req.params.memberId),
+    ]);
+    res.json({ charges, payments });
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/charges',
+  description: 'Creates a charge (dues) for the member — misc dues, penalties, merch. Membership sales open charges automatically. Requires permission: payments.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await billing.createManualCharge(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/payments',
+  description: 'Records a payment (receipt) against one of the member’s charges. Works with or without an app account. Immutable once recorded; corrections happen through refunds. Duplicate receipts are rejected unless allow_duplicate=true. Future-dated payments rejected; overpayments rejected. Requires permission: payments.record (OWNER, ADMIN, FRONT_DESK).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.record')], async (req, res) => {
+  try {
+    const payment = await billing.recordPayment(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    );
+    res.status(201).json(payment);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.record')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/payments/:paymentId/receipt',
+  description: 'Receipt: gym name, member, plan, amount, date, method, covered period, receipt number — derived from immutable rows. Requires permission: members.view.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
+  try {
+    const receipt = await billing.getReceipt(req.gymContext.gymId, req.params.paymentId);
+    if (!receipt) return res.status(404).json({ error: 'Payment not found' });
+    res.json(receipt);
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/payments/:paymentId/refund',
+  description: 'Records an additive refund against a payment (payments themselves are immutable). Fully refunded payments read as REFUNDED, partially refunded as PARTIAL. Requires permission: payments.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await billing.refundPayment(
+      req.gymContext.gymId, req.params.memberId, req.params.paymentId,
+      { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')]);
 
 // ── audit log ────────────────────────────────────────────────────────────
 

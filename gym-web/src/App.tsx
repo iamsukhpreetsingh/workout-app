@@ -31,6 +31,7 @@ import MembersPage from './pages/MembersPage';
 import MemberDetailPage from './pages/MemberDetailPage';
 import MembershipsPage from './pages/MembershipsPage';
 import PlansPage from './pages/PlansPage';
+import PaymentsPage from './pages/PaymentsPage';
 import StaffPage from './pages/StaffPage';
 import TrainersPage from './pages/TrainersPage';
 import PlaceholderPage from './pages/PlaceholderPage';
@@ -192,9 +193,7 @@ function Shell() {
       <Route path="/memberships" element={permGuard(['memberships.view'], <MembershipsPage />)} />
       <Route path="/memberships/plans" element={permGuard(['plans.manage'], <PlansPage />)} />
 
-      <Route path="/payments" element={permGuard(['payments.manage'],
-        <PlaceholderPage section="Payments" title="Payments" phase="Phase 1b"
-          description="Record payments against memberships, with history and totals per member." />)} />
+      <Route path="/payments" element={permGuard(['payments.manage'], <PaymentsPage />)} />
 
       <Route path="/attendance" element={permGuard(['attendance.manage', 'checkin.manage'],
         <PlaceholderPage section="Attendance" title="Attendance" phase="Phase 1b"

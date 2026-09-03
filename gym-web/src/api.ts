@@ -542,6 +542,118 @@ export const listGymMemberships = (
   return api<MemberMembership[]>(`/gym/${gymId}/memberships?${qs}`);
 };
 
+// ── billing & payment ledger (Phase 9) ───────────────────────────────────
+
+export interface Charge {
+  id: string;
+  gym_id: string;
+  member_id: string;
+  membership_id: string | null;
+  description: string;
+  amount_cents: number;
+  currency: string;
+  period_start: string | null;
+  period_end: string | null;
+  due_on: string;
+  status: 'DUE' | 'PARTIAL' | 'PAID' | 'OVERDUE' | 'REFUNDED';
+  paid_total: number;
+  net_paid: number;
+  outstanding_cents: number;
+  first_name?: string;
+  last_name?: string;
+  member_code?: string;
+}
+
+export interface Payment {
+  id: string;
+  gym_id: string;
+  member_id: string;
+  charge_id: string;
+  amount_cents: number;
+  currency: string;
+  method: 'CASH' | 'UPI' | 'CARD' | 'BANK_TRANSFER' | 'OTHER';
+  paid_on: string;
+  receipt_number: string;
+  note: string | null;
+  status: 'PAID' | 'PARTIAL' | 'REFUNDED';
+  refund_total: number;
+  first_name?: string;
+  last_name?: string;
+  member_code?: string;
+  charge_description?: string;
+  period_start?: string | null;
+  period_end?: string | null;
+  plan_name?: string | null;
+  recorded_by_name?: string | null;
+}
+
+export interface BillingSummary {
+  revenue_this_month: number;
+  collected_total: number;
+  due: number;
+  overdue: number;
+}
+
+export interface Receipt {
+  receipt_number: string;
+  gym: { name: string; address: string | null; phone: string | null; email: string | null };
+  member: { name: string; member_code: string; app_connected: boolean };
+  plan: string;
+  amount_cents: number;
+  currency: string;
+  date: string;
+  method: string;
+  covered_period: { from: string; to: string } | null;
+  status: string;
+}
+
+export const getBillingSummary = (gymId: string) =>
+  api<BillingSummary>(`/gym/${gymId}/payments/summary`);
+
+export const listGymPayments = (
+  gymId: string,
+  params: { q?: string; method?: string; from?: string; to?: string; limit?: number; offset?: number } = {}
+) => {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set('q', params.q);
+  if (params.method) qs.set('method', params.method);
+  if (params.from) qs.set('from', params.from);
+  if (params.to) qs.set('to', params.to);
+  if (params.limit != null) qs.set('limit', String(params.limit));
+  if (params.offset != null) qs.set('offset', String(params.offset));
+  return api<Payment[]>(`/gym/${gymId}/payments?${qs}`);
+};
+
+export const listGymCharges = (gymId: string, params: { status?: string; q?: string } = {}) => {
+  const qs = new URLSearchParams();
+  if (params.status) qs.set('status', params.status);
+  if (params.q) qs.set('q', params.q);
+  return api<Charge[]>(`/gym/${gymId}/charges?${qs}`);
+};
+
+export const getMemberBilling = (gymId: string, memberId: string) =>
+  api<{ charges: Charge[]; payments: Payment[] }>(`/gym/${gymId}/members/${memberId}/payments`);
+
+export const createCharge = (
+  gymId: string, memberId: string,
+  body: { description: string; amount_cents: number; due_on?: string; period_start?: string; period_end?: string }
+) => api<Charge>(`/gym/${gymId}/members/${memberId}/charges`, { method: 'POST', body });
+
+export const recordPayment = (
+  gymId: string, memberId: string,
+  body: { charge_id: string; amount_cents: number; method: string; paid_on?: string; note?: string; allow_duplicate?: boolean }
+) => api<Payment>(`/gym/${gymId}/members/${memberId}/payments`, { method: 'POST', body });
+
+export const refundPayment = (
+  gymId: string, memberId: string, paymentId: string,
+  body: { amount_cents: number; reason?: string }
+) => api<{ refund: any; payment: Payment }>(
+  `/gym/${gymId}/members/${memberId}/payments/${paymentId}/refund`, { method: 'POST', body }
+);
+
+export const getReceipt = (gymId: string, memberId: string, paymentId: string) =>
+  api<Receipt>(`/gym/${gymId}/members/${memberId}/payments/${paymentId}/receipt`);
+
 // money helpers: stored as integer minor units, displayed in major units
 export function formatMoney(cents: number, currency: string): string {
   const symbols: Record<string, string> = { INR: '₹', USD: '$', EUR: '€', GBP: '£' };
