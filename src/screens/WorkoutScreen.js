@@ -18,6 +18,7 @@ import { saveSession, createPlan } from '../db/queries';
 import { getSettings, updateSettings } from '../db/settings';
 import ExercisePicker from '../components/ExercisePicker';
 import { resolveExerciseByName } from '../lib/startAssigned';
+import { hasActiveGymMembership, markGymAttendanceFromWorkout } from '../lib/gymApi';
 import RestTimerBar from '../components/RestTimerBar';
 import RestEditorModal from '../components/RestEditorModal';
 import PlateSheet from '../components/PlateSheet';
@@ -213,6 +214,23 @@ export default function WorkoutScreen({ navigation }) {
       dispatch({ type: 'CLEAR_WORKOUT' });
       sessionBest.current = {};
       navigation.goBack();
+      // Phase 10 — "Mark today's gym attendance?" Only asked when the user
+      // has an ACTIVE gym membership; the server collapses this into any
+      // earlier QR/desk check-in for the same visit, so tapping Yes after a
+      // QR morning check-in never double-counts. Best-effort: never blocks
+      // or errors on the workout flow.
+      hasActiveGymMembership().then((active) => {
+        if (!active) return;
+        Alert.alert("Mark today's gym attendance?", 'You just finished a workout.', [
+          { text: 'No', style: 'cancel' },
+          {
+            text: 'Yes',
+            onPress: () => {
+              markGymAttendanceFromWorkout().catch(() => {});
+            },
+          },
+        ]);
+      });
     };
 
     const saveAsRoutine = async () => {

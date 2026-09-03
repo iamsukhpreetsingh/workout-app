@@ -300,8 +300,36 @@ from the client are selectors, never proof (verified against the JWT).
   A trainer with ACTIVE assignments cannot be demoted/deactivated/removed
   until members are reassigned (409). Non-app members (app_user_id NULL)
   are first-class: assignments reference gym_members, never users.
+- **Attendance (Phase 10)**: `gym_attendance` belongs to the GymMember —
+  app accounts never involved. Sources: QR_CHECK_IN (desk scans the
+  member's 128-bit `qr_token` — NOT the member code), FRONT_DESK (search &
+  mark), WORKOUT_COMPLETION (mobile self-service `POST /gym/my/attendance/
+  workout`), ADMIN_MANUAL (backdated correction ≤90 days).
+  **Idempotency rule**: one visit = one record — a new record is created
+  only if the member has no record on the same gym-local day AND none
+  within the previous 6 hours (covers 08:00 QR + 08:02 QR + 10:00 workout
+  and midnight spans); enforced in-transaction on the member's latest
+  record. Source rules: QR/workout-completion are strict (member ACTIVE
+  and latest membership term ACTIVE — expired/frozen/cancelled terms
+  reject; lazy expiry runs first, so a lapsed term cannot slip through);
+  front desk has discretion (non-active membership → warning, not
+  rejection; a member who LEFT is always rejected). Offline check-ins:
+  `POST …/attendance/offline-batch` syncs queued scans with per-item
+  results; a future-claimed device time is replaced by server time and
+  flagged `time_corrected` (claimed stamp retained for audit).
+  Timezone: `local_date` is derived in the gym's timezone; all
+  today/week/month/peak-hour answers use it. Manual correction: owners/
+  admins can backdate and delete wrong records (audited). QR from another
+  gym and invalid tokens answer identically (404 — no existence leak).
+  Routes: `POST …/attendance/scan`, `POST …/attendance/offline-batch`,
+  `POST …/members/:id/attendance` (checkin.manage), `POST
+  …/members/:id/attendance/backdate` + `DELETE …/attendance/:id`
+  (attendance.manage), `GET …/attendance` + `…/attendance/stats` +
+  `…/members/:id/attendance/history` + `GET/POST …/members/:id/qr(/rotate)`
+  (members.view / members.manage). Mobile: `POST /gym/my/attendance/workout`
+  and `GET /gym/my/attendance/history` (auth only, member resolved by JWT).
 - **Standalone users are unaffected**: zero gyms is a fully supported
-  state; attendance/classes are NOT implemented yet.
+  state; classes are NOT implemented yet.
 
 #### 3.5.1 Billing & payment ledger (Phase 9) — in detail
 
@@ -453,6 +481,7 @@ Errors to expect: 409 duplicate receipt / payment-exceeds-balance ·
 | Monitoring            | `trainer_nutrition_prefs` (per relationship, default OFF), `diet_target_notifications` (idempotency ledger: UNIQUE(trainer, client, date, direction))                                                                                                                                                                                                                                                                           |
 | Backups (mobile sync) | `backup_sessions/exercises/sets`, `client_workout_plans`, `backup_custom_exercises`, `user_recipes`, `backup_diet_plans/days/meals/meal_items/**_versions`, `backup_diet_checkins`, `diet_item_swaps`, `backup_food_log_entries` (legacy), `backup_food_log_entries` → `food_log_entries` (log-first), `backup_custom_dishes` → `custom_dishes(+ingredients)` — all `UNIQUE(user_id, local_entity_id)` |
 | Gym billing (Phase 9) | `membership_charges` (dues; auto-created from membership terms with the assignment-time price snapshot; manual charges), `membership_payments` (IMMUTABLE receipts; `receipt_number` unique and permanent; method CASH/UPI/CARD/BANK_TRANSFER/OTHER; backdating allowed, future-dating rejected), `payment_refunds` (additive corrections against a payment; never an edit). Charge status DUE/PARTIAL/PAID/OVERDUE/REFUNDED is DERIVED from payments minus refunds at read time — overdue is judged in the gym's timezone. Payments reference `gym_members`, so `app_user_id = NULL` is fully valid |
+| Gym attendance (Phase 10) | `gym_attendance` (member-scoped; source QR_CHECK_IN/FRONT_DESK/WORKOUT_COMPLETION/ADMIN_MANUAL; `check_in_at` instant + `local_date` derived in the gym's timezone; `client_time`/`time_corrected` for offline device-clock corrections) + `gym_members.qr_token` (unique 128-bit QR identity, rotatable) |
 | Misc                  | `measurement_entries`, `backup_personal_records`, `backup_progress_photos` (+S3/local storage), `diet_trainer_notes`, `sync_status_reports`, `restore_runs`                                                                                                                                                                                                                                                             |
 
 Indexes exist for every hot query path (user+date on diaries, plan+date on

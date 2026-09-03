@@ -16,6 +16,7 @@ const gyms = require('../data/gyms');
 const plans = require('../data/membershipPlans');
 const trainers = require('../data/gymTrainers');
 const billing = require('../data/gymBilling');
+const attendance = require('../data/gymAttendance');
 const storage = require('../data/storageService');
 const smtpProvider = require('../email/smtpProvider');
 
@@ -1031,6 +1032,237 @@ registerRoute(router, {
     httpError(res, e, 400);
   }
 }, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')]);
+
+// ── attendance (Phase 10) ────────────────────────────────────────────────
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/attendance/scan',
+  description: 'Front-desk QR scan. The token resolves to a member of THIS gym only — a QR from another gym or an invalid token answer identically (404). Enforces the idempotency rule (one visit per day / 6-hour window) and active-membership checks. Requires permission: checkin.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('checkin.manage')], async (req, res) => {
+  try {
+    const { qr_token } = req.body || {};
+    const member = await attendance.resolveQrToken(req.gymContext.gymId, qr_token);
+    if (!member) return res.status(404).json({ error: 'Invalid QR code' });
+    const result = await attendance.recordCheckIn(
+      req.gymContext.gymId, member.id, 'QR_CHECK_IN', { userId: req.user.id }, req.ip,
+      { note: req.body?.note }, gyms.gymAudit
+    );
+    res.status(result.duplicate ? 200 : 201).json(result);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('checkin.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/attendance/offline-batch',
+  description: 'Syncs a batch of check-ins queued by an OFFLINE scanner. Each item may carry qr_token or member_id and an optional client_time — future-claimed device times are corrected server-side and flagged. Per-item results; partial failures keep the rest. Requires permission: checkin.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('checkin.manage')], async (req, res) => {
+  try {
+    res.json(await attendance.recordOfflineBatch(
+      req.gymContext.gymId, { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('checkin.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/attendance',
+  description: 'Front-desk manual check-in ("search Aman, mark present"). Desk discretion: non-active memberships produce a warning, not a rejection; left (cancelled) members are rejected. Requires permission: checkin.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('checkin.manage')], async (req, res) => {
+  try {
+    const result = await attendance.recordCheckIn(
+      req.gymContext.gymId, req.params.memberId, 'FRONT_DESK', { userId: req.user.id }, req.ip,
+      { note: req.body?.note }, gyms.gymAudit
+    );
+    res.status(result.duplicate ? 200 : 201).json(result);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('checkin.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/attendance/backdate',
+  description: 'Manual correction: records attendance for a PAST local day (up to 90 days back, same dedupe rule). Requires permission: attendance.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('attendance.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await attendance.recordManual(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('attendance.manage')]);
+
+registerRoute(router, {
+  method: 'DELETE',
+  path: '/:gymId/attendance/:attendanceId',
+  description: 'Manual correction: removes a wrongly-created attendance record. Requires permission: attendance.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('attendance.manage')], async (req, res) => {
+  try {
+    res.json(await attendance.deleteAttendance(
+      req.gymContext.gymId, req.params.attendanceId, { userId: req.user.id }, req.ip, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('attendance.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/attendance',
+  description: "Attendance records (filter by local date and/or member). Requires permission: members.view (front desk included).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
+  try {
+    res.json(await attendance.listAttendance(req.gymContext.gymId, {
+      date: req.query.date, member_id: req.query.member_id,
+      limit: req.query.limit, offset: req.query.offset,
+    }));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/attendance/stats',
+  description: "Dashboard: today/week/month check-in counts, peak hours (last 30 days, gym-local), and inactive members (ACTIVE members with no visit in 14+ days). Requires permission: members.view.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
+  try {
+    res.json(await attendance.getStats(req.gymContext.gymId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/attendance/history',
+  description: "The member's ✓/− calendar for the last N days (default 90, gym-local days). Requires permission: members.view.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
+  try {
+    res.json(await attendance.memberAttendanceCalendar(
+      req.gymContext.gymId, req.params.memberId, Number(req.query.days) || 90
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/qr',
+  description: "The member's QR token (created on first use) — the portal renders it as a QR code / printable card. Requires permission: members.view.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
+  try {
+    res.json(await attendance.ensureQrToken(req.gymContext.gymId, req.params.memberId));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/qr/rotate',
+  description: 'Re-issues the QR token (lost card / suspected copying). Requires permission: members.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.json(await attendance.rotateQrToken(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+// ── mobile (app-linked member self-service) ──────────────────────────────
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/my/attendance/workout',
+  description: "The app member marks their own gym attendance after completing a workout (source WORKOUT_COMPLETION). Resolves the caller's member rows by app_user_id — no gym id from the client. Only succeeds when a membership term is ACTIVE; duplicates return the existing visit. Requires authentication only.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const memberships = await gyms.listGymMembershipsForUser(req.user.id);
+    const results = [];
+    for (const m of memberships.filter((x) => x.membership_status === 'ACTIVE')) {
+      try {
+        results.push({
+          gym_id: m.gym_id, gym_name: m.gym_name,
+          ...(await attendance.recordCheckIn(
+            m.gym_id, m.id, 'WORKOUT_COMPLETION', { userId: req.user.id }, req.ip, {}, gyms.gymAudit
+          )),
+        });
+      } catch (e) {
+        results.push({ gym_id: m.gym_id, gym_name: m.gym_name, ok: false, reason: e.status ? e.message : 'failed' });
+      }
+    }
+    res.json({ eligible: memberships.some((x) => x.membership_status === 'ACTIVE'), results });
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/attendance/history',
+  description: "The app member's own ✓/− calendar across their gyms (last 90 days, gym-local). Requires authentication only.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const memberships = await gyms.listGymMembershipsForUser(req.user.id);
+    const out = [];
+    for (const m of memberships) {
+      out.push({
+        gym_id: m.gym_id, gym_name: m.gym_name, member_code: m.member_code,
+        history: await attendance.memberAttendanceCalendar(m.gym_id, m.id, 90),
+      });
+    }
+    res.json(out);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
 
 // ── audit log ────────────────────────────────────────────────────────────
 

@@ -21,6 +21,7 @@ import { MemberFormFields, memberFormToPayload, AppConnectionTag } from './Membe
 import MemberMembershipTab from '../components/MemberMembershipTab';
 import MemberTrainerTab from '../components/MemberTrainerTab';
 import MemberPaymentsTab from '../components/MemberPaymentsTab';
+import MemberAttendanceTab from '../components/MemberAttendanceTab';
 import { useGymContext, hasPermission } from '../permissions';
 import {
   getMember, updateMember, linkMemberApp, unlinkMemberApp,
@@ -293,9 +294,7 @@ export default function MemberDetailPage() {
           { key: 'overview', label: 'Overview', children: overview },
           { key: 'membership', label: 'Membership', children: <MemberMembershipTab memberId={member.id} /> },
           { key: 'payments', label: 'Payments', children: <MemberPaymentsTab memberId={member.id} /> },
-          { key: 'attendance', label: 'Attendance', children: comingSoon(
-              'Attendance', 'Phase 1b',
-              'Check-in/check-out history for this member arrives with the attendance phase.') },
+          { key: 'attendance', label: 'Attendance', children: <MemberAttendanceTab memberId={member.id} /> },
           { key: 'trainer', label: 'Trainer', children: <MemberTrainerTab memberId={member.id} /> },
           { key: 'workouts', label: 'Workouts', children: comingSoon(
               'Workouts', 'Phase 2',

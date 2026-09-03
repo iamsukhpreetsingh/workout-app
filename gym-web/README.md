@@ -19,19 +19,19 @@ npm run build      # tsc -b && vite build
 Sidebar sections render only when the caller's SERVER-resolved permission
 set (GET `/gym/:gymId/permissions`) includes the section's permission:
 
-| Section | Permission | Owner | Admin | Trainer | Front desk |
-|---|---|---|---|---|---|
-| Dashboard | — | ✓ | ✓ | ✓ | ✓ |
-| Members | `members.view` | ✓ | ✓ | | ✓ |
-| Memberships | `memberships.view` | ✓ | ✓ | | ✓ |
-| Payments | `payments.manage` | ✓ | | | |
-| Attendance | `attendance.manage` / `checkin.manage` | ✓ | ✓ | | ✓ |
-| Trainers / Staff | `staff.manage` | ✓ | | | |
-| Workouts / Nutrition | `content.manage` / `workouts.manage` / `nutrition.manage` | ✓ | ✓ | ✓ | |
-| Classes | `content.manage` | ✓ | ✓ | | |
-| Communications | `communications.manage` | ✓ | ✓ | | |
-| Reports | `reports.view` | ✓ | | | |
-| Settings | `settings.manage` | ✓ | | | |
+| Section              | Permission                                                      | Owner | Admin | Trainer | Front desk |
+| -------------------- | --------------------------------------------------------------- | ----- | ----- | ------- | ---------- |
+| Dashboard            | —                                                              | ✓    | ✓    | ✓      | ✓         |
+| Members              | `members.view`                                                | ✓    | ✓    |         | ✓         |
+| Memberships          | `memberships.view`                                            | ✓    | ✓    |         | ✓         |
+| Payments             | `payments.manage`                                             | ✓    |       |         |            |
+| Attendance           | `attendance.manage` / `checkin.manage`                      | ✓    | ✓    |         | ✓         |
+| Trainers / Staff     | `staff.manage`                                                | ✓    |       |         |            |
+| Workouts / Nutrition | `content.manage` / `workouts.manage` / `nutrition.manage` | ✓    | ✓    | ✓      |            |
+| Classes              | `content.manage`                                              | ✓    | ✓    |         |            |
+| Communications       | `communications.manage`                                       | ✓    | ✓    |         |            |
+| Reports              | `reports.view`                                                | ✓    |       |         |            |
+| Settings             | `settings.manage`                                             | ✓    |       |         |            |
 
 Reaching a section's URL without its permission renders a **Permission
 denied** page — and the backend rejects the request anyway.
@@ -56,7 +56,11 @@ denied** page — and the backend rejects the request anyway.
   plus an append-only lifecycle timeline), **membership plans**
   (create/edit/archive, duplicate-name and validation rules),
   **memberships overview** (all terms gym-wide with search + filters,
-  incl. FROZEN), **billing** (see "Billing & payments" below), staff
+  incl. FROZEN), **billing** (see "Billing & payments" below),
+  **attendance** (front-desk dashboard: QR scan, search-and-mark,
+  today/week/month counts, peak hours, inactive members; member Attendance
+  tab with a ✓/− calendar and the member's QR card; owners can backdate
+  and delete records), staff
   management (add by email — direct add for existing accounts, one-time
   staff invitation for people without an app account; role change,
   deactivate/reactivate with a reassignment guard), **trainer
@@ -107,12 +111,12 @@ see `../GYM_MANAGEMENT_DESIGN.md` §16 for phasing.
 
 ### Where the code lives
 
-| File | Contents |
-|---|---|
-| `src/api.ts` | `Charge`, `Payment`, `BillingSummary`, `Receipt` types; `getBillingSummary`, `listGymPayments`, `listGymCharges`, `getMemberBilling`, `createCharge`, `recordPayment`, `refundPayment`, `getReceipt`; `formatMoney` (integer paise → ₹ string) |
-| `src/pages/PaymentsPage.tsx` | `/payments` — four summary cards (Revenue this month / Collected / Due / Overdue) + the receipt ledger (search, method filter, prev/next paging). OWNER/ADMIN only |
-| `src/components/MemberPaymentsTab.tsx` | The member's Payments tab: dues table with balances, receipts table, **Record payment** modal (charge picker pre-filled with the outstanding balance, amount, method, backdate picker), **Add charge** modal (payments.manage), per-receipt **Receipt** (printable view) and **Refund** (payments.manage) actions |
-| `src/pages/MemberDetailPage.tsx` | Mounts `MemberPaymentsTab` as the member's Payments tab |
+| File                                     | Contents                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/api.ts`                           | `Charge`, `Payment`, `BillingSummary`, `Receipt` types; `getBillingSummary`, `listGymPayments`, `listGymCharges`, `getMemberBilling`, `createCharge`, `recordPayment`, `refundPayment`, `getReceipt`; `formatMoney` (integer paise → ₹ string)                                                               |
+| `src/pages/PaymentsPage.tsx`           | `/payments` — four summary cards (Revenue this month / Collected / Due / Overdue) + the receipt ledger (search, method filter, prev/next paging). OWNER/ADMIN only                                                                                                                                                                    |
+| `src/components/MemberPaymentsTab.tsx` | The member's Payments tab: dues table with balances, receipts table,**Record payment** modal (charge picker pre-filled with the outstanding balance, amount, method, backdate picker), **Add charge** modal (payments.manage), per-receipt **Receipt** (printable view) and **Refund** (payments.manage) actions |
+| `src/pages/MemberDetailPage.tsx`       | Mounts`MemberPaymentsTab` as the member's Payments tab                                                                                                                                                                                                                                                                                 |
 
 ### How to use it (portal)
 
@@ -149,4 +153,3 @@ The portal hides UI by role, but the **backend is the authority**: every
 `/gym` request re-resolves the caller's staff/member row and gym-scoped
 role from the JWT (`requireGymContext` → `requireGymPermission`). A stolen
 gym id, header, or URL grants nothing.
-

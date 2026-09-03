@@ -658,4 +658,5 @@ module.exports = {
   listMemberMemberships, listGymMemberships, getMembership,
   assignMembership, cancelMembership, renewMembership,
   freezeMembership, resumeMembership, extendMembership, listMembershipEvents,
+  runMembershipMaintenance,
 };
