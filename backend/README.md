@@ -194,6 +194,59 @@ Gym-scoped roles (OWNER/ADMIN/TRAINER/FRONT_DESK/MEMBER) live in
 `requireAuth → requireGymContext() → requireGymPermission(…)`; gym/role ids
 from the client are selectors, never proof (verified against the JWT).
 
+#### 3.5.0 Gym system architecture & file map (start here)
+
+Everything for phases 1–12 lives in four places — an agent should never
+need to scan the wider codebase:
+
+| File | Contents |
+|---|---|
+| `migrations/043…053` | 043 core (gyms, gym_roles, gym_staff, gym_members, audit_logs) · 044 onboarding (website/logo/hours/branding, status INACTIVE) · 045 member profiles + `gym_member_invites` + GM- codes · 046 invite expiry/DECLINED · 047 `membership_plans` + `member_memberships` (price snapshots) · 048 `membership_freezes` + `membership_events` + FROZEN · 049 `gym_trainer_assignments` + `gym_staff_invites` · 050 billing (`membership_charges`/`membership_payments`/`payment_refunds`) · 051 `gym_attendance` + `gym_members.qr_token` · 052 `gym_workouts(+exercises)/assignments/saves` · 053 `gym_nutrition_items/assignments/saves` |
+| `src/middleware/gymAuth.js` | `resolveGymContext(userId, gymId)` (staff path → member path; 403 identical for no-relationship/inactive/removed; rejects non-ACTIVE gyms), `requireGymContext()` (reads `:gymId` or `X-Gym-Id`, validates UUID), `requireGymPermission(perm)` |
+| `src/data/gymPermissions.js` | THE role→permission matrix (`GYM_PERMISSIONS`), `permissionsFor/hasPermission`. Owner has everything; front desk = members.view/create, memberships.view, checkin.manage, payments.record (no financial reports); trainer = assigned_members.view, workouts.manage, nutrition.manage, assignments.manage |
+| `src/data/gyms.js` | gyms CRUD + validation (timezone/hours/branding/contact), profile completion, logo pass-through, staff CRUD (add-by-email auto-creates staff invitations; last-active-OWNER protection; trainer-with-assignments guard), members CRUD + profiles + duplicate-email guard + app linking (exact email, consumes pending invites) + leave/reactivate, `listGymMembershipsForUser` (mobile My Gym, incl. current plan term), audit read, staff-invite lifecycle (create/accept/decline/register — register creates User + staff row atomically), member invite lifecycle (same token mechanics) |
+| `src/data/gymTrainers.js` | trainer↔member assignments: assign (reassign ends previous, reason 'reassigned'), end, per-member history, gym-wide list, the TRAINER's own roster (`listAssignedMembersForTrainer`, with membership status), `countActiveAssignments` (used by the removal guard) |
+| `src/data/membershipPlans.js` | plans CRUD + validation (duration 1–36 day/week/month/year, price ≥0 minor units, currency, access_level, PT sessions), DRAFT/PUBLISHED/ARCHIVED; member memberships: assign (auto-opens a billing charge), plan change (`replace_active` → old term CANCELLED, history kept), cancel, renew (early → UPCOMING starting ends_on+1; expired → ACTIVE today; snapshots CURRENT plan price), freeze/resume (expiry shifts by EXACT frozen days; scheduled renewals slide), extend (1–365 days, slides renewals), `runMembershipMaintenance` (lazy gym-tz expiry + UPCOMING promotion + `membership_events`), `recordEvent` |
+| `src/data/gymBilling.js` | charges (auto from membership terms via `createChargeForMembership`, manual charges), immutable payments/receipts (`recordPayment` — balance guard, duplicate guard, future-date guard, currency match, receipt number), additive refunds, derived statuses (`chargeStatus`: DUE/PARTIAL/PAID/OVERDUE/REFUNDED), receipt generator, dashboard summary (revenue month / collected / due / overdue in gym tz) |
+| `src/data/gymAttendance.js` | QR tokens (ensure/rotate/resolve — foreign-gym and invalid tokens both → null), `recordCheckIn` (idempotency: same gym-local day OR <6h window = same visit; strict eligibility for QR/workout sources), offline batch (per-item results, future device times corrected + flagged), manual backdate (≤90 days) + delete, list, member ✓/− calendar, dashboard stats (today/week/month, peak hours, inactive 14+ days) |
+| `src/data/gymWorkouts.js` | gym-owned workouts + exercises stored BY NAME, version bump on content edits, assign/end (drafts/archived rejected, duplicates 409), member history, snapshot saves (save/update/delete) + `listForMember` (recommended = published+flagged AND active membership term; assigned = regardless) |
+| `src/data/gymNutrition.js` | same architecture for RECIPE/MEAL_PLAN/DIET_RECOMMENDATION items with `content.entries` + optional targets; assign/save/update/delete + `listForMember` |
+| `src/data/storageService.js` | shared file storage (S3-or-local) — also hosts the gym-logo functions `uploadGymLogo`/`getGymLogoStream`/`removeGymLogo` (uploads/gym-logos/<gymId>/…; bytes served only via `GET /gym/:gymId/logo` after gym-context authorization) |
+| `src/routes/gym.js` | ALL `/gym` HTTP routes. Structure (in order): `POST /` + `GET /mine`, `/my/memberships` → **`/invite/:token` + `/my/*` routes (MUST precede `/:gymId/*` — Express would read 'my'/'invite' as a gym id; the /my block sits right before the gym-settings section)** → gym settings/lifecycle → logo → members → staff → invites → trainer assignments → plans/memberships → billing → attendance → workouts → nutrition → audit |
+| `backend/test/gym*.test.js` | gymAuth (19), gymOnboarding (18), gymMembers (16), gymInvites (16), gymPlans (14), gymLifecycle (16), gymStaffTrainers (16), gymBilling (14), gymAttendance (17), gymWorkouts (14), gymNutrition (11) — 209 gym tests of the 234 total. All mount the real routers on a throwaway Express app against the real DATABASE_URL with self-cleaning fixtures (fresh random suffix, delete gyms→users in `after`) |
+
+**Conventions an agent must not break:**
+
+- **Route ordering**: every `/invite/:token` and `/my/*` path is registered
+  BEFORE any `/:gymId/…` path. A new member-facing endpoint goes into that
+  top block.
+- **registerRoute pattern**: `registerRoute(router, {method, path,
+  description, requiresAuth, allowedRoles, category}, [middleware…],
+  handler, [same middleware again])` — `requiresAuth` metadata does NOT
+  mount auth; the middleware arrays are mandatory and repeated.
+- **Authorization**: handlers trust `req.gymContext` / `req.user` only.
+  Never accept gymId/role/member ownership from the body.
+- **Member-scoped, not user-scoped**: assignments/attendance/billing all
+  reference `gym_members.id`; `app_user_id` NULL is a first-class state.
+- **Money & history are immutable**: payments/refunds/charges have no
+  update/delete routes; corrections are additive refunds. Membership terms
+  are snapshot-based (`price_cents` etc. copied at assign/renewal) so plan
+  edits never rewrite history. Personal library saves are JSONB snapshots
+  with a `saved_version`; gym edits never move them (explicit update only).
+- **Timezone**: any "today/overdue/local_date" decision uses
+  `now() AT TIME ZONE (SELECT timezone FROM gyms …)` — never the server
+  clock or `CURRENT_DATE`.
+- **Lazy maintenance**: `runMembershipMaintenance` (expire overdue ACTIVE
+  terms, promote UPCOMING, write `membership_events`) runs inside
+  membership/attendance reads and lifecycle transactions — no cron.
+- **Audit**: every mutation calls `gymAudit(client, …)` INSIDE the same
+  transaction; never via the pool.
+- **pg gotchas (both bit us)**: (a) `const { rows: x } = await
+  client.query(...)` makes `x` the rows ARRAY — don't then write
+  `x.rows[0]`; (b) reading back a row the same transaction just inserted
+  must use the TRANSACTION client, not the pool (`getPayment(gymId, id,
+  client)` pattern).
+
 - **Onboarding (Phase 2)**: `POST /gym` creates the gym from the wizard
   payload (name, timezone, currency, contact, address, `operating_hours`
   JSONB — normalized to 7 days, `branding` JSONB — hex colors, website);
@@ -560,14 +613,24 @@ tables — old models are kept read-only.
 ## 6. Testing & Verification
 
 ```bash
-npm test                 # 63 tests: auth flows, admin RBAC, catalog, nutrition
+npm test                 # 234 tests: auth flows, admin RBAC, catalog, nutrition
                          # core (tolerance boundaries, monitoring), targets
-                         # calculator, date semantics, suggestions
+                         # calculator, date semantics, suggestions + the whole
+                         # gym system (see §3.5.0 file map for the 11 gym
+                         # suites: auth, onboarding, members, invites, plans,
+                         # lifecycle, staff/trainers, billing, attendance,
+                         # workouts, nutrition)
 node scripts/checkRouteRegistry.js   # every new route uses registerRoute()
-node scripts/migrate.js              # apply migrations
+node scripts/migrate.js              # apply migrations (gym system: 043–053)
 node scripts/migrateDietToLogFirst.js # idempotent log-first migration (logs
                                       # before/after row counts; safe to re-run)
 ```
+
+Gym test conventions: run one suite with
+`node --test test/gymBilling.test.js`. Suites run CONCURRENTLY against the
+same live database — never assert on global counts (count by email/id
+instead; this bit the invite suite once). Fixtures always self-clean
+(delete gyms before users; gyms cascade everything).
 
 Live checks against a real database are expected before shipping endpoint
 changes — several past bugs (missing helpers, param-count mismatches) were

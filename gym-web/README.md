@@ -6,6 +6,54 @@ both the mobile app and the platform-admin dashboard (`../admin-dashboard`).
 It authenticates regular `users` through `/auth` (same accounts as the
 mobile app) and speaks to the `/gym` API.
 
+## File map (what lives where)
+
+| File | Contents |
+|---|---|
+| `src/main.tsx` | AntD `ConfigProvider` (ember primary #E8481F, dark algorithm) + `AntApp` wrapper |
+| `src/api.ts` | THE typed backend client. Top: session token storage/refresh (`/auth/login`, `/auth/signup`, `/auth/refresh`, `/auth/me`), `api()` wrapper (Bearer + automatic one-shot refresh on 401 + `X-Gym-Id` selector header). Then typed sections in phase order: gyms (`getMyGyms`, `createGym`, logo, deactivate/reactivate/leave, `getGymPermissions`), members (`listMembers` w/ q/status/connection, `getMember`, link/unlink app, lifecycle cancel/reactivate, invites), billing (`Charge/Payment/Receipt`, summary/ledger/record/refund, `formatMoney`), attendance (`scanQr`, `markAttendance`, backdate/delete, stats, member ✓/− calendar, QR tokens), staff (`listStaff/addStaff/updateStaff` — add may return an INVITATION instead of a row), trainers (assignable list, member assignments, roster), workouts (CRUD, assignments), nutrition (CRUD, assignments), plus `timezoneOptions` |
+| `src/permissions.tsx` | `GymContext` ({gymId, role, permissions}), `hasPermission(ctx, ...anyOf)` — nav + route guards read this; the data comes from `GET /gym/:id/permissions` |
+| `src/App.tsx` | The shell. Order matters: public `/invite/:token` landing page renders FIRST (before auth gating); then boot (session restore → `getMyGyms` → gym select → permissions fetch); then `Layout` with header (gym switcher, account dropdown with `trigger={['click']}`) + Sider (`NAV_ITEMS` filtered by permission) + `Content` routes via `permGuard(perms, node)`. Also: `signedOut` MUST clear the selected gym id (otherwise re-login skips the permission refetch — this was a real bug) |
+| `src/pages/LoginPage.tsx` | Sign-in / sign-up tabs (same accounts as the mobile app) |
+| `src/pages/InviteLandingPage.tsx` | Public invitation page (works signed-out): dispatches member vs staff invitations (`type` from the API), Create-Account (register-through-invitation), accept-if-email-matches, decline, expired/cancelled/declined/accepted states |
+| `src/pages/CreateGymWizard.tsx` | 6-step onboarding (Name → Contact → Address → Hours → Branding → Review); `OperatingHoursEditor` inside |
+| `src/pages/Dashboard.tsx` | Landing: profile-completion ring + missing checklist, gym summary, INACTIVE banner with owner reactivation |
+| `src/pages/MembersPage.tsx` | Members list (search + membership-status AND app-connection filters + pagination + create drawer). Exports `MemberFormFields`, `memberFormToPayload`, `AppConnectionTag` reused by the detail page |
+| `src/pages/MemberDetailPage.tsx` | Member shell: Overview (profile + app-connection card + membership card), then real tabs Membership / Payments / Attendance / Trainer / Workouts / Nutrition; placeholders for Documents / Activity |
+| `src/components/MemberMembershipTab.tsx` | Lifecycle UI: Freeze / Resume / Renew / Change Plan / Cancel / Extend + lifecycle timeline |
+| `src/components/MemberPaymentsTab.tsx` | Dues + receipts, Record payment, Refund (owner/admin), printable Receipt modal, Add charge |
+| `src/components/MemberAttendanceTab.tsx` | ✓/− calendar (21-day strip), QR card (rotatable), mark-present/backdate |
+| `src/components/MemberTrainerTab.tsx` / `MemberNutritionTab.tsx` / `MemberWorkoutsTab.tsx` | Assign/change/end assignment UIs per domain |
+| `src/pages/StaffPage.tsx` | OWNER: staff table with inline role select, status toggle, add/invite drawer + one-time invite-code modal |
+| `src/pages/TrainersPage.tsx` | OWNER: trainers + per-trainer assigned-member counts |
+| `src/pages/PlansPage.tsx` / `MembershipsPage.tsx` / `PaymentsPage.tsx` | Billing surfaces (Plans = create/edit/archive with price editor; Memberships = all terms gym-wide; Payments = summary cards + receipt ledger) |
+| `src/pages/WorkoutsPage.tsx` / `NutritionPage.tsx` | Gym content: create/edit drawers (exercises-by-name repeater / entries + targets), archive-restore, recommend flag, assigned/saved counts |
+| `src/pages/SettingsPage.tsx` | 4 tabs (Profile incl. logo + status lifecycle, Branding, Hours, Contact) |
+| `src/pages/PlaceholderPage.tsx` + `components/States.tsx` | `ComingSoon` / `EmptyState` / `ErrorState` (network-aware) / `PermissionDenied` |
+| `src/components/DataTable.tsx` + `hooks/usePagedList.ts` | Standard list surface: loading/error-retry/empty/prev-next pagination (fetches pageSize+1 since /gym list APIs return plain arrays without totals; debounced search; `extra` filters re-trigger fetch and reset to page 0) |
+| `src/components/FilterBar.tsx`, `PageContainer.tsx`, `StatusBadge.tsx` | Search + up to two selects; breadcrumbs; one place that knows status colors (member/staff/gym/lifecycle incl. FROZEN) |
+
+## Patterns an agent must follow
+
+1. **Permissions**: add the nav entry to `NAV_ITEMS` in `App.tsx` with the
+   required permission(s) and wrap the route in `permGuard([...], …)`. The
+   backend matrix (`gymPermissions.js`) must actually grant it — nav hiding
+   is UX, the backend is the authority.
+2. **Data fetching**: use `usePagedList` for any list endpoint (offset
+   pagination, no totals); it returns `{rows, loading, error, reload, page,
+   hasNext, q, status, extra, setExtra}`. Render through `DataTable`.
+3. **Money**: amounts cross the API as integer MINOR units (paise);
+   display with `formatMoney(cents, currency)`; inputs are major units ×100
+   on submit.
+4. **Dates**: pickers submit `YYYY-MM-DD` via `dayjs(...).format()`; never
+   `toISOString()` on date-only values.
+5. **Logo/images**: the logo endpoint authorizes via Bearer token, so
+   render it through `fetchGymLogoBlobUrl` (blob URL), not a plain `src`.
+6. **Adding a phase section**: new page in `src/pages`, new typed client
+   section in `src/api.ts`, nav item + guarded route in `App.tsx`, member
+   tab component in `src/components` wired into `MemberDetailPage`. Keep
+   placeholders as `ComingSoon` until the backend ships — no fake data.
+
 ## Run
 
 ```bash
@@ -38,11 +86,13 @@ denied** page — and the backend rejects the request anyway.
 
 ## Routes
 
-`/dashboard(/)` · `/members` · `/members/:id` (+ `/membership`,
-`/payments`, `/attendance`, `/trainer`, `/documents` sub-routes) ·
-`/memberships` (+ `/plans`) · `/payments` · `/attendance` · `/trainers` ·
-`/staff` · `/workouts` · `/nutrition` · `/communications` · `/reports` ·
-`/settings/:tab` · `/create-gym` (onboarding wizard).
+`/` (dashboard) · `/members` · `/members/:id` (+ `/membership`,
+`/payments`, `/attendance`, `/trainer`, `/workouts`, `/nutrition`,
+`/documents` sub-routes) · `/memberships` (+ `/plans`) · `/payments` ·
+`/attendance` · `/trainers` · `/staff` · `/workouts` · `/nutrition` ·
+`/classes` · `/communications` · `/reports` · `/settings/:tab` ·
+`/create-gym` (onboarding wizard) · `/invite/:token` (public invitation
+landing, outside the shell).
 
 ## What's real vs. placeholder
 
