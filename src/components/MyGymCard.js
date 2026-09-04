@@ -13,9 +13,11 @@
 // Historical record integrity is unaffected by when the app account was
 // linked: the term predating the link shows exactly the same.
 import React, { useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../theme';
+import { GYM_CLASSES } from '../shared/constants/routes';
 import { api, fetchMyGymContent } from '../lib/gymApi';
 
 const STATUS_COLORS = {
@@ -29,6 +31,7 @@ const STATUS_COLORS = {
 
 export default function MyGymCard() {
   const colors = useColors();
+  const navigation = useNavigation();
   const [memberships, setMemberships] = useState(null); // null = loading
   const [contentCounts, setContentCounts] = useState({});
 
@@ -102,6 +105,18 @@ export default function MyGymCard() {
           </View>
         );
       })}
+      {/* Gym Classes (Phase 17): the class schedule + one-tap booking */}
+      <TouchableOpacity
+        style={styles.classesRow}
+        onPress={() => navigation.navigate(GYM_CLASSES)}
+        accessibilityRole="button"
+        accessibilityLabel="Open the class schedule"
+      >
+        <Ionicons name="calendar-outline" size={16} color={colors.primary} />
+        <Text style={styles.classesText}>Classes</Text>
+        <Text style={styles.classesHint}>Book your spot</Text>
+        <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
+      </TouchableOpacity>
     </View>
   );
 }
@@ -128,4 +143,15 @@ const makeStyles = (colors) => StyleSheet.create({
   gymMeta: { color: colors.textDim, fontSize: 11, marginTop: 2 },
   badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
   badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
+  classesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  classesText: { color: colors.text, fontSize: 13, fontWeight: '700', flex: 1 },
+  classesHint: { color: colors.textDim, fontSize: 11 },
 });

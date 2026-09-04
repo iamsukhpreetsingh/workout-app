@@ -230,6 +230,18 @@ see `../GYM_MANAGEMENT_DESIGN.md` §16 for phasing.
   gym member, not an app account — Aman with no app pays cash exactly like
   an app-connected member.
 
+## Classes (Phase 17)
+
+- **`pages/ClassesPage.tsx`** — the schedule (permission `classes.manage` +
+  `checkin.manage`): create/edit class instances (type, trainer, branch,
+  room, date, times, capacity), cancel class (cascades live bookings),
+  and the booking sheet drawer: desk-book any member (search works for
+  members WITHOUT an app account), cancel a seat, mark attended / no-show
+  (frees the seat; the first waitlisted member is promoted FIFO), undo a
+  mis-mark when the seat is free again.
+- **`api/classes.ts`** — `GymClass` / `ClassBooking` types and the class,
+  booking, waitlist and attendance calls (`/gym/:gymId/classes…`).
+
 ## Security model
 
 The portal hides UI by role, but the **backend is the authority**: every

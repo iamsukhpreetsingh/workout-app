@@ -37,10 +37,10 @@ import WorkoutsPage from './pages/WorkoutsPage';
 import NutritionPage from './pages/NutritionPage';
 import AnnouncementsPage from './pages/AnnouncementsPage';
 import BranchesPage from './pages/BranchesPage';
+import ClassesPage from './pages/ClassesPage';
 import ReportsPage from './pages/ReportsPage';
 import StaffPage from './pages/StaffPage';
 import TrainersPage from './pages/TrainersPage';
-import PlaceholderPage from './pages/PlaceholderPage';
 
 const { Header, Sider, Content } = Layout;
 
@@ -56,7 +56,7 @@ const NAV_ITEMS = [
   { path: '/trainers', label: 'Trainers', icon: <UserOutlined />, perms: ['staff.manage'] },
   { path: '/workouts', label: 'Workouts', icon: <ThunderboltOutlined />, perms: ['content.manage', 'workouts.manage'] },
   { path: '/nutrition', label: 'Nutrition', icon: <AppleOutlined />, perms: ['content.manage', 'nutrition.manage'] },
-  { path: '/classes', label: 'Classes', icon: <CalendarOutlined />, perms: ['content.manage'] },
+  { path: '/classes', label: 'Classes', icon: <CalendarOutlined />, perms: ['classes.manage', 'checkin.manage'] },
   { path: '/communications', label: 'Communications', icon: <SoundOutlined />, perms: ['communications.manage'] },
   { path: '/reports', label: 'Reports', icon: <BarChartOutlined />, perms: ['reports.view'] },
   { path: '/staff', label: 'Staff', icon: <CrownOutlined />, perms: ['staff.manage'] },
@@ -209,9 +209,7 @@ function Shell() {
 
       <Route path="/workouts" element={permGuard(['content.manage', 'workouts.manage'], <WorkoutsPage />)} />
       <Route path="/nutrition" element={permGuard(['content.manage', 'nutrition.manage'], <NutritionPage />)} />
-      <Route path="/classes" element={permGuard(['content.manage'],
-        <PlaceholderPage section="Classes" title="Classes" phase="Phase 3"
-          description="Class schedule, capacity and member bookings." />)} />
+      <Route path="/classes" element={permGuard(['classes.manage', 'checkin.manage'], <ClassesPage />)} />
 
       <Route path="/communications" element={permGuard(['communications.manage'],
         <AnnouncementsPage gymId={gymId!} />)} />

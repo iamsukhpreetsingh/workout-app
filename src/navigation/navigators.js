@@ -37,6 +37,7 @@ import AssignedPlanDetailScreen from '../screens/AssignedPlanDetailScreen';
 import DietPlanBuilderScreen from '../screens/DietPlanBuilderScreen';
 import ClientDietPlanDetailScreen from '../screens/ClientDietPlanDetailScreen';
 import MyDishesScreen from '../screens/MyDishesScreen';
+import GymClassesScreen from '../screens/GymClassesScreen';
 import MealCatalogScreen from '../screens/MealCatalogScreen';
 import WorkoutTemplatesScreen from '../screens/WorkoutTemplatesScreen';
 import WorkoutTemplateEditorScreen from '../screens/WorkoutTemplateEditorScreen';
@@ -84,6 +85,7 @@ import {
   DIET_PLAN_BUILDER,
   CLIENT_DIET_PLAN_DETAIL,
   MY_DISHES,
+  GYM_CLASSES,
   SUPPLEMENT_PLAN_BUILDER,
   COACHING_PLAN_BUILDER,
   COACHING_PLAN_DETAIL,
@@ -153,6 +155,7 @@ function renderDetailScreens(onSwitchView) {
         options={{ title: 'Diet Plan' }}
       />
       <Stack.Screen name={MY_DISHES} component={MyDishesScreen} options={{ title: 'My Dishes' }} />
+      <Stack.Screen name={GYM_CLASSES} component={GymClassesScreen} options={{ title: 'Gym Classes' }} />
       <Stack.Screen
         name={SUPPLEMENT_PLAN_BUILDER}
         component={CoachingPlanBuilderScreen}

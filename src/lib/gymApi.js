@@ -41,3 +41,24 @@ export async function fetchMyGymContent() {
 export async function markGymAttendanceFromWorkout() {
   return api('/gym/my/attendance/workout', { method: 'POST' });
 }
+
+
+// ── Gym Classes (Phase 17) ──────────────────────────────────────────────────
+// Upcoming scheduled classes across the member's ACTIVE gym memberships,
+// branch-filtered to what they can access, with spots left and the member's
+// own live booking status per class.
+export async function fetchMyGymClasses() {
+  return api('/gym/my/classes');
+}
+
+// Book a class from the app. If the class is full the member is waitlisted
+// (FIFO) — the response carries status BOOKED | WAITLISTED.
+export async function bookGymClass(classId) {
+  return api(`/gym/my/classes/${classId}/book`, { method: 'POST' });
+}
+
+// Cancel the member's own live booking (seat or waitlist spot). Cancelling
+// a seat promotes the earliest waitlisted member.
+export async function cancelMyGymClassBooking(classId) {
+  return api(`/gym/my/classes/${classId}/cancel`, { method: 'POST' });
+}

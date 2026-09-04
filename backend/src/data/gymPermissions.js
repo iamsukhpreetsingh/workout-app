@@ -13,6 +13,7 @@ const GYM_PERMISSIONS = {
     'payments.manage', 'payments.record', 'attendance.manage', 'checkin.manage',
     'content.manage', 'communications.manage', 'reports.view', 'settings.manage',
     'branches.manage', // multi-branch CRUD + close/reopen (Phase 16)
+    'classes.manage', // class scheduling: create/edit/cancel classes (Phase 17)
     'assigned_members.view',
   ],
   ADMIN: [
@@ -21,6 +22,7 @@ const GYM_PERMISSIONS = {
     'attendance.manage', 'content.manage', 'communications.manage',
     'assigned_members.view', 'reports.view', // business dashboard (Phase 15)
     'branches.manage', // multi-branch CRUD (Phase 16)
+    'classes.manage', // class scheduling (Phase 17)
   ],
   TRAINER: [
     'assigned_members.view', 'workouts.manage',

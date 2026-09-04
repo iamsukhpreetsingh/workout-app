@@ -33,6 +33,8 @@ const communications = require('../data/gymCommunications');
 const dashboard = require('../data/gymDashboard');
 // Phase 16 multi-branch
 const branches = require('../data/gymBranches');
+// Phase 17 class scheduling
+const classes = require('../data/gymClasses');
 
 const httpError = (res, e, fallback = 500) => {
   res.status(e.status || fallback).json({ error: e.message || 'Unexpected error' });
@@ -73,6 +75,59 @@ registerRoute(router, {
     res.json(await communications.listForMember(req.user.id, {
       limit: req.query.limit, offset: req.query.offset,
     }));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+// ── mobile: my classes (auth only; member resolved by JWT) ───────────────
+// Registered BEFORE the /:gymId routes so "/my/classes" is never captured
+// by "GET /:gymId/classes" (route-ordering convention).
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/classes',
+  description: "Upcoming SCHEDULED classes across the connected member's ACTIVE gym memberships — branch-filtered to what they can access, with spots left and their own live booking status per class. Auth only (member resolved from the JWT).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.json(await classes.listMyClasses(req.user.id, { limit: req.query.limit }));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/my/classes/:classId/book',
+  description: 'The connected member books a class from the app. Full class → FIFO waitlist. Gates: active membership, branch access, duplicate-booking and already-over guards. Auth only (member resolved from the JWT).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.status(201).json(await classes.myBookClass(
+      req.user.id, req.params.classId, { userId: req.user.id }, req.ip, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/my/classes/:classId/cancel',
+  description: "The connected member cancels their own live booking (BOOKED or WAITLISTED) for a class. Cancelling a seat promotes the earliest waitlisted member. Auth only (member resolved from the JWT).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.json(await classes.myCancelBooking(
+      req.user.id, req.params.classId, { userId: req.user.id }, req.ip, gyms.gymAudit,
+      { reason: (req.body || {}).reason }
+    ));
   } catch (e) {
     httpError(res, e, 400);
   }
@@ -2453,5 +2508,152 @@ registerRoute(router, {
     httpError(res, e, 400);
   }
 }, [requireAuth, requireGymContext(), requireGymPermission('staff.manage')]);
+
+// ── class scheduling & bookings (Phase 17) ─────────────────────────────
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/classes',
+  description: 'Creates a scheduled class instance: type, trainer, branch, room, date, start/end time, capacity. Guards: trainer must be an ACTIVE TRAINER free of overlapping classes and not restricted away from the branch; same-branch room double-booking rejected. Requires permission: classes.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('classes.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await classes.createClass(
+      req.gymContext.gymId, { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('classes.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/classes',
+  description: 'The schedule: classes with trainer, branch, spots left and waitlist size. Filters: from, to, status (SCHEDULED/CANCELLED/ALL), branch_id, type. Requires any of: members.view, assigned_members.view, checkin.manage, classes.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.view', 'assigned_members.view', 'checkin.manage', 'classes.manage'])], async (req, res) => {
+  try {
+    res.json(await classes.listClasses(req.gymContext.gymId, {
+      from: req.query.from, to: req.query.to, status: req.query.status,
+      branch_id: req.query.branch_id, type: req.query.type,
+      limit: req.query.limit, offset: req.query.offset,
+    }));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.view', 'assigned_members.view', 'checkin.manage', 'classes.manage'])]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/classes/:classId',
+  description: 'One class with its full booking sheet: every booking with member, status, source and waitlist position. Requires any of: members.view, assigned_members.view, checkin.manage, classes.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.view', 'assigned_members.view', 'checkin.manage', 'classes.manage'])], async (req, res) => {
+  try {
+    res.json(await classes.getClass(req.gymContext.gymId, req.params.classId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.view', 'assigned_members.view', 'checkin.manage', 'classes.manage'])]);
+
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/:gymId/classes/:classId',
+  description: 'Edits a SCHEDULED class (type, trainer, branch, room, date, times, capacity, notes). Capacity cannot drop below the seats already held; trainer/room conflicts are re-checked. Requires permission: classes.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('classes.manage')], async (req, res) => {
+  try {
+    res.json(await classes.updateClass(
+      req.gymContext.gymId, req.params.classId, { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('classes.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/classes/:classId/cancel',
+  description: 'Cancels the class: every BOOKED/WAITLISTED booking becomes CANCELLED (reason class_cancelled); attendance rows keep history. Idempotent. Requires permission: classes.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('classes.manage')], async (req, res) => {
+  try {
+    res.json(await classes.cancelClass(
+      req.gymContext.gymId, req.params.classId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('classes.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/classes/:classId/bookings',
+  description: 'Front desk books a member (works for members WITHOUT an app account). Gates: active membership (expired/frozen refuse), branch access + desk restriction, duplicate 409; a full class waitlists the member (FIFO). Requires any of: checkin.manage, classes.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['checkin.manage', 'classes.manage'])], async (req, res) => {
+  try {
+    const memberId = (req.body || {}).member_id;
+    if (!memberId) return res.status(400).json({ error: 'member_id is required' });
+    res.status(201).json(await classes.bookClass(
+      req.gymContext.gymId, req.params.classId, memberId,
+      { source: 'DESK', actor: { userId: req.user.id }, ip: req.ip,
+        staff_branch_ids: await branches.staffBranchIds(req.gymContext.gymId, req.user.id) },
+      gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['checkin.manage', 'classes.manage'])]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/classes/:classId/bookings/:bookingId/cancel',
+  description: 'Cancels one booking. Cancelling a seat promotes the earliest WAITLISTED member (FIFO). Already-cancelled / attendance-recorded bookings refuse. Requires any of: checkin.manage, classes.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['checkin.manage', 'classes.manage'])], async (req, res) => {
+  try {
+    res.json(await classes.cancelBooking(
+      req.gymContext.gymId, req.params.classId, req.params.bookingId,
+      { reason: (req.body || {}).reason, actor: { userId: req.user.id }, ip: req.ip },
+      gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['checkin.manage', 'classes.manage'])]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/classes/:classId/bookings/:bookingId/attendance',
+  description: "Marks class attendance: ATTENDED (present), NO_SHOW (absent — frees the seat and promotes the waitlist) or BOOKED (undo a mis-mark; needs a free seat again). Requires any of: checkin.manage, classes.manage.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['checkin.manage', 'classes.manage'])], async (req, res) => {
+  try {
+    res.json(await classes.setAttendance(
+      req.gymContext.gymId, req.params.classId, req.params.bookingId,
+      (req.body || {}).attendance, { userId: req.user.id }, req.ip, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['checkin.manage', 'classes.manage'])]);
 
 module.exports = router;
