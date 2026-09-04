@@ -12,6 +12,7 @@ const express = require('express');
 const { registerRoute } = require('../admin/registry');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { requireGymContext, requireGymPermission, requireGymPermissionAny } = require('../middleware/gymAuth');
+const { rateLimit } = require('../middleware/rateLimit');
 const { query } = require('../db/pool');
 const gyms = require('../data/gyms');
 const plans = require('../data/membershipPlans');
@@ -38,8 +39,18 @@ const classes = require('../data/gymClasses');
 // Phase 18 member documents & digital waivers
 const documents = require('../data/gymMemberDocuments');
 
+// SECURITY: only known HttpError business failures carry their message to
+// the client. Anything unexpected (driver errors, pg casts, bugs) must NEVER
+// leak internals — status is normalised (pg 22P02 bad-uuid casts → 400) and
+// the message becomes generic; the detail is logged server-side instead.
 const httpError = (res, e, fallback = 500) => {
-  res.status(e.status || fallback).json({ error: e.message || 'Unexpected error' });
+  if (e && e.status) {
+    return res.status(e.status).json({ error: e.message || 'Unexpected error' });
+  }
+  const pgBadCast = e && (e.code === '22P02' || /invalid input syntax for (type )?(uuid|integer)/.test(e.message || ''));
+  console.error(e); // detail stays in the server log only
+  if (pgBadCast) return res.status(400).json({ error: 'Invalid id format' });
+  res.status(fallback).json({ error: fallback >= 500 ? 'Internal server error' : 'Invalid request' });
 };
 
 // ── mobile: my announcements (auth only; member resolved by JWT) ─────────
@@ -2751,11 +2762,11 @@ registerRoute(router, {
 registerRoute(router, {
   method: 'POST',
   path: '/:gymId/members/:memberId/documents',
-  description: 'Uploads a document for a member (works for members WITHOUT an app account). Validates size (≤8MB), MIME (PDF/PNG/JPEG), extension and magic bytes; sanitizes the filename; supersedes the previous live document of the same category. Requires permission: documents.manage plus branch scope.',
+  description: 'Uploads a document for a member (works for members WITHOUT an app account). Validates size (≤8MB), MIME (PDF/PNG/JPEG), extension and magic bytes; sanitizes the filename; supersedes the previous live document of the same category. Rate-limited per IP (uploads are expensive). Requires permission: documents.manage plus branch scope.',
   requiresAuth: true,
   allowedRoles: ['user', 'trainer', 'gym_staff'],
   category: 'Gym',
-}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')], async (req, res) => {
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage'), rateLimit({ key: 'doc-upload', max: 120, windowMs: 60 * 60 * 1000 })], async (req, res) => {
   try {
     res.status(201).json(await documents.uploadDocument(
       req.gymContext.gymId, req.params.memberId,
@@ -2765,7 +2776,7 @@ registerRoute(router, {
   } catch (e) {
     httpError(res, e, e.status === 413 || e.status === 415 ? e.status : 400);
   }
-}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')]);
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage'), rateLimit({ key: 'doc-upload', max: 120, windowMs: 60 * 60 * 1000 })]);
 
 registerRoute(router, {
   method: 'GET',

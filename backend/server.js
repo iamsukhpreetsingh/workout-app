@@ -1,6 +1,5 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const express = require('express');
-const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -23,7 +22,45 @@ const { requireAuth } = require('./src/middleware/auth');
 const { getUserById } = require('./src/data/users');
 
 const app = express();
-app.use(cors());
+
+// ── security headers (no external dep — helmet-equivalent minimum set) ──
+// API + private uploads only; gym-web is served separately by its own host.
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'DENY');
+  res.set('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  res.set('Referrer-Policy', 'no-referrer');
+  res.set('Cross-Origin-Resource-Policy', 'cross-origin'); // uploads embedded by the portal origin
+  if (req.secure) res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
+
+// ── CORS allowlist ──────────────────────────────────────────────────────
+// Bearer-token API: browsers only need CORS for the web portal. Origins are
+// an explicit allowlist (env CORS_ORIGINS, comma-separated) plus the local
+// dev defaults; unknown origins simply get no CORS headers, which browsers
+// treat as blocked. Non-browser clients (mobile, curl) send no Origin and
+// are unaffected.
+const CORS_ORIGINS = new Set(
+  String(process.env.CORS_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .concat(['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000', 'http://127.0.0.1:3000'])
+);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && CORS_ORIGINS.has(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Gym-Id');
+    res.set('Access-Control-Max-Age', '600');
+  }
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  next();
+});
+
 app.use(express.json({ limit: '12mb' })); // dish photos arrive as base64
 
 app.get('/health', (req, res) => res.json({ ok: true }));
@@ -80,9 +117,20 @@ app.post('/uploads/dish-photo', requireAuth, async (req, res) => {
     if (!raw.length || raw.length > 8 * 1024 * 1024) {
       return res.status(400).json({ error: 'image too large (max 8MB)' });
     }
+    // magic-byte check: the bytes really must be the image the client claims,
+    // otherwise arbitrary content (HTML/JS) would be stored and served from
+    // our origin as .jpg (stored-XSS vector once nosniff is missing)
+    const isJpeg = raw[0] === 0xff && raw[1] === 0xd8 && raw[2] === 0xff;
+    const isPng = raw[0] === 0x89 && raw[1] === 0x50 && raw[2] === 0x4e && raw[3] === 0x47;
+    const isWebp = raw.slice(0, 4).toString('latin1') === 'RIFF' && raw.slice(8, 12).toString('latin1') === 'WEBP';
+    if (!isJpeg && !isPng && !isWebp) {
+      return res.status(400).json({ error: 'Only real PNG, JPEG or WEBP images are accepted' });
+    }
     const name = `${crypto.randomUUID()}.jpg`;
     fs.writeFileSync(path.join(UPLOAD_DIR, name), raw);
-    res.status(201).json({ url: `${req.protocol}://${req.get('host')}/uploads/${name}` });
+    // RELATIVE url — never reflect the client-controlled Host header into
+    // stored data; clients resolve it against their known API base
+    res.status(201).json({ url: `/uploads/${name}` });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Upload failed' });
@@ -126,9 +174,25 @@ app.get('/me', requireAuth, async (req, res) => {
 
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: 'Internal server error' });
+  console.error(err); // detail stays server-side only
+  // Known client-error classes get their real status instead of a blanket 500:
+  //   body-parser PayloadTooLargeError → 413, JSON SyntaxError → 400,
+  //   pg 22P02 (invalid uuid/int text representation) → 400 invalid id
+  const pgInvalidCast = err && (err.code === '22P02' || /invalid input syntax for (type )?(uuid|integer)/.test(err.message || ''));
+  const status = pgInvalidCast ? 400 : (err.status || err.statusCode || 500);
+  const message = pgInvalidCast ? 'Invalid id format'
+    : status === 413 ? 'Request body too large'
+    : status === 400 && err.type === 'entity.parse.failed' ? 'Malformed JSON body'
+    : status >= 500 ? 'Internal server error' : (err.message || 'Request failed');
+  res.status(status).json({ error: message });
 });
+
+// SECURITY: required secrets — the server refuses to start unconfigured
+// rather than degrading into a guessable-token deployment.
+if (!process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET is not set. Refusing to start (tokens would be unsigned/unverifiable).');
+  process.exit(1);
+}
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, '0.0.0.0', () => {

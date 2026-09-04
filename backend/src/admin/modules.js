@@ -12,7 +12,13 @@ const notifications = require('../data/notifications');
 const router = express.Router();
 router.use(requireAdmin());
 
-const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET || 'admin-dev-secret-change-me';
+// SECURITY: no hardcoded fallback — a known constant would let anyone forge
+// admin/impersonation tokens on an unconfigured deployment. Fail loudly at
+// boot instead (tests set ADMIN_JWT_SECRET before requiring this module).
+const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET;
+if (!ADMIN_JWT_SECRET) {
+  throw new Error('[ADMIN] ADMIN_JWT_SECRET (or JWT_SECRET) must be set in the environment');
+}
 
 const err = (res, e, fallback = 500) => res.status(e.status || fallback).json({ error: e.message || 'Error' });
 
@@ -444,7 +450,12 @@ registerRoute(router, {
 }, requireAdminRole('support', 'super_admin'));
 
 function JWT_SECRET_FOR_APP() {
-  return process.env.JWT_SECRET || 'dev-secret-change-me';
+  // SECURITY: no hardcoded fallback (see ADMIN_JWT_SECRET note above) —
+  // impersonation tokens signed with a known constant would be full account
+  // takeover for anyone who reads the repo.
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('[ADMIN] JWT_SECRET must be set to mint app tokens');
+  return secret;
 }
 
 // ══════════════════════════════ Audit log (Phase 10) ═════════════════

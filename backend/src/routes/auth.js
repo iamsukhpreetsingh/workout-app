@@ -6,12 +6,21 @@ const users = require('../data/users');
 const tags = require('../data/tags');
 const { registerRoute } = require('../admin/registry');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { rateLimit, createFailureTracker } = require('../middleware/rateLimit');
 
 const router = express.Router();
 
 const ACCESS_TTL = '30m';
 const REFRESH_TTL_DAYS = 30;
 const BCRYPT_COST = 11;
+
+// Brute-force guard: counts only FAILED logins per (account, IP). 15 misses
+// per 15 minutes → 429. Successful logins never consume budget, so a user
+// who mistypes once is never locked out, while password spraying dies fast.
+const loginFailures = createFailureTracker({
+  key: 'login-fail', max: 15, windowMs: 15 * 60 * 1000,
+  attributeOf: (req) => (req.body || {}).email || '',
+});
 
 function signAccessToken(user) {
   return jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, {
@@ -31,7 +40,8 @@ function signRefreshToken(user, jti) {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// POST /auth/signup
+// POST /auth/signup — capped per IP to stop mass account creation
+// (generous ceiling: real deployments create a handful per hour per IP)
 registerRoute(
   router,
   {
@@ -42,6 +52,7 @@ registerRoute(
     allowedRoles: ['public'],
     category: 'Auth',
   },
+  [rateLimit({ key: 'signup', max: 100, windowMs: 60 * 60 * 1000 })],
   async (req, res, next) => {
   try {
     const { email, password, name, role } = req.body || {};
@@ -97,10 +108,21 @@ registerRoute(
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
+    // brute-force guard first — a caller already over the failure budget
+    // gets 429 before any DB/bcrypt work (also caps bcrypt CPU exhaustion)
+    if (loginFailures.blocked(req)) {
+      return res.status(429).json({ error: 'Too many attempts. Please try again later.' });
+    }
     const user = await users.getUserByEmail(email);
-    if (!user) return res.status(401).json({ error: 'Invalid email or password' });
+    if (!user) {
+      loginFailures.fail(req);
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
     const ok = await bcrypt.compare(password, user.password_hash);
-    if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
+    if (!ok) {
+      loginFailures.fail(req);
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
     // admin-dashboard suspension (admin_users Phase 4) blocks app login
     if (user.is_suspended) {
       return res.status(403).json({ error: 'This account has been suspended. Contact support.' });
@@ -138,6 +160,7 @@ registerRoute(
     allowedRoles: ['public (valid refresh token)'],
     category: 'Auth',
   },
+  [rateLimit({ key: 'refresh', max: 240, windowMs: 15 * 60 * 1000 })],
   async (req, res, next) => {
   try {
     const { refreshToken } = req.body || {};
@@ -147,7 +170,8 @@ registerRoute(
 
     let payload;
     try {
-      payload = jwt.verify(refreshToken, process.env.JWT_SECRET);
+      // algorithms pinned: the secret is HMAC-only, so nothing else may verify
+      payload = jwt.verify(refreshToken, process.env.JWT_SECRET, { algorithms: ['HS256'] });
     } catch {
       return res.status(401).json({ error: 'Invalid or expired refresh token' });
     }

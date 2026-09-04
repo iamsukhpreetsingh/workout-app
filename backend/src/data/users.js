@@ -23,24 +23,38 @@ async function getUserById(id) {
   return rows[0] || null;
 }
 
+// Refresh tokens are stored as SHA-256 hashes (same design as the admin
+// dashboard's admin_refresh_tokens.token_hash): a database read/backup leak
+// must never yield usable session tokens. Legacy rows written before this
+// change hold the raw token — the lookup still accepts those and revoke
+// covers both forms, so existing sessions survive the upgrade untouched.
+const crypto = require('crypto');
+
+function hashToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
 async function storeRefreshToken(userId, token, expiresAt) {
   await query(
     'INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)',
-    [userId, token, expiresAt]
+    [userId, hashToken(token), expiresAt]
   );
 }
 
 async function findValidRefreshToken(token) {
   const { rows } = await query(
     `SELECT * FROM refresh_tokens
-     WHERE token = $1 AND revoked_at IS NULL AND expires_at > now()`,
-    [token]
+     WHERE (token = $1 OR token = $2) AND revoked_at IS NULL AND expires_at > now()`,
+    [hashToken(token), token]
   );
   return rows[0] || null;
 }
 
 async function revokeRefreshToken(token) {
-  await query('UPDATE refresh_tokens SET revoked_at = now() WHERE token = $1 AND revoked_at IS NULL', [token]);
+  await query(
+    'UPDATE refresh_tokens SET revoked_at = now() WHERE (token = $1 OR token = $2) AND revoked_at IS NULL',
+    [hashToken(token), token]
+  );
 }
 
 module.exports = {

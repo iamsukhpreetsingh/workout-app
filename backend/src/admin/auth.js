@@ -7,7 +7,13 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { query } = require('../db/pool');
 
-const JWT_SECRET = process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET || 'admin-dev-secret-change-me';
+// SECURITY: no hardcoded fallback — 'admin-dev-secret-change-me' readable in
+// the repo would let anyone mint super-admin JWTs on an unconfigured deploy.
+// Fail loudly instead; tests set ADMIN_JWT_SECRET before requiring this file.
+const JWT_SECRET = process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('[ADMIN] ADMIN_JWT_SECRET (or JWT_SECRET) must be set in the environment');
+}
 const ACCESS_TTL = '30m';
 const REFRESH_TTL_DAYS = 7;
 
@@ -20,15 +26,28 @@ async function ensureBootstrapAdmin() {
   const { rows } = await query('SELECT count(*)::int AS c FROM admin_users');
   if (rows[0].c > 0) return;
   const email = process.env.ADMIN_BOOTSTRAP_EMAIL || 'admin@workout.local';
-  const password = process.env.ADMIN_BOOTSTRAP_PASSWORD || 'ChangeMe123!';
+  let password = process.env.ADMIN_BOOTSTRAP_PASSWORD;
+  // SECURITY: a documented default password is acceptable for local dev, but
+  // never in production — there the bootstrap password is random and printed
+  // exactly once for the operator to copy into their secret manager.
+  if (!password) {
+    if (process.env.NODE_ENV === 'production') {
+      password = crypto.randomBytes(18).toString('base64url');
+      console.log('[ADMIN] bootstrap super admin created for %s — RANDOM one-time password (shown here ONLY): %s', email, password);
+      console.log('[ADMIN] copy it now and change it after first login; it will never be shown again');
+    } else {
+      password = 'ChangeMe123!';
+      console.log(`[ADMIN] bootstrap super admin created for ${email} with the DEV default password — set ADMIN_BOOTSTRAP_PASSWORD before deploying`);
+    }
+  }
   const hash = await bcrypt.hash(password, 10);
   await query(
     'INSERT INTO admin_users (email, password_hash, name, role) VALUES ($1,$2,$3,$4)',
     [email, hash, 'Super Admin', 'super_admin']
   );
-  // NEVER log the generated password — an operator who needs it must read
-  // it from the env they set; the log only records that the account exists
-  console.log(`[ADMIN] bootstrap super admin created for ${email} — change the bootstrap password immediately`);
+  if (process.env.ADMIN_BOOTSTRAP_PASSWORD) {
+    console.log(`[ADMIN] bootstrap super admin created for ${email} — change the bootstrap password immediately`);
+  }
 }
 
 function signAccess(admin) {
