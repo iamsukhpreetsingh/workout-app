@@ -62,3 +62,7 @@ design/
 
 gym-web/dist/
 *.tsbuildinfo
+
+*.patch
+*.zip
+PATCHES/*

@@ -38,6 +38,16 @@
 -- `recommended` flag on gym_workouts / gym_nutrition_items, served to
 -- eligible app-connected members (ACTIVE membership term) by the /gym/my
 -- aggregation — the unified member endpoint is GET /gym/my/content.
+--
+-- DRIFT TOLERANCE: a database that once half-ran this file outside this
+-- transactional runner (statement-by-statement tooling, an earlier draft,
+-- a crashed non-transactional session) can hold a PARTIAL
+-- gym_content_assignments table. This migration heals such states instead
+-- of failing on them: missing columns are added right after CREATE, and
+-- the Phase 11/12 backfills run ONLY when the old tables still exist in
+-- their exact Phase 11/12 shape — otherwise they are skipped and the old
+-- tables are left untouched (zero data loss; the copy can be done
+-- manually once the drifted shape is reconciled).
 
 CREATE TABLE IF NOT EXISTS gym_content_assignments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -64,6 +74,29 @@ CREATE TABLE IF NOT EXISTS gym_content_assignments (
   CHECK (ends_on IS NULL OR ends_on >= starts_on)
 );
 
+-- ── heal partial/drifted states of this table (every clause is a no-op on
+-- a fresh run, where CREATE TABLE above already built the full shape) ────
+-- Added columns are nullable: pre-existing rows cannot be safely given
+-- NOT NULL values at DDL time. The data layer treats every field except
+-- ids/gym scoping as optional on read, so this does not affect behavior.
+ALTER TABLE gym_content_assignments
+  ADD COLUMN IF NOT EXISTS id UUID DEFAULT gen_random_uuid(),
+  ADD COLUMN IF NOT EXISTS gym_id UUID REFERENCES gyms(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS content_type TEXT,
+  ADD COLUMN IF NOT EXISTS workout_id UUID REFERENCES gym_workouts(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS item_id UUID REFERENCES gym_nutrition_items(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS member_id UUID REFERENCES gym_members(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ACTIVE',
+  ADD COLUMN IF NOT EXISTS starts_on DATE DEFAULT CURRENT_DATE,
+  ADD COLUMN IF NOT EXISTS ends_on DATE,
+  ADD COLUMN IF NOT EXISTS notes TEXT,
+  ADD COLUMN IF NOT EXISTS assigned_version INTEGER DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS end_reason TEXT,
+  ADD COLUMN IF NOT EXISTS ended_on DATE,
+  ADD COLUMN IF NOT EXISTS assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+
 CREATE INDEX IF NOT EXISTS idx_gym_content_assignments_gym
   ON gym_content_assignments (gym_id, status);
 CREATE INDEX IF NOT EXISTS idx_gym_content_assignments_member
@@ -84,22 +117,58 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_gym_content_assignments_one_active
   WHERE status = 'ACTIVE';
 
 -- ── migrate Phase 11/12 rows into the unified table ─────────────────────
-INSERT INTO gym_content_assignments
-  (gym_id, content_type, workout_id, item_id, member_id, status,
-   end_reason, assigned_by, created_at, updated_at, assigned_version)
-SELECT a.gym_id, 'WORKOUT', a.workout_id, NULL, a.member_id, a.status,
-       a.end_reason, a.assigned_by, a.created_at, a.updated_at, w.version
-FROM gym_workout_assignments a
-JOIN gym_workouts w ON w.id = a.workout_id;
+-- GUARDED backfills: each copy runs only when the source table still
+-- exists in its exact Phase 11/12 shape (all 8 source columns) and the
+-- content table exposes id + version. On a pristine database both guards
+-- pass, rows are copied and the per-domain tables are dropped — fully
+-- replaced, no dual writes, no drift. On a drifted database the copy is
+-- SKIPPED and the old table is kept as-is so nothing is silently lost.
+-- ON CONFLICT DO NOTHING defends the copy against junk rows left by a
+-- partial earlier run (on a pristine target it never fires).
+DO $migrate_workout_rows$
+DECLARE matched integer;
+BEGIN
+  SELECT COUNT(*) INTO matched
+  FROM information_schema.columns
+  WHERE table_schema = current_schema()
+    AND ((table_name = 'gym_workout_assignments' AND column_name IN
+          ('gym_id', 'workout_id', 'member_id', 'status', 'end_reason',
+           'assigned_by', 'created_at', 'updated_at'))
+      OR (table_name = 'gym_workouts' AND column_name IN ('id', 'version')));
+  IF matched = 10 THEN
+    INSERT INTO gym_content_assignments
+      (gym_id, content_type, workout_id, item_id, member_id, status,
+       end_reason, assigned_by, created_at, updated_at, assigned_version)
+    SELECT a.gym_id, 'WORKOUT', a.workout_id, NULL, a.member_id, a.status,
+           a.end_reason, a.assigned_by, a.created_at, a.updated_at, w.version
+    FROM gym_workout_assignments a
+    JOIN gym_workouts w ON w.id = a.workout_id
+    ON CONFLICT DO NOTHING;
+    DROP TABLE gym_workout_assignments;
+  END IF;
+END
+$migrate_workout_rows$;
 
-INSERT INTO gym_content_assignments
-  (gym_id, content_type, workout_id, item_id, member_id, status,
-   end_reason, assigned_by, created_at, updated_at, assigned_version)
-SELECT a.gym_id, 'NUTRITION', NULL, a.item_id, a.member_id, a.status,
-       a.end_reason, a.assigned_by, a.created_at, a.updated_at, n.version
-FROM gym_nutrition_assignments a
-JOIN gym_nutrition_items n ON n.id = a.item_id;
-
--- the per-domain tables are fully replaced — no dual writes, no drift
-DROP TABLE IF EXISTS gym_workout_assignments;
-DROP TABLE IF EXISTS gym_nutrition_assignments;
+DO $migrate_nutrition_rows$
+DECLARE matched integer;
+BEGIN
+  SELECT COUNT(*) INTO matched
+  FROM information_schema.columns
+  WHERE table_schema = current_schema()
+    AND ((table_name = 'gym_nutrition_assignments' AND column_name IN
+          ('gym_id', 'item_id', 'member_id', 'status', 'end_reason',
+           'assigned_by', 'created_at', 'updated_at'))
+      OR (table_name = 'gym_nutrition_items' AND column_name IN ('id', 'version')));
+  IF matched = 10 THEN
+    INSERT INTO gym_content_assignments
+      (gym_id, content_type, workout_id, item_id, member_id, status,
+       end_reason, assigned_by, created_at, updated_at, assigned_version)
+    SELECT a.gym_id, 'NUTRITION', NULL, a.item_id, a.member_id, a.status,
+           a.end_reason, a.assigned_by, a.created_at, a.updated_at, n.version
+    FROM gym_nutrition_assignments a
+    JOIN gym_nutrition_items n ON n.id = a.item_id
+    ON CONFLICT DO NOTHING;
+    DROP TABLE gym_nutrition_assignments;
+  END IF;
+END
+$migrate_nutrition_rows$;
