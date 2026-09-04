@@ -4,11 +4,17 @@
 //  - gym-owned items (RECIPE / MEAL_PLAN / DIET_RECOMMENDATION) with a
 //    version counter bumped on content edits
 //  - direct assignments referencing gym_members (app_user_id NULL fully
-//    valid, stored until the member connects; member leave/reconnect safe)
+//    valid, stored until the member connects; member leave/reconnect safe).
+//    SINCE PHASE 13 assignments live in the UNIFIED gym_content_assignments
+//    table (src/data/gymContentAssignments.js) — the per-domain functions
+//    below are thin delegates kept for the legacy /nutrition-assignments
+//    routes. Member view is now window-aware (SCHEDULED rows are hidden
+//    until starts_on; EXPIRED rows drop off automatically).
 //  - snapshot saves: a member's personal copy is a full JSONB copy at their
 //    saved version; gym edits never move it — only an explicit update does
 //  - recommended distribution to all eligible app-connected members
 const { query, transaction } = require('../db/pool');
+const contentAssignments = require('./gymContentAssignments');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -153,7 +159,11 @@ async function listItems(gymId, { status, q, kind, recommended } = {}) {
   }
   const { rows } = await query(
     `SELECT n.*,
-            (SELECT COUNT(*)::int FROM gym_nutrition_assignments a WHERE a.item_id = n.id AND a.status = 'ACTIVE') AS assigned_count,
+            (SELECT COUNT(*)::int FROM gym_content_assignments a
+              WHERE a.item_id = n.id AND a.status = 'ACTIVE'
+                AND a.starts_on <= (SELECT (now() AT TIME ZONE g.timezone)::date FROM gyms g WHERE g.id = n.gym_id)
+                AND (a.ends_on IS NULL OR a.ends_on >= (SELECT (now() AT TIME ZONE g.timezone)::date FROM gyms g WHERE g.id = n.gym_id))
+            ) AS assigned_count,
             (SELECT COUNT(*)::int FROM gym_nutrition_saves s WHERE s.item_id = n.id) AS saves_count
      FROM gym_nutrition_items n WHERE ${where.join(' AND ')}
      ORDER BY (n.status = 'PUBLISHED') DESC, n.updated_at DESC`,
@@ -177,82 +187,28 @@ async function getItem(gymId, itemId) {
   return rows[0] ? parseItem(rows[0]) : null;
 }
 
-// ── direct assignment ────────────────────────────────────────────────────
+// ── direct assignment (Phase 13: delegated to the UNIFIED system) ────────
+// Every row lives in gym_content_assignments; these wrappers preserve the
+// Phase 12 route signatures and response shapes. `gymContext` enables
+// trainer roster scoping inside the unified module.
 
-async function assignItem(gymId, memberId, actor, ip, { item_id } = {}, gymAudit) {
-  if (!item_id) throw new HttpError(400, 'item_id is required');
-  return transaction(async (client) => {
-    const { rows: memberRows } = await client.query(
-      'SELECT id, status FROM gym_members WHERE id = $1 AND gym_id = $2 FOR UPDATE',
-      [memberId, gymId]
-    );
-    if (!memberRows.length) throw new HttpError(404, 'Member not found');
-    if (memberRows[0].status === 'CANCELLED') {
-      throw new HttpError(400, 'This member has left the gym — reactivate them first');
-    }
-    const { rows: itemRows } = await client.query(
-      'SELECT * FROM gym_nutrition_items WHERE id = $1 AND gym_id = $2',
-      [item_id, gymId]
-    );
-    if (!itemRows.length) throw new HttpError(404, 'Nutrition item not found');
-    const item = itemRows[0];
-    if (item.status === 'DRAFT') throw new HttpError(400, 'Publish the item before assigning it');
-    if (item.status === 'ARCHIVED') {
-      throw new HttpError(409, 'Archived content cannot be assigned to members');
-    }
-    const { rows: dupes } = await client.query(
-      `SELECT id FROM gym_nutrition_assignments
-       WHERE member_id = $1 AND item_id = $2 AND status = 'ACTIVE'`,
-      [memberId, item_id]
-    );
-    if (dupes.length) throw new HttpError(409, 'This item is already assigned to this member');
-    const { rows } = await client.query(
-      `INSERT INTO gym_nutrition_assignments (gym_id, item_id, member_id, assigned_by)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
-      [gymId, item_id, memberId, actor?.userId ?? actor ?? null]
-    );
-    await gymAudit(client, {
-      gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
-      action: 'nutrition.assigned', entity: 'gym_nutrition_assignment', entityId: rows[0].id,
-      after: { item: item.title, member: memberId },
-    });
-    return { ...rows[0], item_title: item.title, item_kind: item.kind, item_version: item.version };
-  });
-}
-
-async function endAssignment(gymId, assignmentId, actor, ip, { reason } = {}, gymAudit) {
-  return transaction(async (client) => {
-    const { rows } = await client.query(
-      `SELECT * FROM gym_nutrition_assignments WHERE id = $1 AND gym_id = $2 FOR UPDATE`,
-      [assignmentId, gymId]
-    );
-    if (!rows.length) throw new HttpError(404, 'Assignment not found');
-    if (rows[0].status !== 'ACTIVE') throw new HttpError(400, 'This assignment has already ended');
-    await client.query(
-      `UPDATE gym_nutrition_assignments SET status = 'ENDED', end_reason = $2, updated_at = now() WHERE id = $1`,
-      [assignmentId, reason || 'unassigned']
-    );
-    await gymAudit(client, {
-      gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
-      action: 'nutrition.unassigned', entity: 'gym_nutrition_assignment', entityId: assignmentId,
-      after: { reason: reason || 'unassigned' },
-    });
-    return { ok: true };
-  });
-}
-
-async function listMemberAssignments(gymId, memberId) {
-  const { rows } = await query(
-    `SELECT a.*, n.title AS item_title, n.kind AS item_kind, n.version AS item_version,
-            n.status AS item_status, u.name AS assigned_by_name
-     FROM gym_nutrition_assignments a
-     JOIN gym_nutrition_items n ON n.id = a.item_id
-     LEFT JOIN users u ON u.id = a.assigned_by
-     WHERE a.gym_id = $1 AND a.member_id = $2
-     ORDER BY a.created_at DESC`,
-    [gymId, memberId]
+async function assignItem(gymId, memberId, actor, ip, payload = {}, gymAudit, gymContext) {
+  return contentAssignments.assignContent(
+    gymId, memberId, actor, ip,
+    { ...payload, content_type: 'NUTRITION' }, gymAudit, gymContext
   );
-  return rows;
+}
+
+async function endAssignment(gymId, assignmentId, actor, ip, { reason } = {}, gymAudit, gymContext) {
+  return contentAssignments.endAssignment(gymId, assignmentId, actor, ip, { reason }, gymAudit, gymContext);
+}
+
+async function listMemberAssignments(gymId, memberId, gymContext) {
+  return contentAssignments.listMemberAssignments(gymId, memberId, { content_type: 'NUTRITION', ctx: gymContext });
+}
+
+async function listGymNutritionAssignments(gymId, { item_id } = {}, gymContext) {
+  return contentAssignments.listAssignments(gymId, gymContext, { content_type: 'NUTRITION', content_id: item_id });
 }
 
 // ── snapshot saves ───────────────────────────────────────────────────────
@@ -346,7 +302,7 @@ async function deleteSavedItem(gymId, memberId, saveId, actor, ip, gymAudit) {
 
 async function listForMember(userId) {
   const memberships = await query(
-    `SELECT m.id AS member_id, m.gym_id, g.name AS gym_name,
+    `SELECT m.id AS member_id, m.gym_id, g.name AS gym_name, g.timezone,
             EXISTS (SELECT 1 FROM member_memberships t
                     WHERE t.member_id = m.id AND t.status = 'ACTIVE') AS has_active_term
      FROM gym_members m JOIN gyms g ON g.id = m.gym_id
@@ -364,13 +320,18 @@ async function listForMember(userId) {
     ) : { rows: [] };
     const assigned = await query(
       `SELECT a.id AS assignment_id, a.created_at AS assigned_at,
+              a.starts_on::text AS starts_on, a.ends_on::text AS ends_on,
+              a.notes, a.assigned_version, a.content_type,
               n.id, n.gym_id, n.kind, n.title, n.description, n.content, n.targets, n.tags,
               n.version, n.status AS item_status
-       FROM gym_nutrition_assignments a
+       FROM gym_content_assignments a
        JOIN gym_nutrition_items n ON n.id = a.item_id
-       WHERE a.member_id = $1 AND a.status = 'ACTIVE' AND n.status = 'PUBLISHED'
+       WHERE a.member_id = $1 AND a.content_type = 'NUTRITION' AND a.status = 'ACTIVE'
+         AND a.starts_on <= (now() AT TIME ZONE $2)::date
+         AND (a.ends_on IS NULL OR a.ends_on >= (now() AT TIME ZONE $2)::date)
+         AND n.status = 'PUBLISHED'
        ORDER BY a.created_at DESC`,
-      [mem.member_id]
+      [mem.member_id, mem.timezone]
     );
     const saves = await query(
       `SELECT s.id AS save_id, s.saved_version, s.snapshot, s.saved_at,
@@ -397,6 +358,6 @@ async function listForMember(userId) {
 module.exports = {
   KINDS, STATUSES,
   createItem, updateItem, listItems, getItem,
-  assignItem, endAssignment, listMemberAssignments,
+  assignItem, endAssignment, listMemberAssignments, listGymNutritionAssignments,
   saveItemForMember, updateSavedItem, deleteSavedItem, listForMember,
 };

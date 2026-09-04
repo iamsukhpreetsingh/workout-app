@@ -10,3 +10,4 @@ export * from './billing';
 export * from './attendance';
 export * from './workouts';
 export * from './nutrition';
+export * from './assignments';

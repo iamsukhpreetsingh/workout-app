@@ -11,7 +11,7 @@
 const express = require('express');
 const { registerRoute } = require('../admin/registry');
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { requireGymContext, requireGymPermission } = require('../middleware/gymAuth');
+const { requireGymContext, requireGymPermission, requireGymPermissionAny } = require('../middleware/gymAuth');
 const { query } = require('../db/pool');
 const gyms = require('../data/gyms');
 const plans = require('../data/membershipPlans');
@@ -20,6 +20,7 @@ const billing = require('../data/gymBilling');
 const attendance = require('../data/gymAttendance');
 const workouts = require('../data/gymWorkouts');
 const nutrition = require('../data/gymNutrition');
+const contentAssignments = require('../data/gymContentAssignments');
 const storage = require('../data/storageService');
 const smtpProvider = require('../email/smtpProvider');
 
@@ -208,6 +209,39 @@ registerRoute(router, {
 }, [requireAuth], async (req, res) => {
   try {
     res.json(await workouts.listForMember(req.user.id));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/content',
+  description: "Phase 13 UNIFIED member surface: everything the connected member can see across their ACTIVE gym memberships — recommended + directly assigned gym WORKOUTS and NUTRITION in one response ({ gym_id, gym_name, workouts: { recommended, assigned }, nutrition: { recommended, assigned } }). Directly assigned rows are window-aware: SCHEDULED rows appear only from starts_on, EXPIRED rows drop off after ends_on (both carry starts_on/ends_on/notes). Recommended content additionally requires an ACTIVE membership term. Members without an ACTIVE membership get nothing.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const [w, n] = await Promise.all([
+      workouts.listForMember(req.user.id),
+      nutrition.listForMember(req.user.id),
+    ]);
+    // both aggregations use the identical membership base query — zip by gym
+    const byGym = new Map();
+    for (const entry of w) {
+      byGym.set(entry.gym_id, { gym_id: entry.gym_id, gym_name: entry.gym_name,
+        workouts: { recommended: entry.recommended, assigned: entry.assigned },
+        nutrition: { recommended: [], assigned: [] } });
+    }
+    for (const entry of n) {
+      const row = byGym.get(entry.gym_id) || { gym_id: entry.gym_id, gym_name: entry.gym_name,
+        workouts: { recommended: [], assigned: [] },
+        nutrition: { recommended: [], assigned: [] } };
+      row.nutrition = { recommended: entry.recommended, assigned: entry.assigned };
+      byGym.set(entry.gym_id, row);
+    }
+    res.json([...byGym.values()]);
   } catch (e) {
     httpError(res, e, 400);
   }
@@ -1614,7 +1648,7 @@ registerRoute(router, {
 registerRoute(router, {
   method: 'POST',
   path: '/:gymId/members/:memberId/workout-assignments',
-  description: 'Directly assigns a PUBLISHED gym workout to a member (works with app_user_id NULL — stored until the member connects). Duplicates rejected; archived/draft workouts rejected. Requires permission: members.manage (OWNER, ADMIN).',
+  description: 'Directly assigns a PUBLISHED gym workout to a member (works with app_user_id NULL — stored until the member connects). Phase 13: accepts optional starts_on (default: today, gym timezone), ends_on (inclusive) and notes; duplicates rejected; archived/draft workouts rejected. Requires permission: members.manage (OWNER, ADMIN).',
   requiresAuth: true,
   allowedRoles: ['user', 'trainer', 'gym_staff'],
   category: 'Gym',
@@ -1622,7 +1656,7 @@ registerRoute(router, {
   try {
     res.status(201).json(await workouts.assignWorkout(
       req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
-      req.body || {}, gyms.gymAudit
+      req.body || {}, gyms.gymAudit, req.gymContext
     ));
   } catch (e) {
     httpError(res, e, 400);
@@ -1638,7 +1672,8 @@ registerRoute(router, {
   category: 'Gym',
 }, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
   try {
-    res.json(await workouts.listMemberWorkoutAssignments(req.gymContext.gymId, req.params.memberId));
+    res.json(await workouts.listMemberWorkoutAssignments(
+      req.gymContext.gymId, req.params.memberId, req.gymContext));
   } catch (e) {
     httpError(res, e);
   }
@@ -1647,7 +1682,7 @@ registerRoute(router, {
 registerRoute(router, {
   method: 'POST',
   path: '/:gymId/workout-assignments/:assignmentId/end',
-  description: 'Ends a workout assignment (kept as history). Requires permission: members.manage (OWNER, ADMIN).',
+  description: 'Ends a workout assignment (kept as history). Phase 13: backed by the unified gym_content_assignments table. Requires permission: members.manage (OWNER, ADMIN).',
   requiresAuth: true,
   allowedRoles: ['user', 'trainer', 'gym_staff'],
   category: 'Gym',
@@ -1655,12 +1690,122 @@ registerRoute(router, {
   try {
     res.json(await workouts.endWorkoutAssignment(
       req.gymContext.gymId, req.params.assignmentId,
-      { userId: req.user.id }, req.ip, { reason: req.body?.reason }, gyms.gymAudit
+      { userId: req.user.id }, req.ip, { reason: req.body?.reason }, gyms.gymAudit, req.gymContext
     ));
   } catch (e) {
     httpError(res, e, 400);
   }
 }, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+// ── Phase 13: UNIFIED content assignments (WORKOUT | NUTRITION) ─────────
+// One surface for direct assignment of every gym-owned content type:
+//   POST   /:gymId/assignments                          { member_id, content_type, workout_id|item_id, starts_on?, ends_on?, notes? }
+//   GET    /:gymId/assignments                          gym-wide list (filters; trainer auto-scoped to roster)
+//   GET    /:gymId/members/:memberId/assignments        one member's history (both types)
+//   PATCH  /:gymId/assignments/:id                      edit starts_on / ends_on / notes
+//   POST   /:gymId/assignments/:id/end                  end early (history kept)
+// Permissions: OWNER/ADMIN via members.manage; TRAINER via assignments.manage
+// AND roster scoping (may only touch members assigned to them) — enforced
+// inside the data module, never the frontend.
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/assignments',
+  description: "PHASE 13 — unified direct assignment of gym content (content_type WORKOUT|NUTRITION with workout_id or item_id) to a gym member. Optional starts_on (default: today in the gym's timezone), ends_on (inclusive) and notes. Non-app members are first-class (app_user_id NULL). Duplicate non-expired ACTIVE assignment → 409; assigning over an EXPIRED row supersedes it. DRAFT content → 400, ARCHIVED → 409. Trainers may only assign to members on their roster. Requires permission: members.manage (OWNER, ADMIN) or assignments.manage (TRAINER).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.manage', 'assignments.manage'])], async (req, res) => {
+  try {
+    const b = req.body || {};
+    const memberId = b.member_id;
+    if (!memberId) return res.status(400).json({ error: 'member_id is required' });
+    res.status(201).json(await contentAssignments.assignContent(
+      req.gymContext.gymId, memberId, { userId: req.user.id }, req.ip,
+      { content_type: b.content_type, workout_id: b.workout_id, item_id: b.item_id,
+        starts_on: b.starts_on, ends_on: b.ends_on, notes: b.notes },
+      gyms.gymAudit, req.gymContext
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.manage', 'assignments.manage'])]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/assignments',
+  description: "PHASE 13 — unified assignment list with computed effective_status (SCHEDULED/ACTIVE/EXPIRED/ENDED), member + content fields, content_updated flag and trainer roster scoping. Filters: ?member_id= &content_type=WORKOUT|NUTRITION &content_id= &effective_status= &q= (member name/code or content title) &limit= &offset=. Requires permission: members.view (OWNER, ADMIN, FRONT_DESK), assignments.manage (TRAINER) or assigned_members.view.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.view', 'assignments.manage', 'assigned_members.view'])], async (req, res) => {
+  try {
+    res.json(await contentAssignments.listAssignments(req.gymContext.gymId, req.gymContext, {
+      member_id: req.query.member_id,
+      content_type: req.query.content_type,
+      content_id: req.query.content_id,
+      effective_status: req.query.effective_status,
+      q: req.query.q,
+      limit: req.query.limit,
+      offset: req.query.offset,
+    }));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.view', 'assignments.manage', 'assigned_members.view'])]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/assignments',
+  description: "PHASE 13 — one member's unified assignment history across BOTH content types (ENDED included), each row with effective_status, content_updated, notes and dates. Trainers can only view members on their roster (403 otherwise). Requires permission: members.view or assignments.manage.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.view', 'assignments.manage'])], async (req, res) => {
+  try {
+    res.json(await contentAssignments.listMemberAssignments(
+      req.gymContext.gymId, req.params.memberId,
+      { content_type: req.query.content_type, ctx: req.gymContext }));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.view', 'assignments.manage'])]);
+
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/:gymId/assignments/:assignmentId',
+  description: "PHASE 13 — edits an ACTIVE assignment's starts_on / ends_on (inclusive window; ends_on >= starts_on) / notes. Physical-ENDED rows cannot be edited; extending a past ends_on revives an EXPIRED assignment. Trainers may only edit their own roster members' assignments. Requires permission: members.manage or assignments.manage.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.manage', 'assignments.manage'])], async (req, res) => {
+  try {
+    res.json(await contentAssignments.updateAssignment(
+      req.gymContext.gymId, req.params.assignmentId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit, req.gymContext
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.manage', 'assignments.manage'])]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/assignments/:assignmentId/end',
+  description: 'PHASE 13 — ends a unified assignment early (kept as history, end_reason + ended_on recorded; expiry by end date is automatic and needs no call). Trainers may only end their own roster members\' assignments. Requires permission: members.manage or assignments.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.manage', 'assignments.manage'])], async (req, res) => {
+  try {
+    res.json(await contentAssignments.endAssignment(
+      req.gymContext.gymId, req.params.assignmentId,
+      { userId: req.user.id }, req.ip, { reason: req.body?.reason }, gyms.gymAudit, req.gymContext
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.manage', 'assignments.manage'])]);
 
 // ── mobile: connected member surfaces (auth only, member resolved by JWT) ─
 
@@ -1729,7 +1874,7 @@ registerRoute(router, {
 registerRoute(router, {
   method: 'POST',
   path: '/:gymId/members/:memberId/nutrition-assignments',
-  description: "Directly assigns a PUBLISHED nutrition item to a member (works with app_user_id NULL — stored until the member connects). Duplicates rejected; archived/draft rejected. Requires permission: members.manage (OWNER, ADMIN).",
+  description: "Directly assigns a PUBLISHED nutrition item to a member (works with app_user_id NULL — stored until the member connects). Phase 13: accepts optional starts_on (default: today, gym timezone), ends_on (inclusive) and notes; duplicates rejected; archived/draft rejected. Requires permission: members.manage (OWNER, ADMIN).",
   requiresAuth: true,
   allowedRoles: ['user', 'trainer', 'gym_staff'],
   category: 'Gym',
@@ -1737,7 +1882,7 @@ registerRoute(router, {
   try {
     res.status(201).json(await nutrition.assignItem(
       req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
-      req.body || {}, gyms.gymAudit
+      req.body || {}, gyms.gymAudit, req.gymContext
     ));
   } catch (e) {
     httpError(res, e, 400);
@@ -1747,13 +1892,14 @@ registerRoute(router, {
 registerRoute(router, {
   method: 'GET',
   path: '/:gymId/members/:memberId/nutrition-assignments',
-  description: "The member's nutrition assignment history. Requires permission: members.view.",
+  description: "The member's nutrition assignment history. Phase 13: backed by the unified gym_content_assignments table. Requires permission: members.view.",
   requiresAuth: true,
   allowedRoles: ['user', 'trainer', 'gym_staff'],
   category: 'Gym',
 }, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
   try {
-    res.json(await nutrition.listMemberAssignments(req.gymContext.gymId, req.params.memberId));
+    res.json(await nutrition.listMemberAssignments(
+      req.gymContext.gymId, req.params.memberId, req.gymContext));
   } catch (e) {
     httpError(res, e);
   }
@@ -1762,7 +1908,7 @@ registerRoute(router, {
 registerRoute(router, {
   method: 'POST',
   path: '/:gymId/nutrition-assignments/:assignmentId/end',
-  description: 'Ends a nutrition assignment (kept as history). Requires permission: members.manage (OWNER, ADMIN).',
+  description: 'Ends a nutrition assignment (kept as history). Phase 13: backed by the unified gym_content_assignments table. Requires permission: members.manage (OWNER, ADMIN).',
   requiresAuth: true,
   allowedRoles: ['user', 'trainer', 'gym_staff'],
   category: 'Gym',
@@ -1770,7 +1916,7 @@ registerRoute(router, {
   try {
     res.json(await nutrition.endAssignment(
       req.gymContext.gymId, req.params.assignmentId,
-      { userId: req.user.id }, req.ip, { reason: req.body?.reason }, gyms.gymAudit
+      { userId: req.user.id }, req.ip, { reason: req.body?.reason }, gyms.gymAudit, req.gymContext
     ));
   } catch (e) {
     httpError(res, e, 400);

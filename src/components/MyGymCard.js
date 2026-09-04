@@ -5,17 +5,18 @@
 //   Valid until 31 Dec 2026
 //
 // Data comes from GET /gym/my/memberships (current plan term) and
-// GET /gym/my/workouts (assigned + recommended gym workouts — Phase 11).
-// A standalone user gets [] and the card renders nothing — a gym is never
-// required. Assignment rows live on the gym member, so workouts assigned
-// BEFORE the app account was linked show up here too.
+// GET /gym/my/content (Phase 13 UNIFIED assigned + recommended gym content —
+// one call for workouts AND nutrition; the diet strip on Diet home uses the
+// same endpoint). A standalone user gets [] and the card renders nothing —
+// a gym is never required. Assignment rows live on the gym member, so
+// content assigned BEFORE the app account was linked shows up here too.
 // Historical record integrity is unaffected by when the app account was
 // linked: the term predating the link shows exactly the same.
 import React, { useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '../theme';
-import { api } from '../lib/api';
+import { api, fetchMyGymContent } from '../lib/gymApi';
 
 const STATUS_COLORS = {
   ACTIVE: '#16A34A',
@@ -29,19 +30,24 @@ const STATUS_COLORS = {
 export default function MyGymCard() {
   const colors = useColors();
   const [memberships, setMemberships] = useState(null); // null = loading
-  const [workoutCounts, setWorkoutCounts] = useState({});
+  const [contentCounts, setContentCounts] = useState({});
 
   React.useEffect(() => {
     let cancelled = false;
     api('/gym/my/memberships')
       .then((rows) => { if (!cancelled) setMemberships(Array.isArray(rows) ? rows : []); })
       .catch(() => { if (!cancelled) setMemberships([]); });
-    api('/gym/my/workouts')
+    fetchMyGymContent()
       .then((perGym) => {
         if (cancelled || !Array.isArray(perGym)) return;
         const counts = {};
-        for (const g of perGym) counts[g.gym_id] = (g.assigned?.length || 0) + (g.recommended?.length || 0);
-        setWorkoutCounts(counts);
+        for (const g of perGym) {
+          counts[g.gym_id] = {
+            workouts: (g.workouts?.assigned?.length || 0) + (g.workouts?.recommended?.length || 0),
+            nutrition: (g.nutrition?.assigned?.length || 0) + (g.nutrition?.recommended?.length || 0),
+          };
+        }
+        setContentCounts(counts);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -77,9 +83,14 @@ export default function MyGymCard() {
                   {frozen ? 'Frozen — valid until' : 'Valid until'} {String(m.ends_on).slice(0, 10)}
                 </Text>
               ) : null}
-              {workoutCounts[m.gym_id] ? (
+              {contentCounts[m.gym_id]?.workouts ? (
                 <Text style={[styles.gymMeta, { color: colors.primary }]}>
-                  {workoutCounts[m.gym_id]} gym workout{workoutCounts[m.gym_id] > 1 ? 's' : ''} available
+                  {contentCounts[m.gym_id].workouts} gym workout{contentCounts[m.gym_id].workouts > 1 ? 's' : ''} available
+                </Text>
+              ) : null}
+              {contentCounts[m.gym_id]?.nutrition ? (
+                <Text style={[styles.gymMeta, { color: colors.primary }]}>
+                  {contentCounts[m.gym_id].nutrition} gym nutrition item{contentCounts[m.gym_id].nutrition > 1 ? 's' : ''} available
                 </Text>
               ) : null}
             </View>

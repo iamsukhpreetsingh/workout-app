@@ -345,7 +345,8 @@ test('audit trail records the workout lifecycle', async () => {
   const rows = await (await api(tokens[PEOPLE.owner.email],
     'GET', `/gym/${gymA.id}/audit-log?limit=300`)).json();
   const actions = rows.map((r) => r.action);
-  for (const expected of ['workout.created', 'workout.updated', 'workout.assigned',
+  // Phase 13: assignments audit under the unified assignment.* actions
+  for (const expected of ['workout.created', 'workout.updated', 'assignment.created',
     'workout.saved', 'workout.save_updated', 'workout.save_removed']) {
     assert.ok(actions.includes(expected), `audit missing ${expected}`);
   }

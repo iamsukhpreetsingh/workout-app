@@ -22,6 +22,19 @@ export async function hasActiveGymMembership() {
   }
 }
 
+// Phase 13 — UNIFIED gym content surface, one call for everything the
+// member can see: per ACTIVE-membership gym,
+//   { gym_id, gym_name,
+//     workouts:   { recommended: [...], assigned: [...] },
+//     nutrition:  { recommended: [...], assigned: [...] } }
+// Assigned rows are window-aware: SCHEDULED rows appear from starts_on,
+// EXPIRED rows drop off after ends_on; each carries assignment_id,
+// starts_on, ends_on, notes and assigned_version. Recommended rows require
+// an ACTIVE membership term (the gym's "Gym Recommended" distribution).
+export async function fetchMyGymContent() {
+  return api('/gym/my/content');
+}
+
 // The actual mark. Server-side this is source WORKOUT_COMPLETION and the
 // idempotency rule collapses it into an earlier QR/desk check-in — the
 // same intended visit is never double-counted.

@@ -420,6 +420,30 @@ need to scan the wider codebase:
   /gym/my/nutrition/saved/:id/update`, `DELETE /gym/my/nutrition/saved/:id`
   (all auth-only; registered before /:gymId patterns). The Diet screen
   exposes a compact "Gym Recommended →" strip + modal — no redesign.
+- **Unified content assignments & recommendations (Phase 13)**: ONE
+  assignment system for all gym-owned content (`gym_content_assignments`,
+  content_type WORKOUT | NUTRITION — replaces the Phase 11/12 per-domain
+  tables; those routes still work as compat delegates). Direct assignment
+  payload: member + content + `starts_on` (default: today in the GYM's
+  timezone) + optional `ends_on` (inclusive) + `notes`. Lifecycle is
+  COMPUTED, never stored: `effective_status` = SCHEDULED (start in the
+  future) / ACTIVE (in window) / EXPIRED (end date passed) / ENDED
+  (manually ended, history kept) — no cron. Duplicate rule: one
+  non-expired ACTIVE assignment per (member, content) — partial unique
+  index; assigning over an EXPIRED row supersedes it (`end_reason`
+  'superseded') so renewals are one call. `assigned_version` stamps the
+  content version at assignment time and lists expose `content_updated`
+  (gym edited the content after assigning). Endpoints: `POST
+  …/:gymId/assignments` (create), `GET …/:gymId/assignments` (gym-wide
+  list with member_id/content_type/content_id/effective_status/q filters),
+  `GET …/members/:id/assignments` (history, both types), `PATCH
+  …/assignments/:id` (edit window/notes; extending a past end revives an
+  EXPIRED assignment), `POST …/assignments/:id/end` (end early). Unified
+  member surface: `GET /gym/my/content` (recommended + assigned for BOTH
+  content types in one response; assigned rows window-aware; recommended
+  requires an ACTIVE membership term). Permissions: OWNER/ADMIN via
+  members.manage; TRAINER via assignments.manage AND roster scoping —
+  enforced in the data module on every mutation/list, never the frontend.
 - **Standalone users are unaffected**: zero gyms is a fully supported
   state; classes are NOT implemented yet.
 
@@ -574,8 +598,9 @@ Errors to expect: 409 duplicate receipt / payment-exceeds-balance ·
 | Backups (mobile sync) | `backup_sessions/exercises/sets`, `client_workout_plans`, `backup_custom_exercises`, `user_recipes`, `backup_diet_plans/days/meals/meal_items/**_versions`, `backup_diet_checkins`, `diet_item_swaps`, `backup_food_log_entries` (legacy), `backup_food_log_entries` → `food_log_entries` (log-first), `backup_custom_dishes` → `custom_dishes(+ingredients)` — all `UNIQUE(user_id, local_entity_id)` |
 | Gym billing (Phase 9) | `membership_charges` (dues; auto-created from membership terms with the assignment-time price snapshot; manual charges), `membership_payments` (IMMUTABLE receipts; `receipt_number` unique and permanent; method CASH/UPI/CARD/BANK_TRANSFER/OTHER; backdating allowed, future-dating rejected), `payment_refunds` (additive corrections against a payment; never an edit). Charge status DUE/PARTIAL/PAID/OVERDUE/REFUNDED is DERIVED from payments minus refunds at read time — overdue is judged in the gym's timezone. Payments reference `gym_members`, so `app_user_id = NULL` is fully valid |
 | Gym attendance (Phase 10) | `gym_attendance` (member-scoped; source QR_CHECK_IN/FRONT_DESK/WORKOUT_COMPLETION/ADMIN_MANUAL; `check_in_at` instant + `local_date` derived in the gym's timezone; `client_time`/`time_corrected` for offline device-clock corrections) + `gym_members.qr_token` (unique 128-bit QR identity, rotatable) |
-| Gym workouts (Phase 11) | `gym_workouts` (gym-owned; version bumps on content edits; `recommended` flag = general distribution), `gym_workout_exercises` (stored BY NAME — catalog-independent), `gym_workout_assignments` (direct, member-scoped, UNIQUE(workout, member, ACTIVE)), `gym_workout_saves` (member personal library; full JSONB snapshot + `saved_version`) |
-| Gym nutrition (Phase 12) | `gym_nutrition_items` (gym-owned; kinds RECIPE/MEAL_PLAN/DIET_RECOMMENDATION; content.entries + optional targets; versioned; recommended flag), `gym_nutrition_assignments` (member-scoped, UNIQUE(item, member, ACTIVE)), `gym_nutrition_saves` (JSONB snapshot + saved_version) |
+| Gym workouts (Phase 11) | `gym_workouts` (gym-owned; version bumps on content edits; `recommended` flag = general distribution), `gym_workout_exercises` (stored BY NAME — catalog-independent), `gym_workout_saves` (member personal library; full JSONB snapshot + `saved_version`) |
+| Gym nutrition (Phase 12) | `gym_nutrition_items` (gym-owned; kinds RECIPE/MEAL_PLAN/DIET_RECOMMENDATION; content.entries + optional targets; versioned; recommended flag), `gym_nutrition_saves` (JSONB snapshot + saved_version) |
+| Unified content assignments (Phase 13) | `gym_content_assignments` (ONE table for WORKOUT | NUTRITION; `starts_on`/`ends_on` inclusive window in the gym's timezone, `notes`, `assigned_version` stamp, physical status ACTIVE/ENDED + computed effective_status SCHEDULED/ACTIVE/EXPIRED/ENDED — no cron; partial UNIQUE index = one non-expired ACTIVE per (member, content); expired rows are superseded on renewal; replaced the Phase 11/12 per-domain assignment tables) |
 | Misc                  | `measurement_entries`, `backup_personal_records`, `backup_progress_photos` (+S3/local storage), `diet_trainer_notes`, `sync_status_reports`, `restore_runs`                                                                                                                                                                                                                                                             |
 
 Indexes exist for every hot query path (user+date on diaries, plan+date on

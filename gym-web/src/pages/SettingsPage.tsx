@@ -117,7 +117,7 @@ export default function SettingsPage({ gymId, myRole }: Props) {
           <Upload
             accept="image/png,image/jpeg,image/webp"
             showUploadList={false}
-            beforeUpload={async (file) => {
+            beforeUpload={async (file: File) => {
               if (file.size > 2 * 1024 * 1024) {
                 message.error('Logo must be 2MB or smaller');
                 return Upload.LIST_IGNORE;

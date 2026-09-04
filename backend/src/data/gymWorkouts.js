@@ -10,9 +10,14 @@
 //    saved version, independent of later gym edits until they explicitly
 //    update. Duplicate saves are rejected (the update endpoint exists).
 //  - Assignments reference gym_members (app_user_id NULL fully valid) and
-//    survive until ended; duplicate ACTIVE assignment per (member, workout)
-//    is rejected. ARCHIVED/DRAFT workouts cannot be newly assigned.
+//    survive until ended; duplicate non-expired ACTIVE assignment per
+//    (member, workout) is rejected. ARCHIVED/DRAFT workouts cannot be newly
+//    assigned. SINCE PHASE 13 assignments live in the UNIFIED
+//    gym_content_assignments table (src/data/gymContentAssignments.js) —
+//    the per-domain functions below are thin delegates kept for the legacy
+//    /workout-assignments routes.
 const { query, transaction } = require('../db/pool');
+const contentAssignments = require('./gymContentAssignments');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -192,7 +197,11 @@ async function listWorkouts(gymId, { status, q, recommended } = {}) {
   const { rows } = await query(
     `SELECT w.*,
             (SELECT COUNT(*)::int FROM gym_workout_exercises e WHERE e.workout_id = w.id) AS exercise_count,
-            (SELECT COUNT(*)::int FROM gym_workout_assignments a WHERE a.workout_id = w.id AND a.status = 'ACTIVE') AS assigned_count,
+            (SELECT COUNT(*)::int FROM gym_content_assignments a
+              WHERE a.workout_id = w.id AND a.status = 'ACTIVE'
+                AND a.starts_on <= (SELECT (now() AT TIME ZONE g.timezone)::date FROM gyms g WHERE g.id = w.gym_id)
+                AND (a.ends_on IS NULL OR a.ends_on >= (SELECT (now() AT TIME ZONE g.timezone)::date FROM gyms g WHERE g.id = w.gym_id))
+            ) AS assigned_count,
             (SELECT COUNT(*)::int FROM gym_workout_saves s WHERE s.workout_id = w.id) AS saves_count
      FROM gym_workouts w WHERE ${where.join(' AND ')}
      ORDER BY (w.status = 'PUBLISHED') DESC, w.updated_at DESC`,
@@ -205,95 +214,28 @@ async function getWorkout(gymId, workoutId) {
   return transaction(async (client) => loadWorkout(client, gymId, workoutId));
 }
 
-// ── direct assignment ────────────────────────────────────────────────────
+// ── direct assignment (Phase 13: delegated to the UNIFIED system) ────────
+// Every row lives in gym_content_assignments; these wrappers preserve the
+// Phase 11 route signatures and response shapes. `gymContext` enables
+// trainer roster scoping inside the unified module.
 
-async function assignWorkout(gymId, memberId, actor, ip, { workout_id } = {}, gymAudit) {
-  if (!workout_id) throw new HttpError(400, 'workout_id is required');
-  return transaction(async (client) => {
-    const { rows: memberRows } = await client.query(
-      'SELECT id, status FROM gym_members WHERE id = $1 AND gym_id = $2 FOR UPDATE',
-      [memberId, gymId]
-    );
-    if (!memberRows.length) throw new HttpError(404, 'Member not found');
-    if (memberRows[0].status === 'CANCELLED') {
-      throw new HttpError(400, 'This member has left the gym — reactivate them first');
-    }
-    const workout = await loadWorkout(client, gymId, workout_id);
-    if (!workout) throw new HttpError(404, 'Workout not found');
-    if (workout.status === 'DRAFT') throw new HttpError(400, 'Publish the workout before assigning it');
-    if (workout.status === 'ARCHIVED') {
-      throw new HttpError(409, 'Archived workouts cannot be assigned to members');
-    }
-    const { rows: dupes } = await client.query(
-      `SELECT id FROM gym_workout_assignments
-       WHERE member_id = $1 AND workout_id = $2 AND status = 'ACTIVE'`,
-      [memberId, workout_id]
-    );
-    if (dupes.length) throw new HttpError(409, 'This workout is already assigned to this member');
-    const { rows } = await client.query(
-      `INSERT INTO gym_workout_assignments (gym_id, workout_id, member_id, assigned_by)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
-      [gymId, workout_id, memberId, actor?.userId ?? actor ?? null]
-    );
-    await gymAudit(client, {
-      gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
-      action: 'workout.assigned', entity: 'gym_workout_assignment', entityId: rows[0].id,
-      after: { workout: workout.title, member: memberId },
-    });
-    return { ...rows[0], workout_title: workout.title, workout_version: workout.version };
-  });
-}
-
-async function endWorkoutAssignment(gymId, assignmentId, actor, ip, { reason } = {}, gymAudit) {
-  return transaction(async (client) => {
-    const { rows } = await client.query(
-      `SELECT * FROM gym_workout_assignments WHERE id = $1 AND gym_id = $2 FOR UPDATE`,
-      [assignmentId, gymId]
-    );
-    if (!rows.length) throw new HttpError(404, 'Assignment not found');
-    if (rows[0].status !== 'ACTIVE') throw new HttpError(400, 'This assignment has already ended');
-    await client.query(
-      `UPDATE gym_workout_assignments SET status = 'ENDED', end_reason = $2, updated_at = now() WHERE id = $1`,
-      [assignmentId, reason || 'unassigned']
-    );
-    await gymAudit(client, {
-      gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
-      action: 'workout.unassigned', entity: 'gym_workout_assignment', entityId: assignmentId,
-      after: { reason: reason || 'unassigned' },
-    });
-    return { ok: true };
-  });
-}
-
-async function listMemberWorkoutAssignments(gymId, memberId) {
-  const { rows } = await query(
-    `SELECT a.*, w.title AS workout_title, w.version AS workout_version, w.status AS workout_status,
-            w.difficulty, w.goal, u.name AS assigned_by_name
-     FROM gym_workout_assignments a
-     JOIN gym_workouts w ON w.id = a.workout_id
-     LEFT JOIN users u ON u.id = a.assigned_by
-     WHERE a.gym_id = $1 AND a.member_id = $2
-     ORDER BY a.created_at DESC`,
-    [gymId, memberId]
+async function assignWorkout(gymId, memberId, actor, ip, payload = {}, gymAudit, gymContext) {
+  return contentAssignments.assignContent(
+    gymId, memberId, actor, ip,
+    { ...payload, content_type: 'WORKOUT' }, gymAudit, gymContext
   );
-  return rows;
 }
 
-async function listGymWorkoutAssignments(gymId, { workout_id } = {}) {
-  const vals = [gymId];
-  const where = ['a.gym_id = $1'];
-  if (workout_id) { vals.push(workout_id); where.push(`a.workout_id = $${vals.length}`); }
-  const { rows } = await query(
-    `SELECT a.*, w.title AS workout_title,
-            gm.first_name, gm.last_name, gm.member_code, gm.app_user_id
-     FROM gym_workout_assignments a
-     JOIN gym_workouts w ON w.id = a.workout_id
-     JOIN gym_members gm ON gm.id = a.member_id
-     WHERE ${where.join(' AND ')}
-     ORDER BY a.created_at DESC`,
-    vals
-  );
-  return rows;
+async function endWorkoutAssignment(gymId, assignmentId, actor, ip, { reason } = {}, gymAudit, gymContext) {
+  return contentAssignments.endAssignment(gymId, assignmentId, actor, ip, { reason }, gymAudit, gymContext);
+}
+
+async function listMemberWorkoutAssignments(gymId, memberId, gymContext) {
+  return contentAssignments.listMemberAssignments(gymId, memberId, { content_type: 'WORKOUT', ctx: gymContext });
+}
+
+async function listGymWorkoutAssignments(gymId, { workout_id } = {}, gymContext) {
+  return contentAssignments.listAssignments(gymId, gymContext, { content_type: 'WORKOUT', content_id: workout_id });
 }
 
 // ── member saves (personal library snapshots) ────────────────────────────
@@ -402,7 +344,7 @@ async function listForMember(userId) {
   // RECOMMENDED content additionally requires an ACTIVE membership term;
   // DIRECTLY ASSIGNED workouts show regardless (the gym chose them).
   const memberships = await query(
-    `SELECT m.id AS member_id, m.gym_id, g.name AS gym_name,
+    `SELECT m.id AS member_id, m.gym_id, g.name AS gym_name, g.timezone,
             EXISTS (SELECT 1 FROM member_memberships t
                     WHERE t.member_id = m.id AND t.status = 'ACTIVE') AS has_active_term
      FROM gym_members m JOIN gyms g ON g.id = m.gym_id
@@ -425,6 +367,8 @@ async function listForMember(userId) {
     ) : { rows: [] };
     const assigned = await query(
       `SELECT a.id AS assignment_id, a.created_at AS assigned_at,
+              a.starts_on::text AS starts_on, a.ends_on::text AS ends_on,
+              a.notes, a.assigned_version, a.content_type,
               w.id, w.gym_id, w.title, w.description, w.difficulty, w.goal,
               w.estimated_duration_minutes, w.tags, w.version, w.status AS workout_status,
               (SELECT json_agg(json_build_object('exercise_name', e.exercise_name, 'sets', e.sets,
@@ -432,11 +376,14 @@ async function listForMember(userId) {
                                                  'order_index', e.order_index, 'notes', e.notes)
                                 ORDER BY e.order_index)
                FROM gym_workout_exercises e WHERE e.workout_id = w.id) AS exercises
-       FROM gym_workout_assignments a
+       FROM gym_content_assignments a
        JOIN gym_workouts w ON w.id = a.workout_id
-       WHERE a.member_id = $1 AND a.status = 'ACTIVE' AND w.status = 'PUBLISHED'
+       WHERE a.member_id = $1 AND a.content_type = 'WORKOUT' AND a.status = 'ACTIVE'
+         AND a.starts_on <= (now() AT TIME ZONE $2)::date
+         AND (a.ends_on IS NULL OR a.ends_on >= (now() AT TIME ZONE $2)::date)
+         AND w.status = 'PUBLISHED'
        ORDER BY a.created_at DESC`,
-      [mem.member_id]
+      [mem.member_id, mem.timezone]
     );
     const saves = await query(
       `SELECT s.id AS save_id, s.saved_version, s.snapshot, s.saved_at,

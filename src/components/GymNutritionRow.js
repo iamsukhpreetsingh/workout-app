@@ -1,13 +1,14 @@
 // GymNutritionRow — the compact "Gym Recommended →" strip on the Diet home
-// screen (Phase 12). Deliberately minimal: one row, one modal, no redesign
-// of the existing Diet experience. Shows nothing for standalone users.
-// Data comes from /gym/my/nutrition (server-resolved: recommended + assigned
-// + saved across the user's ACTIVE gym memberships).
+// screen (Phase 12; Phase 13 switched it to the UNIFIED /gym/my/content
+// surface, one call for workouts AND nutrition). Deliberately minimal: one
+// row, one modal, no redesign of the existing Diet experience. Shows nothing
+// for standalone users. Assigned rows are window-aware server-side and carry
+// starts_on/ends_on/notes, which this modal renders for the member.
 import React, { useState } from 'react';
 import { View, Text, Modal, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '../theme';
-import { api } from '../lib/api';
+import { fetchMyGymContent } from '../lib/gymApi';
 
 const KIND_LABELS = {
   RECIPE: 'Recipe',
@@ -21,11 +22,11 @@ export default function GymNutritionRow() {
   const [open, setOpen] = useState(false);
 
   const load = () => {
-    api('/gym/my/nutrition')
+    fetchMyGymContent()
       .then((rows) => {
         if (!Array.isArray(rows)) return setPerGym([]);
         const meaningful = rows.filter(
-          (g) => (g.recommended?.length || 0) + (g.assigned?.length || 0) > 0
+          (g) => (g.nutrition?.recommended?.length || 0) + (g.nutrition?.assigned?.length || 0) > 0
         );
         setPerGym(meaningful);
       })
@@ -46,7 +47,7 @@ export default function GymNutritionRow() {
   if (perGym.length === 0) return null; // standalone user / nothing available
 
   const total = perGym.reduce(
-    (n, g) => n + (g.recommended?.length || 0) + (g.assigned?.length || 0), 0
+    (n, g) => n + (g.nutrition?.recommended?.length || 0) + (g.nutrition?.assigned?.length || 0), 0
   );
   const gymLabel = perGym.length === 1 ? perGym[0].gym_name : `${perGym.length} gyms`;
 
@@ -72,8 +73,8 @@ export default function GymNutritionRow() {
               {perGym.map((g) => (
                 <View key={g.gym_id} style={{ marginBottom: 12 }}>
                   <Text style={[styles.gymName, { color: colors.textDim }]}>{g.gym_name}</Text>
-                  {[...(g.assigned || []).map((n) => ({ n, tag: 'Assigned' })),
-                    ...(g.recommended || []).map((n) => ({ n, tag: 'Recommended' }))].map(({ n, tag }) => (
+                  {[...(g.nutrition?.assigned || []).map((n) => ({ n, tag: 'Assigned' })),
+                    ...(g.nutrition?.recommended || []).map((n) => ({ n, tag: 'Recommended' }))].map(({ n, tag }) => (
                     <View key={`${tag}-${n.id}`} style={[styles.item, { borderColor: colors.border }]}>
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.itemTitle, { color: colors.text }]}>{n.title}</Text>
@@ -82,6 +83,16 @@ export default function GymNutritionRow() {
                           {n.targets?.calories ? ` · ${n.targets.calories} kcal` : ''}
                           {n.version ? ` · v${n.version}` : ''}
                         </Text>
+                        {tag === 'Assigned' && (n.starts_on || n.ends_on) ? (
+                          <Text style={[styles.itemMeta, { color: colors.textDim }]}>
+                            {n.starts_on ? `From ${String(n.starts_on).slice(0, 10)}` : ''}
+                            {n.starts_on && n.ends_on ? ' · ' : ''}
+                            {n.ends_on ? `Until ${String(n.ends_on).slice(0, 10)}` : ''}
+                          </Text>
+                        ) : null}
+                        {n.notes ? (
+                          <Text style={[styles.entry, { color: colors.textDim }]}>"{n.notes}"</Text>
+                        ) : null}
                         {(n.content?.entries || []).slice(0, 3).map((e, i) => (
                           <Text key={i} style={[styles.entry, { color: colors.textDim }]}>· {e}</Text>
                         ))}

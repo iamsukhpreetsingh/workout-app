@@ -294,7 +294,8 @@ test('audit trail records the nutrition lifecycle', async () => {
   const rows = await (await api(tokens[PEOPLE.owner.email],
     'GET', `/gym/${gymA.id}/audit-log?limit=300`)).json();
   const actions = rows.map((r) => r.action);
-  for (const expected of ['nutrition.created', 'nutrition.assigned', 'nutrition.saved',
+  // Phase 13: assignments audit under the unified assignment.* actions
+  for (const expected of ['nutrition.created', 'assignment.created', 'nutrition.saved',
     'nutrition.save_updated', 'nutrition.save_removed']) {
     assert.ok(actions.includes(expected), `audit missing ${expected}`);
   }
