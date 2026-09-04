@@ -1,0 +1,21 @@
+--- backend/test/gymNutrition.test.js
++++ backend/test/gymNutrition.test.js
+@@ -291,11 +291,13 @@ test('authorization: front desk views the list but cannot create; cross-gym 403'
+ });
+ 
+ test('audit trail records the nutrition lifecycle', async () => {
+-  const rows = await (await api(tokens[PEOPLE.owner.email],
+-    'GET', `/gym/${gymA.id}/audit-log?limit=300`)).json();
+-  const actions = rows.map((r) => r.action);
+-  for (const expected of ['nutrition.created', 'nutrition.assigned', 'nutrition.saved',
++  // the fixture gym accumulates hundreds of audit rows across the suite —
++  // filter per action instead of paging one window (volume-independent).
++  // Direct assignment is the Phase 13 unified table → 'assignment.created'.
++  for (const expected of ['nutrition.created', 'assignment.created', 'nutrition.saved',
+     'nutrition.save_updated', 'nutrition.save_removed']) {
+-    assert.ok(actions.includes(expected), `audit missing ${expected}`);
++    const rows = await (await api(tokens[PEOPLE.owner.email],
++      'GET', `/gym/${gymA.id}/audit-log?action=${expected}&limit=1`)).json();
++    assert.ok(rows.length > 0, `audit missing ${expected}`);
+   }
+ });

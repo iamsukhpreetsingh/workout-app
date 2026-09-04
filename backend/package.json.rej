@@ -1,0 +1,11 @@
+--- backend/package.json
++++ backend/package.json
+@@ -8,7 +8,7 @@
+     "seed-exercises": "node scripts/seedExercises.js",
+     "purge-archives": "node scripts/purgeExpiredArchives.js",
+     "check-routes": "node scripts/checkRouteRegistry.js",
+-    "test": "node --test test/admin.test.js test/passwordReset.test.js test/adminMgmt.test.js test/exerciseCatalog.test.js test/nutrition.test.js test/nutritionTargets.test.js test/dateSemantics.test.js test/gymAuth.test.js test/gymOnboarding.test.js test/gymMembers.test.js test/gymInvites.test.js test/gymPlans.test.js test/gymLifecycle.test.js test/gymStaffTrainers.test.js test/gymBilling.test.js test/gymAttendance.test.js test/gymWorkouts.test.js test/gymNutrition.test.js",
++    "test": "node --test test/admin.test.js test/passwordReset.test.js test/adminMgmt.test.js test/exerciseCatalog.test.js test/nutrition.test.js test/nutritionTargets.test.js test/dateSemantics.test.js test/gymAuth.test.js test/gymOnboarding.test.js test/gymMembers.test.js test/gymInvites.test.js test/gymPlans.test.js test/gymLifecycle.test.js test/gymStaffTrainers.test.js test/gymBilling.test.js test/gymAttendance.test.js test/gymWorkouts.test.js test/gymNutrition.test.js test/gymContentAssignments.test.js test/gymCommunications.test.js test/gymDashboard.test.js",
+     "dev": "node scripts/checkRouteRegistry.js && node server.js",
+     "migrate-diet": "node scripts/migrateDietToLogFirst.js",
+     "seed-foods": "node -e \"require('dotenv').config(); const {seedGlobalFoods} = require('../backend/src/data/nutritionLog');\""

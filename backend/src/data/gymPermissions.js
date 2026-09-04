@@ -18,7 +18,7 @@ const GYM_PERMISSIONS = {
     'members.view', 'members.create', 'members.manage',
     'memberships.view', 'memberships.manage', 'payments.record',
     'attendance.manage', 'content.manage', 'communications.manage',
-    'assigned_members.view',
+    'assigned_members.view', 'reports.view', // business dashboard (Phase 15)
   ],
   TRAINER: [
     'assigned_members.view', 'workouts.manage',
