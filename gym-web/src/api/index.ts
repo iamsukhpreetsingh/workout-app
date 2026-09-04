@@ -16,3 +16,4 @@ export * from './announcements';
 export * from './dashboard';
 export * from './branches';
 export * from './classes';
+export * from './documents';

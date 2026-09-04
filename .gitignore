@@ -66,3 +66,9 @@ gym-web/dist/
 *.patch
 *.zip
 PATCHES/*
+
+# Member document bytes (Phase 18) — private, streamed via authorized
+# endpoints only; never commit real paperwork (retention lives in storage
+# backups, not in git). Tracked legacy upload files are unaffected.
+backend/uploads/gym-documents/*
+!backend/uploads/gym-documents/.gitkeep

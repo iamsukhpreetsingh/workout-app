@@ -14,6 +14,7 @@ const GYM_PERMISSIONS = {
     'content.manage', 'communications.manage', 'reports.view', 'settings.manage',
     'branches.manage', // multi-branch CRUD + close/reopen (Phase 16)
     'classes.manage', // class scheduling: create/edit/cancel classes (Phase 17)
+    'documents.manage', // member documents & digital waivers (Phase 18)
     'assigned_members.view',
   ],
   ADMIN: [
@@ -23,6 +24,7 @@ const GYM_PERMISSIONS = {
     'assigned_members.view', 'reports.view', // business dashboard (Phase 15)
     'branches.manage', // multi-branch CRUD (Phase 16)
     'classes.manage', // class scheduling (Phase 17)
+    'documents.manage', // member documents & digital waivers (Phase 18)
   ],
   TRAINER: [
     'assigned_members.view', 'workouts.manage',
@@ -31,10 +33,12 @@ const GYM_PERMISSIONS = {
   FRONT_DESK: [
     'members.view', 'members.create', 'memberships.view', 'checkin.manage',
     'payments.record',
+    'documents.manage', // desk files/records member paperwork (Phase 18)
   ],
   MEMBER: [
     'own.profile.view', 'own.membership.view',
     'own.attendance.view', 'content.view',
+    'own.documents.view', // view/sign own documents in the app (Phase 18)
   ],
 };
 

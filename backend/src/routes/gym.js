@@ -35,6 +35,8 @@ const dashboard = require('../data/gymDashboard');
 const branches = require('../data/gymBranches');
 // Phase 17 class scheduling
 const classes = require('../data/gymClasses');
+// Phase 18 member documents & digital waivers
+const documents = require('../data/gymMemberDocuments');
 
 const httpError = (res, e, fallback = 500) => {
   res.status(e.status || fallback).json({ error: e.message || 'Unexpected error' });
@@ -130,6 +132,72 @@ registerRoute(router, {
     ));
   } catch (e) {
     httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+// ── mobile: my documents (auth only; member resolved by JWT) ──────────
+// Phase 18: documents belong to the GymMember row — these endpoints work
+// because the row carries app_user_id. A member who files paperwork at
+// the desk BEFORE joining the app sees the very same documents here once
+// they connect (nothing migrates — it was always theirs).
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/documents',
+  description: "The connected member's documents across their ACTIVE gym memberships — waivers, agreements, ID verification, medical clearances — with live/expired/replaced state. Auth only (member resolved from the JWT).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.json(await documents.listMyDocuments(req.user.id));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/my/documents/:documentId/sign',
+  description: 'The connected member digitally signs a PENDING document (typed legal name → AUTHORIZED). Expired documents refuse — ask the gym for a fresh copy. Every read and signature is logged. Auth only (member resolved from the JWT).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.json(await documents.signMyDocument(
+      req.user.id, req.params.documentId,
+      { actor: { userId: req.user.id, kind: 'MEMBER', label: 'MEMBER (app)' }, ip: req.ip },
+      (req.body || {}), gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/documents/:documentId/file',
+  description: "Streams the connected member's own live document after ownership checks (REPLACED/REVOKED copies are not served). Content-Disposition attachment; private, no-store. Every download is recorded in the document access log. Auth only (member resolved from the JWT).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const result = await documents.streamMyDocument(
+      req.user.id, req.params.documentId,
+      { actor: { userId: req.user.id, kind: 'MEMBER', label: 'MEMBER (app)' }, ip: req.ip }
+    );
+    if (!result) return res.status(410).json({ error: 'Document file is no longer available.' });
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Content-Length', String(result.fileSize));
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename.replace(/["\\]/g, '')}"`);
+    res.setHeader('Cache-Control', 'private, no-store');
+    result.stream.on('error', () => {
+      if (!res.headersSent) res.status(500).json({ error: 'Could not read document' });
+    });
+    result.stream.pipe(res);
+  } catch (e) {
+    httpError(res, e, e.status === 409 ? 409 : 400);
   }
 }, [requireAuth]);
 
@@ -2655,5 +2723,130 @@ registerRoute(router, {
     httpError(res, e, 400);
   }
 }, [requireAuth, requireGymContext(), requireGymPermissionAny(['checkin.manage', 'classes.manage'])]);
+
+// ── member documents & digital waivers (Phase 18) ────────────────────────
+// Documents belong to the GymMember row, so a member WITHOUT an app
+// account has a full paper trail here. Staff need documents.manage
+// (OWNER, ADMIN, FRONT_DESK — never TRAINER) AND their Phase 16 branch
+// restriction must cover the member's home branch. Bytes stream only
+// through the /file endpoints; every download is access-logged.
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/documents',
+  description: 'Lists a member\'s documents (waivers, agreements, ID verification, medical clearances) with live/expired/replaced/revoked state. Retention: readable even after the member leaves. Requires permission: documents.manage (OWNER, ADMIN, FRONT_DESK) plus branch scope.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')], async (req, res) => {
+  try {
+    res.json(await documents.listMemberDocuments(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }
+    ));
+  } catch (e) {
+    httpError(res, e, e.status === 404 ? 404 : 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/documents',
+  description: 'Uploads a document for a member (works for members WITHOUT an app account). Validates size (≤8MB), MIME (PDF/PNG/JPEG), extension and magic bytes; sanitizes the filename; supersedes the previous live document of the same category. Requires permission: documents.manage plus branch scope.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await documents.uploadDocument(
+      req.gymContext.gymId, req.params.memberId,
+      { actor: { userId: req.user.id, kind: 'STAFF', label: req.gymContext.gymRole }, ip: req.ip },
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, e.status === 413 || e.status === 415 ? e.status : 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/documents/:documentId',
+  description: 'One document\'s metadata plus its last 20 download-log entries (who pulled the bytes, when, from where). Requires permission: documents.manage plus branch scope.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')], async (req, res) => {
+  try {
+    res.json(await documents.getMemberDocument(
+      req.gymContext.gymId, req.params.memberId, req.params.documentId, { userId: req.user.id }
+    ));
+  } catch (e) {
+    httpError(res, e, e.status === 404 ? 404 : 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/documents/:documentId/file',
+  description: 'THE authorized byte stream for staff. Re-checks branch scope, records the download in the document access log (actor, ip, timestamp), then streams as a private attachment. Requires permission: documents.manage plus branch scope.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')], async (req, res) => {
+  try {
+    const result = await documents.streamMemberDocument(
+      req.gymContext.gymId, req.params.memberId, req.params.documentId,
+      { actor: { userId: req.user.id, kind: 'STAFF', label: req.gymContext.gymRole }, ip: req.ip }
+    );
+    if (!result) return res.status(410).json({ error: 'Document file is no longer available.' });
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Content-Length', String(result.fileSize));
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename.replace(/["\\]/g, '')}"`);
+    res.setHeader('Cache-Control', 'private, no-store');
+    result.stream.on('error', () => {
+      if (!res.headersSent) res.status(500).json({ error: 'Could not read document' });
+    });
+    result.stream.pipe(res);
+  } catch (e) {
+    httpError(res, e, e.status === 404 ? 404 : 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/documents/:documentId/authorize',
+  description: 'Records an on-paper signature at the desk: PENDING → AUTHORIZED with the typed signature name retained. Expired documents refuse — upload a fresh copy. Requires permission: documents.manage plus branch scope.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')], async (req, res) => {
+  try {
+    res.json(await documents.authorizeMemberDocument(
+      req.gymContext.gymId, req.params.memberId, req.params.documentId,
+      { actor: { userId: req.user.id, kind: 'STAFF', label: req.gymContext.gymRole }, ip: req.ip },
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, e.status === 404 ? 404 : 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/documents/:documentId/revoke',
+  description: 'Withdraws a live document (wrong member, bad scan, forged file): status → REVOKED, no longer served to the member app. History is kept. Requires permission: documents.manage plus branch scope.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')], async (req, res) => {
+  try {
+    res.json(await documents.revokeMemberDocument(
+      req.gymContext.gymId, req.params.memberId, req.params.documentId,
+      { actor: { userId: req.user.id, kind: 'STAFF', label: req.gymContext.gymRole }, ip: req.ip },
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, e.status === 404 ? 404 : 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('documents.manage')]);
 
 module.exports = router;

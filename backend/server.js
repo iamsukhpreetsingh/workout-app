@@ -58,9 +58,15 @@ fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 // /progress-photos/:id/image endpoint after ownership/visibility checks.
 app.use('/uploads/dish-photo', express.static(UPLOAD_DIR, { fallthrough: true }));
 app.use('/uploads', (req, res, next) => {
-  // block direct access to the private subtree; allow legacy dish files
+  // block direct access to the private subtrees; allow legacy dish files
   if (req.path.startsWith('/progress-photos')) {
     return res.status(403).json({ error: 'Progress photos require authorization' });
+  }
+  // Phase 18: member documents (waivers, ID scans, medical clearances) —
+  // the most sensitive files in the system. Bytes move ONLY through the
+  // authorized document endpoints after permission + branch checks.
+  if (req.path.startsWith('/gym-documents')) {
+    return res.status(403).json({ error: 'Member documents require authorization' });
   }
   next();
 }, express.static(UPLOAD_DIR));

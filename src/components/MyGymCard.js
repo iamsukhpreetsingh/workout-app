@@ -17,7 +17,7 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../theme';
-import { GYM_CLASSES } from '../shared/constants/routes';
+import { GYM_CLASSES, GYM_DOCUMENTS } from '../shared/constants/routes';
 import { api, fetchMyGymContent } from '../lib/gymApi';
 
 const STATUS_COLORS = {
@@ -115,6 +115,18 @@ export default function MyGymCard() {
         <Ionicons name="calendar-outline" size={16} color={colors.primary} />
         <Text style={styles.classesText}>Classes</Text>
         <Text style={styles.classesHint}>Book your spot</Text>
+        <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
+      </TouchableOpacity>
+      {/* Gym Documents (Phase 18): waivers & agreements + digital signing */}
+      <TouchableOpacity
+        style={styles.classesRow}
+        onPress={() => navigation.navigate(GYM_DOCUMENTS)}
+        accessibilityRole="button"
+        accessibilityLabel="Open your gym documents"
+      >
+        <Ionicons name="document-text-outline" size={16} color={colors.primary} />
+        <Text style={styles.classesText}>Documents</Text>
+        <Text style={styles.classesHint}>Waivers & agreements</Text>
         <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
       </TouchableOpacity>
     </View>

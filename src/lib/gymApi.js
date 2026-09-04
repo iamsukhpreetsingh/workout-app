@@ -62,3 +62,23 @@ export async function bookGymClass(classId) {
 export async function cancelMyGymClassBooking(classId) {
   return api(`/gym/my/classes/${classId}/cancel`, { method: 'POST' });
 }
+
+
+// ── Gym Documents & Digital Waivers (Phase 18) ──────────────────────────────
+// Documents belong to the gym member row, so paperwork the desk filed
+// BEFORE the app account was connected shows up here too — nothing
+// migrates, it was always the member's. Only live documents are listed
+// per gym; REPLACED/REVOKED copies stay at the desk (retention).
+export async function fetchMyGymDocuments() {
+  return api('/gym/my/documents');
+}
+
+// Digitally sign a pending waiver/agreement by typing the legal name —
+// the typed signature is retained server-side as the signature of record.
+// Expired documents refuse; the gym issues a fresh copy instead.
+export async function signGymDocument(documentId, signatureName) {
+  return api(`/gym/my/documents/${documentId}/sign`, {
+    method: 'POST',
+    body: { signature_name: signatureName },
+  });
+}

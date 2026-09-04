@@ -1,8 +1,9 @@
 // Member detail — Overview is real (profile, edit, app-connection card with
 // invite / cancel-invite / link / unlink, membership card with leave /
 // reactivate). Membership, Payments, Attendance, Trainer, Workouts,
-// Nutrition, Documents and Activity tabs are later-phase placeholders with
-// their own sub-routes. Everything here works with appUserId = NULL.
+// Nutrition and Documents tabs are real; Activity is a later-phase
+// placeholder with its own sub-routes. Everything here works with
+// appUserId = NULL.
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Descriptions, Tabs, Button, Drawer, Modal, Input, App as AntApp, Spin,
@@ -24,6 +25,7 @@ import MemberPaymentsTab from '../components/MemberPaymentsTab';
 import MemberAttendanceTab from '../components/MemberAttendanceTab';
 import MemberWorkoutsTab from '../components/MemberWorkoutsTab';
 import MemberNutritionTab from '../components/MemberNutritionTab';
+import MemberDocumentsTab from '../components/MemberDocumentsTab';
 import { useGymContext, hasPermission } from '../permissions';
 import {
   getMember, updateMember, linkMemberApp, unlinkMemberApp,
@@ -458,9 +460,7 @@ export default function MemberDetailPage() {
           { key: 'trainer', label: 'Trainer', children: <MemberTrainerTab memberId={member.id} /> },
           { key: 'workouts', label: 'Workouts', children: <MemberWorkoutsTab memberId={member.id} /> },
           { key: 'nutrition', label: 'Nutrition', children: <MemberNutritionTab memberId={member.id} /> },
-          { key: 'documents', label: 'Documents', children: comingSoon(
-              'Documents', 'Phase 3',
-              'Membership forms, ID documents and consent files arrive with the operations phase.') },
+          { key: 'documents', label: 'Documents', children: <MemberDocumentsTab memberId={member.id} /> },
           { key: 'activity', label: 'Activity', children: comingSoon(
               'Activity', 'Phase 1b',
               'A timeline of this member\u2019s memberships, payments and visits arrives with later phases.') },

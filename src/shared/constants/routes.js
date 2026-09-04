@@ -37,6 +37,7 @@ export const DIET_PLAN_BUILDER = 'DietPlanBuilder';
 export const CLIENT_DIET_PLAN_DETAIL = 'ClientDietPlanDetail';
 export const MY_DISHES = 'MyDishes';
 export const GYM_CLASSES = 'GymClasses';
+export const GYM_DOCUMENTS = 'GymDocuments';
 export const SUPPLEMENT_PLAN_BUILDER = 'SupplementPlanBuilder';
 export const COACHING_PLAN_BUILDER = 'CoachingPlanBuilder';
 export const COACHING_PLAN_DETAIL = 'CoachingPlanDetail';
