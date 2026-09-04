@@ -23,6 +23,12 @@ export interface GymMember {
   joined_at: string;
   notes: string | null;
   created_at: string;
+  // Phase 16 multi-branch: access = {primary} ∪ allowed; no primary = legacy
+  // (all branches). `branch` is the free-form label kept in sync with the
+  // primary branch's name (Phase 14 SPECIFIC_BRANCH audiences read it).
+  primary_branch_id?: string | null;
+  allowed_branch_ids?: string[] | null;
+  branch?: string | null;
 }
 
 export const listMembers = (

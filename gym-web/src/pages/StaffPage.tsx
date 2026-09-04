@@ -10,7 +10,7 @@ import PageContainer from '../components/PageContainer';
 import DataTable from '../components/DataTable';
 import FilterBar from '../components/FilterBar';
 import { useGymContext } from '../permissions';
-import { listStaff, addStaff, updateStaff, StaffRow } from '../api';
+import { listStaff, addStaff, updateStaff, listBranches, setStaffBranches, Branch, StaffRow } from '../api';
 
 const ASSIGNABLE_ROLES = ['OWNER', 'ADMIN', 'TRAINER', 'FRONT_DESK'];
 
@@ -27,6 +27,9 @@ export default function StaffPage() {
   const [inviteRole, setInviteRole] = useState<string | null>(null);
   const [form] = Form.useForm();
   const [tick, setTick] = useState(0);
+  const [branchOptions, setBranchOptions] = useState<Branch[]>([]);
+  const [branchRow, setBranchRow] = useState<StaffRow | null>(null);
+  const [branchSelection, setBranchSelection] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -41,6 +44,32 @@ export default function StaffPage() {
   }, [ctx?.gymId]);
 
   useEffect(() => { load(); }, [load, tick]);
+
+  // branch options for the restriction editor (staff list already carries
+  // branch_ids per row — SELECT * on gym_staff)
+  useEffect(() => {
+    if (!ctx?.gymId) return;
+    listBranches(ctx.gymId).then(setBranchOptions).catch(() => setBranchOptions([]));
+  }, [ctx?.gymId]);
+
+  const openBranchModal = (row: StaffRow) => {
+    setBranchRow(row);
+    setBranchSelection(((row as any).branch_ids as string[]) || []);
+  };
+
+  const saveBranches = async () => {
+    if (!branchRow) return;
+    try {
+      await setStaffBranches(ctx!.gymId, branchRow.id, branchSelection);
+      message.success(branchSelection.length
+        ? 'Branch restriction saved'
+        : 'All-branch access restored');
+      setBranchRow(null);
+      load();
+    } catch (e: any) {
+      message.error(e.message || 'Could not save the branch restriction');
+    }
+  };
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -117,8 +146,22 @@ export default function StaffPage() {
         </Tag>
       ),
     },
+    {
+      title: 'Branch access', key: 'branches', width: 200,
+      render: (_: any, row: StaffRow) => {
+        const ids: string[] = ((row as any).branch_ids as string[]) || [];
+        if (row.gym_role === 'OWNER') return <Tag color="gold">All branches</Tag>;
+        return (
+          <Button size="small" onClick={() => openBranchModal(row)}>
+            {ids.length
+              ? `${ids.length} branch${ids.length === 1 ? '' : 'es'}`
+              : 'All branches'}
+          </Button>
+        );
+      },
+    },
     { title: 'Since', dataIndex: 'created_at', width: 130, render: (v: string) => String(v).slice(0, 10) },
-  ], [ctx?.gymId]);
+  ], [ctx?.gymId, branchOptions]);
 
   return (
     <PageContainer

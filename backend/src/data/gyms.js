@@ -583,7 +583,7 @@ async function createGymMember(gymId, actor, ip, data) {
   });
 }
 
-async function listGymMembers(gymId, { status, connection, q, limit = 50, offset = 0 }) {
+async function listGymMembers(gymId, { status, connection, q, branch_id, limit = 50, offset = 0 }) {
   const vals = [gymId];
   const where = ['gym_id = $1'];
   if (status) { vals.push(status); where.push(`status = $${vals.length}`); }
@@ -591,6 +591,10 @@ async function listGymMembers(gymId, { status, connection, q, limit = 50, offset
   if (connection === 'CONNECTED') where.push('app_user_id IS NOT NULL');
   else if (connection === 'NOT_CONNECTED') where.push(`app_user_id IS NULL AND app_invite_status = 'none'`);
   else if (connection === 'INVITATION_PENDING') where.push(`app_user_id IS NULL AND app_invite_status = 'pending'`);
+  // Phase 16: filter by the member's PRIMARY branch ('none' = legacy
+  // members with no branch, for completeness in filtered views)
+  if (branch_id === 'none') where.push('primary_branch_id IS NULL');
+  else if (branch_id) { vals.push(String(branch_id)); where.push(`primary_branch_id = $${vals.length}`); }
   if (q) {
     vals.push(`%${q}%`);
     where.push(`(first_name ILIKE $${vals.length} OR last_name ILIKE $${vals.length}

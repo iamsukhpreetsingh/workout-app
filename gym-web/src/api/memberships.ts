@@ -13,6 +13,8 @@ export interface MembershipPlan {
   access_level: 'gym_only' | 'gym_classes' | 'all_access';
   included_pt_sessions: number;
   status: 'DRAFT' | 'ACTIVE' | 'ARCHIVED';
+  // Phase 16: branches where the plan is sold — [] / omitted = every branch
+  branch_ids?: string[];
 }
 
 export const listPlans = (gymId: string, status?: string) =>

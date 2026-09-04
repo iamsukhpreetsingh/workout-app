@@ -31,6 +31,8 @@ const communications = require('../data/gymCommunications');
 
 // Phase 15 business dashboard (same anchor strategy)
 const dashboard = require('../data/gymDashboard');
+// Phase 16 multi-branch
+const branches = require('../data/gymBranches');
 
 const httpError = (res, e, fallback = 500) => {
   res.status(e.status || fallback).json({ error: e.message || 'Unexpected error' });
@@ -640,6 +642,7 @@ registerRoute(router, {
   try {
     res.json(await gyms.listGymMembers(req.gymContext.gymId, {
       status: req.query.status, connection: req.query.connection, q: req.query.q,
+      branch_id: req.query.branch_id,
       limit: req.query.limit, offset: req.query.offset,
     }));
   } catch (e) {
@@ -1449,7 +1452,9 @@ registerRoute(router, {
     if (!member) return res.status(404).json({ error: 'Invalid QR code' });
     const result = await attendance.recordCheckIn(
       req.gymContext.gymId, member.id, 'QR_CHECK_IN', { userId: req.user.id }, req.ip,
-      { note: req.body?.note }, gyms.gymAudit
+      { note: req.body?.note, branch_id: req.body?.branch_id,
+        staff_branch_ids: await branches.staffBranchIds(req.gymContext.gymId, req.user.id) },
+      gyms.gymAudit
     );
     res.status(result.duplicate ? 200 : 201).json(result);
   } catch (e) {
@@ -1467,7 +1472,10 @@ registerRoute(router, {
 }, [requireAuth, requireGymContext(), requireGymPermission('checkin.manage')], async (req, res) => {
   try {
     res.json(await attendance.recordOfflineBatch(
-      req.gymContext.gymId, { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+      req.gymContext.gymId, { userId: req.user.id }, req.ip,
+      { ...req.body,
+        staff_branch_ids: await branches.staffBranchIds(req.gymContext.gymId, req.user.id) },
+      gyms.gymAudit
     ));
   } catch (e) {
     httpError(res, e, 400);
@@ -1485,7 +1493,9 @@ registerRoute(router, {
   try {
     const result = await attendance.recordCheckIn(
       req.gymContext.gymId, req.params.memberId, 'FRONT_DESK', { userId: req.user.id }, req.ip,
-      { note: req.body?.note }, gyms.gymAudit
+      { note: req.body?.note, branch_id: req.body?.branch_id,
+        staff_branch_ids: await branches.staffBranchIds(req.gymContext.gymId, req.user.id) },
+      gyms.gymAudit
     );
     res.status(result.duplicate ? 200 : 201).json(result);
   } catch (e) {
@@ -1504,7 +1514,9 @@ registerRoute(router, {
   try {
     res.status(201).json(await attendance.recordManual(
       req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
-      req.body || {}, gyms.gymAudit
+      { ...req.body,
+        staff_branch_ids: await branches.staffBranchIds(req.gymContext.gymId, req.user.id) },
+      gyms.gymAudit
     ));
   } catch (e) {
     httpError(res, e, 400);
@@ -2266,10 +2278,180 @@ registerRoute(router, {
   category: 'Gym',
 }, [requireAuth, requireGymContext(), requireGymPermission('reports.view')], async (req, res) => {
   try {
-    res.json(await dashboard.dashboard(req.gymContext.gymId));
+    res.json(await dashboard.dashboard(req.gymContext.gymId, req.query.branch_id || null));
   } catch (e) {
     httpError(res, e);
   }
 }, [requireAuth, requireGymContext(), requireGymPermission('reports.view')]);
+
+// ── multi-branch (Phase 16) ──────────────────────────────────────────────
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/branches',
+  description: 'Branches of the gym with per-branch member counts and today\'s check-ins. Every staff role can read this (the [All Branches] selector and Front Desk need it); OWNER/ADMIN manage branches separately. Requires any of: members.view, assigned_members.view, checkin.manage, branches.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.view', 'assigned_members.view', 'checkin.manage', 'branches.manage'])], async (req, res) => {
+  try {
+    res.json(await branches.listBranches(req.gymContext.gymId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.view', 'assigned_members.view', 'checkin.manage', 'branches.manage'])]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/branches',
+  description: 'Creates a branch (name, address, phone, hours, timezone, status). Requires permission: branches.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('branches.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await branches.createBranch(
+      req.gymContext.gymId, { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('branches.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/branches/:branchId',
+  description: 'One branch with its member count. Requires any of: members.view, assigned_members.view, checkin.manage, branches.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.view', 'assigned_members.view', 'checkin.manage', 'branches.manage'])], async (req, res) => {
+  try {
+    res.json(await branches.getBranch(req.gymContext.gymId, req.params.branchId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermissionAny(['members.view', 'assigned_members.view', 'checkin.manage', 'branches.manage'])]);
+
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/:gymId/branches/:branchId',
+  description: 'Updates branch details (name, address, phone, hours, timezone). A rename re-syncs the member branch labels. Requires permission: branches.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('branches.manage')], async (req, res) => {
+  try {
+    res.json(await branches.updateBranch(
+      req.gymContext.gymId, req.params.branchId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('branches.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/branches/:branchId/close',
+  description: 'Closes a branch (status INACTIVE): NEW check-ins are blocked, history / members / staff links are preserved. Idempotent. Requires permission: branches.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('branches.manage')], async (req, res) => {
+  try {
+    res.json(await branches.setBranchStatus(
+      req.gymContext.gymId, req.params.branchId, 'INACTIVE', { userId: req.user.id }, req.ip, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('branches.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/branches/:branchId/reopen',
+  description: 'Reopens a closed branch (status ACTIVE). Idempotent. Requires permission: branches.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('branches.manage')], async (req, res) => {
+  try {
+    res.json(await branches.setBranchStatus(
+      req.gymContext.gymId, req.params.branchId, 'ACTIVE', { userId: req.user.id }, req.ip, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('branches.manage')]);
+
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/:gymId/members/:memberId/branches',
+  description: "Sets a member's PRIMARY branch and ALLOWED branches (multi-club access). Access = {primary} + allowed; no primary = legacy all-branches behavior. Requires permission: members.manage (OWNER, ADMIN).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.json(await branches.setMemberBranches(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/transfer-branch',
+  description: 'Moves a member to another primary branch and records the move in the append-only transfer history. Requires permission: members.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.json(await branches.transferMemberBranch(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/members/:memberId/branch-history',
+  description: "The member's branch transfer history (append-only). Requires permission: members.view (OWNER, ADMIN, FRONT_DESK).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')], async (req, res) => {
+  try {
+    res.json(await branches.memberBranchHistory(req.gymContext.gymId, req.params.memberId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.view')]);
+
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/:gymId/staff/:staffId/branches',
+  description: 'Restricts a staff member to specific branches ([] = all branches). Owners always have all branches and cannot be restricted. Requires permission: staff.manage (OWNER).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('staff.manage')], async (req, res) => {
+  try {
+    res.json(await branches.setStaffBranches(
+      req.gymContext.gymId, req.params.staffId, { userId: req.user.id }, req.ip,
+      req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('staff.manage')]);
 
 module.exports = router;

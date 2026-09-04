@@ -162,6 +162,7 @@ test('new gym / zero members / zero revenue / zero attendance → zeros, never N
 // ── members: buckets, adoption, branches (mixed member set) ───────────────
 
 let mAppActive, mMailActive, mPending, mFrozen, mCancelled, mBranch1, mBranch2;
+let northBranch, southBranch;
 
 test('member buckets + app adoption (pending ⊂ not connected) over a mixed set', async () => {
   // 1 app-connected ACTIVE member
@@ -186,11 +187,17 @@ test('member buckets + app adoption (pending ⊂ not connected) over a mixed set
     { first_name: 'GoneGuy' })).json();
   await api(owner(), 'POST', `/gym/${gymA.id}/members/${mCancelled.id}/cancel`, { reason: 'left' });
 
-  // branch labels on two of them (multiple branches)
+  // branches (Phase 16 entities): two members get a primary branch each
   mBranch1 = mAppActive;
   mBranch2 = mMailActive;
-  await query('UPDATE gym_members SET branch = $2 WHERE id = $1', [mBranch1.id, 'North Wing']);
-  await query('UPDATE gym_members SET branch = $2 WHERE id = $1', [mBranch2.id, 'South Wing']);
+  northBranch = (await (await api(owner(), 'POST', `/gym/${gymA.id}/branches`,
+    { name: 'North Wing' })).json());
+  southBranch = (await (await api(owner(), 'POST', `/gym/${gymA.id}/branches`,
+    { name: 'South Wing' })).json());
+  await api(owner(), 'PATCH', `/gym/${gymA.id}/members/${mBranch1.id}/branches`,
+    { primary_branch_id: northBranch.id });
+  await api(owner(), 'PATCH', `/gym/${gymA.id}/members/${mBranch2.id}/branches`,
+    { primary_branch_id: southBranch.id });
 
   const d = await dash();
   // buckets: 3 ACTIVE (mAppActive, mMailActive, mPending) + 1 FROZEN
@@ -209,11 +216,13 @@ test('member buckets + app adoption (pending ⊂ not connected) over a mixed set
   assert.strictEqual(d.trainers.total, 1);
   assert.strictEqual(d.trainers.assigned_members, 0);
   assert.strictEqual(d.trainers.unassigned_members, 4);
-  // branches split
+  // branches split (entity rows since Phase 16)
   assert.strictEqual(d.branches.length, 2);
-  const north = d.branches.find((b) => b.branch === 'North Wing');
+  const north = d.branches.find((b) => b.name === 'North Wing');
   assert.strictEqual(north.members, 1);
   assert.strictEqual(north.active, 1);
+  const south = d.branches.find((b) => b.name === 'South Wing');
+  assert.strictEqual(south.members, 1);
 });
 
 // ── financial ─────────────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ import {
   Layout, Menu, Select, Typography, Spin, Dropdown, Button, Empty,
 } from 'antd';
 import {
-  DashboardOutlined, TeamOutlined, IdcardOutlined, CreditCardOutlined,
+  DashboardOutlined, TeamOutlined, IdcardOutlined, CreditCardOutlined, ApartmentOutlined,
   CheckSquareOutlined, UserOutlined, ThunderboltOutlined, AppleOutlined,
   CalendarOutlined, SoundOutlined, BarChartOutlined, SettingOutlined,
   PlusOutlined, LogoutOutlined, CrownOutlined, TagOutlined,
@@ -36,6 +36,7 @@ import AttendancePage from './pages/AttendancePage';
 import WorkoutsPage from './pages/WorkoutsPage';
 import NutritionPage from './pages/NutritionPage';
 import AnnouncementsPage from './pages/AnnouncementsPage';
+import BranchesPage from './pages/BranchesPage';
 import ReportsPage from './pages/ReportsPage';
 import StaffPage from './pages/StaffPage';
 import TrainersPage from './pages/TrainersPage';
@@ -49,6 +50,7 @@ const NAV_ITEMS = [
   { path: '/members', label: 'Members', icon: <TeamOutlined />, perms: ['members.view'] },
   { path: '/memberships', label: 'Memberships', icon: <IdcardOutlined />, perms: ['memberships.view'] },
   { path: '/memberships/plans', label: 'Plans', icon: <TagOutlined />, perms: ['plans.manage'] },
+  { path: '/branches', label: 'Branches', icon: <ApartmentOutlined />, perms: ['branches.manage'] },
   { path: '/payments', label: 'Payments', icon: <CreditCardOutlined />, perms: ['payments.manage'] },
   { path: '/attendance', label: 'Attendance', icon: <CheckSquareOutlined />, perms: ['attendance.manage', 'checkin.manage'] },
   { path: '/trainers', label: 'Trainers', icon: <UserOutlined />, perms: ['staff.manage'] },
@@ -196,6 +198,7 @@ function Shell() {
 
       <Route path="/memberships" element={permGuard(['memberships.view'], <MembershipsPage />)} />
       <Route path="/memberships/plans" element={permGuard(['plans.manage'], <PlansPage />)} />
+      <Route path="/branches" element={permGuard(['branches.manage'], <BranchesPage />)} />
 
       <Route path="/payments" element={permGuard(['payments.manage'], <PaymentsPage />)} />
 

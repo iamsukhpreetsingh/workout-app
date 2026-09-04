@@ -10,7 +10,7 @@ import DataTable from '../components/DataTable';
 import FilterBar from '../components/FilterBar';
 import StatusBadge from '../components/StatusBadge';
 import { useGymContext } from '../permissions';
-import { listPlans, createPlan, updatePlan, formatMoney, MembershipPlan } from '../api';
+import { listPlans, createPlan, updatePlan, formatMoney, listBranches, Branch, MembershipPlan } from '../api';
 
 const ACCESS_LEVELS = [
   { value: 'gym_only', label: 'Gym only' },
@@ -24,7 +24,7 @@ const DURATION_UNITS = [
   { value: 'year', label: 'year(s)' },
 ];
 
-function PlanForm({ form }: { form: any }) {
+function PlanForm({ form, branchOptions }: { form: any; branchOptions: Branch[] }) {
   return (
     <Form form={form} layout="vertical">
       <Form.Item name="name" label="Plan name" rules={[{ required: true, message: 'Name is required' }]}>
@@ -66,6 +66,22 @@ function PlanForm({ form }: { form: any }) {
       <Form.Item name="status" label="Status" initialValue="DRAFT">
         <Select options={['DRAFT', 'ACTIVE', 'ARCHIVED'].map((s) => ({ value: s, label: s }))} />
       </Form.Item>
+      {branchOptions.length > 0 && (
+        <Form.Item
+          name="branch_ids"
+          label="Available at branches"
+          extra="Leave empty to sell this plan at every branch."
+        >
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="All branches"
+            options={branchOptions.filter((b) => b.status === 'ACTIVE').map((b) => ({
+              value: b.id, label: b.name,
+            }))}
+          />
+        </Form.Item>
+      )}
     </Form>
   );
 }
@@ -80,6 +96,7 @@ export default function PlansPage() {
   const [q, setQ] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<MembershipPlan | null>(null);
+  const [branchOptions, setBranchOptions] = useState<Branch[]>([]);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -95,6 +112,11 @@ export default function PlansPage() {
   }, [ctx?.gymId]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!ctx?.gymId) return;
+    listBranches(ctx.gymId).then(setBranchOptions).catch(() => setBranchOptions([]));
+  }, [ctx?.gymId]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -118,6 +140,7 @@ export default function PlansPage() {
       duration_value: plan.duration_value, duration_unit: plan.duration_unit,
       price: plan.price_cents / 100, access_level: plan.access_level,
       included_pt_sessions: plan.included_pt_sessions, status: plan.status,
+      branch_ids: plan.branch_ids || [],
     });
     setDrawerOpen(true);
   };
@@ -129,6 +152,7 @@ export default function PlansPage() {
         ...v,
         price_cents: Math.round((v.price ?? 0) * 100),
         currency: 'INR',
+        branch_ids: v.branch_ids ?? [],
       };
       delete payload.price;
       if (editing) {
@@ -240,7 +264,7 @@ export default function PlansPage() {
         onClose={() => setDrawerOpen(false)}
         extra={<Button type="primary" onClick={submit}>{editing ? 'Save' : 'Create plan'}</Button>}
       >
-        <PlanForm form={form} />
+        <PlanForm form={form} branchOptions={branchOptions} />
       </Drawer>
     </PageContainer>
   );

@@ -116,11 +116,11 @@ denied** page — and the backend rejects the request anyway.
 
 `/` (dashboard) · `/members` · `/members/:id` (+ `/membership`,
 `/payments`, `/attendance`, `/trainer`, `/workouts`, `/nutrition`,
-`/documents` sub-routes) · `/memberships` (+ `/plans`) · `/payments` ·
-`/attendance` · `/trainers` · `/staff` · `/workouts` · `/nutrition` ·
-`/classes` · `/communications` · `/reports` · `/settings/:tab` ·
-`/create-gym` (onboarding wizard) · `/invite/:token` (public invitation
-landing, outside the shell).
+`/documents` sub-routes) · `/memberships` (+ `/plans`) · `/branches` ·
+`/payments` · `/attendance` · `/trainers` · `/staff` · `/workouts` ·
+`/nutrition` · `/classes` · `/communications` · `/reports` ·
+`/settings/:tab` · `/create-gym` (onboarding wizard) · `/invite/:token`
+(public invitation landing, outside the shell).
 
 ## What's real vs. placeholder
 

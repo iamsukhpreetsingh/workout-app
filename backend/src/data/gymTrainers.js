@@ -12,6 +12,7 @@
 //    have their role changed — members must be reassigned first
 //    (enforced here via countActiveAssignments and in gyms.updateGymStaff).
 const { query, transaction } = require('../db/pool');
+const branches = require('./gymBranches');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -69,6 +70,9 @@ async function assignTrainer(gymId, memberId, actor, ip, { trainer_staff_id } = 
     if (trainer.status !== 'ACTIVE') {
       throw new HttpError(400, 'This trainer is not active at this gym');
     }
+    // TRAINER MULTIPLE BRANCHES (Phase 16): a branch-restricted trainer may
+    // only take members they can actually reach (branch overlap).
+    await branches.assertTrainerBranchOverlap(client, gymId, memberId, trainer_staff_id);
 
     // end any current assignment (history kept, reason 'reassigned')
     const { rows: current } = await client.query(

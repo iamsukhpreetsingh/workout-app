@@ -1,9 +1,20 @@
-// gymDashboard.js — Gym Management business dashboard (Phase 15).
+// gymDashboard.js — Gym Management business dashboard (Phase 15, extended
+// for multi-branch in Phase 16).
 //
 // ONE read endpoint, ALL aggregation in SQL (COUNT/SUM/GROUP BY/FILTER —
 // never row loads into JS), EVERY query gym-scoped by gym_id. Represents
 // ALL GymMembers — app-connected and non-app alike (app_user_id NULL rows
 // count everywhere; the app is a delivery channel, not a membership).
+//
+// BRANCH FILTER (Phase 16): ?branch_id= scopes the KPIs to one branch —
+//   members / adoption / financial / inactive: members whose PRIMARY branch
+//     is the branch (legacy members with no primary only appear in All).
+//   attendance: visits TAGGED with that branch (branch-specific attendance).
+//   trainers: staff who can operate there (unrestricted or listed), with the
+//     assignments of that branch's primary members.
+//   All without branch_id = the whole gym. The `branches` array always
+//   returns the full per-branch split (entity rows with id/name/status) so
+//   the UI can render the [All Branches ▼] selector and the table at once.
 //
 // SECTIONS:
 //   members      status buckets (ACTIVE/FROZEN/EXPIRED/CANCELLED/PENDING),
@@ -11,14 +22,12 @@
 //   app_adoption connected / not connected / invitation pending (subset of
 //                not connected), over the non-CANCELLED member base
 //   financial    net collected (payments − additive refunds), this month,
-//                outstanding charges (DUE/PARTIAL derivation lives in the
-//                ledger — here it is just amount − net-paid), overdue slice
+//                outstanding charges (amount − net-paid), overdue slice
 //   attendance   today / week / month visits on gym-local calendar days,
 //                peak hours over the last 30 gym-local days, inactive
 //                members (no visit in the window, incl. never visited)
 //   trainers     active TRAINER staff, roster coverage, unassigned members
-//   branches     per-branch split when the gym labels members (multiple
-//                branches are just data — there is no branch entity)
+//   branches     per-branch split (real branches since Phase 16)
 //
 // EDGE CASES (all answered with zeros / empty arrays, never NaN):
 //   new gym, zero members, zero revenue, zero attendance, only non-app
@@ -34,6 +43,8 @@ class HttpError extends Error {
     this.status = status;
   }
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const INACTIVE_WINDOW_DAYS = 7;   // "Members Inactive 7+ Days"
 const EXPIRING_SOON_DAYS = 7;     // memberships ending within a week
@@ -61,7 +72,7 @@ function shiftDate(dateStr, days) {
   return d.toISOString().slice(0, 10);
 }
 
-async function dashboard(gymId) {
+async function dashboard(gymId, branchId = null) {
   const tz = await gymTz(gymId);
   const today = localDateIn(tz);
   const weekStart = shiftDate(today, -6);                            // 7 days incl today
@@ -74,6 +85,21 @@ async function dashboard(gymId) {
     timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(new Date())}`;
 
+  // branch filter setup: validated + two bind values reused by every query
+  let branchFilter = null;
+  if (branchId) {
+    if (!UUID_RE.test(String(branchId))) throw new HttpError(400, 'branch_id must be a branch id');
+    const { rows } = await query(
+      'SELECT id, name, status FROM gym_branches WHERE id = $1 AND gym_id = $2',
+      [branchId, gymId]
+    );
+    if (!rows.length) throw new HttpError(404, 'Branch not found');
+    branchFilter = rows[0];
+  }
+  // every query binds $2 = the branch filter (NULL = All Branches); the
+  // WHERE clauses short-circuit on `$2::uuid IS NULL OR ...`
+  const bf = branchFilter ? branchFilter.id : null;
+
   const [
     memberBuckets, adoption, expiring, collected, refunds,
     outstanding, attendance, peakRows, inactive, trainerRows, branchRows, currencyRow,
@@ -81,8 +107,10 @@ async function dashboard(gymId) {
     // ── members: one row per status ──
     query(
       `SELECT status, COUNT(*)::int AS n FROM gym_members
-       WHERE gym_id = $1 GROUP BY status`,
-      [gymId]
+       WHERE gym_id = $1
+         AND ($2::uuid IS NULL OR primary_branch_id = $2::uuid)
+       GROUP BY status`,
+      [gymId, bf]
     ),
     // ── app adoption over the non-CANCELLED base ──
     // Spec semantics: Total = Connected + Not Connected, with "invitation
@@ -94,30 +122,45 @@ async function dashboard(gymId) {
          COUNT(*) FILTER (WHERE app_user_id IS NULL)::int AS not_connected,
          COUNT(*) FILTER (WHERE app_user_id IS NULL
                            AND app_invite_status = 'pending')::int AS invitation_pending
-       FROM gym_members WHERE gym_id = $1 AND status <> 'CANCELLED'`,
-      [gymId]
+       FROM gym_members
+       WHERE gym_id = $1 AND status <> 'CANCELLED'
+         AND ($2::uuid IS NULL OR primary_branch_id = $2::uuid)`,
+      [gymId, bf]
     ),
     // ── memberships expiring soon (ACTIVE term, ends within the window) ──
     query(
-      `SELECT COUNT(DISTINCT member_id)::int AS n FROM member_memberships
-       WHERE gym_id = $1 AND status = 'ACTIVE'
-         AND ends_on >= $2 AND ends_on <= $3`,
-      [gymId, today, expiringEnd]
+      `SELECT COUNT(DISTINCT t.member_id)::int AS n FROM member_memberships t
+       JOIN gym_members m ON m.id = t.member_id
+       WHERE t.gym_id = $1 AND t.status = 'ACTIVE'
+         AND t.ends_on >= $3 AND t.ends_on <= $4
+         AND ($2::uuid IS NULL OR m.primary_branch_id = $2::uuid)`,
+      [gymId, bf, today, expiringEnd]
     ),
-    // ── net collected: receipts minus additive refunds (immutably honest) ──
+    // ── net collected: receipts minus additive refunds (immutably honest);
+    //     attributed to the payer's PRIMARY branch ──
     query(
       `SELECT
          COALESCE(SUM(p.amount_cents), 0)::int AS gross,
-         COALESCE(SUM(p.amount_cents) FILTER (WHERE p.paid_on >= $2), 0)::int AS gross_month
-       FROM membership_payments p WHERE p.gym_id = $1`,
-      [gymId, monthStart]
+         COALESCE(SUM(p.amount_cents) FILTER (WHERE p.paid_on >= $3), 0)::int AS gross_month
+       FROM membership_payments p
+       WHERE p.gym_id = $1
+         AND ($2::uuid IS NULL OR EXISTS (
+           SELECT 1 FROM gym_members m
+           WHERE m.id = p.member_id AND m.primary_branch_id = $2::uuid))`,
+      [gymId, bf, monthStart]
     ),
     query(
       `SELECT COALESCE(SUM(r.amount_cents), 0)::int AS refunded
-       FROM payment_refunds r WHERE r.gym_id = $1`,
-      [gymId]
+       FROM payment_refunds r
+       WHERE r.gym_id = $1
+         AND ($2::uuid IS NULL OR EXISTS (
+           SELECT 1 FROM membership_payments p
+           JOIN gym_members m ON m.id = p.member_id
+           WHERE p.id = r.payment_id AND m.primary_branch_id = $2::uuid))`,
+      [gymId, bf]
     ),
-    // ── outstanding charges: amount − (payments − refunds on those payments) ──
+    // ── outstanding charges: amount − (payments − refunds on those payments),
+    //     attributed to the charged member's PRIMARY branch ──
     query(
       `WITH net AS (
          SELECT c.amount_cents, c.due_on,
@@ -130,62 +173,83 @@ async function dashboard(gymId) {
                   ) pr ON pr.payment_id = p.id
                   WHERE p.charge_id = c.id
                 ), 0) AS outstanding_cents
-         FROM membership_charges c WHERE c.gym_id = $1
+         FROM membership_charges c
+         WHERE c.gym_id = $1
+           AND ($2::uuid IS NULL OR EXISTS (
+             SELECT 1 FROM gym_members m
+             WHERE m.id = c.member_id AND m.primary_branch_id = $2::uuid))
        )
        SELECT
          COALESCE(SUM(outstanding_cents) FILTER (WHERE outstanding_cents > 0), 0)::int AS outstanding,
-         COALESCE(SUM(outstanding_cents) FILTER (WHERE outstanding_cents > 0 AND due_on < $2), 0)::int AS overdue,
+         COALESCE(SUM(outstanding_cents) FILTER (WHERE outstanding_cents > 0 AND due_on < $3), 0)::int AS overdue,
          COUNT(*) FILTER (WHERE outstanding_cents > 0)::int AS open_charges,
-         COUNT(*) FILTER (WHERE outstanding_cents > 0 AND due_on < $2)::int AS overdue_charges
+         COUNT(*) FILTER (WHERE outstanding_cents > 0 AND due_on < $3)::int AS overdue_charges
        FROM net`,
-      [gymId, today]
+      [gymId, bf, today]
     ),
-    // ── attendance on gym-local calendar days ──
+    // ── attendance on gym-local calendar days, tagged by branch ──
     query(
       `SELECT
-         COUNT(*) FILTER (WHERE local_date = $2)::int AS today,
-         COUNT(*) FILTER (WHERE local_date BETWEEN $3 AND $2)::int AS week,
-         COUNT(*) FILTER (WHERE local_date >= $4 AND local_date <= $5)::int AS month
-       FROM gym_attendance WHERE gym_id = $1`,
-      [gymId, today, weekStart, monthStart, monthEnd]
+         COUNT(*) FILTER (WHERE local_date = $3)::int AS today,
+         COUNT(*) FILTER (WHERE local_date BETWEEN $4 AND $3)::int AS week,
+         COUNT(*) FILTER (WHERE local_date >= $5 AND local_date <= $3)::int AS month
+       FROM gym_attendance
+       WHERE gym_id = $1
+         AND ($2::uuid IS NULL OR branch_id = $2::uuid)`,
+      [gymId, bf, today, weekStart, monthStart]
     ),
     // ── peak hours: check-in CLOCK HOUR in the gym's timezone ──
     query(
-      `SELECT EXTRACT(HOUR FROM check_in_at AT TIME ZONE $2)::int AS hour,
+      `SELECT EXTRACT(HOUR FROM check_in_at AT TIME ZONE $3)::int AS hour,
               COUNT(*)::int AS visits
        FROM gym_attendance
-       WHERE gym_id = $1 AND local_date >= $3 AND local_date <= $4
+       WHERE gym_id = $1
+         AND ($2::uuid IS NULL OR branch_id = $2::uuid)
+         AND local_date >= $4 AND local_date <= $5
        GROUP BY 1`,
-      [gymId, tz, peakStart, today]
+      [gymId, bf, tz, peakStart, today]
     ),
     // ── inactive members: no visit in the window, never-visited included ──
     query(
       `SELECT COUNT(*)::int AS n FROM gym_members m
        WHERE m.gym_id = $1 AND m.status <> 'CANCELLED'
+         AND ($2::uuid IS NULL OR m.primary_branch_id = $2::uuid)
          AND NOT EXISTS (
            SELECT 1 FROM gym_attendance a
-           WHERE a.member_id = m.id AND a.local_date >= $2
+           WHERE a.member_id = m.id AND a.local_date >= $3
          )`,
-      [gymId, inactiveCutoff]
+      [gymId, bf, inactiveCutoff]
     ),
-    // ── trainers + roster coverage ──
+    // ── trainers + roster coverage. In a branch view a trainer counts when
+    //     they can operate there (unrestricted OR listed in branch_ids). ──
     query(
       `SELECT
          (SELECT COUNT(*)::int FROM gym_staff
-           WHERE gym_id = $1 AND gym_role = 'TRAINER' AND status = 'ACTIVE') AS total_trainers,
-         (SELECT COUNT(DISTINCT member_id)::int FROM gym_trainer_assignments
-           WHERE gym_id = $1 AND status = 'ACTIVE') AS assigned_members,
+           WHERE gym_id = $1 AND gym_role = 'TRAINER' AND status = 'ACTIVE'
+             AND ($2::uuid IS NULL
+                  OR branch_ids = '{}'
+                  OR branch_ids @> ARRAY[$2::uuid])) AS total_trainers,
+         (SELECT COUNT(DISTINCT ta.member_id)::int FROM gym_trainer_assignments ta
+           JOIN gym_members m ON m.id = ta.member_id
+           WHERE ta.gym_id = $1 AND ta.status = 'ACTIVE'
+             AND ($2::uuid IS NULL OR m.primary_branch_id = $2::uuid)) AS assigned_members,
          (SELECT COUNT(*)::int FROM gym_members
-           WHERE gym_id = $1 AND status <> 'CANCELLED') AS member_base`,
-      [gymId]
+           WHERE gym_id = $1 AND status <> 'CANCELLED'
+             AND ($2::uuid IS NULL OR primary_branch_id = $2::uuid)) AS member_base`,
+      [gymId, bf]
     ),
-    // ── per-branch split (free-form labels; only when the gym uses them) ──
+    // ── per-branch split: REAL branches (Phase 16). Always the full list so
+    //     the UI can render the selector + table from one payload. ──
     query(
-      `SELECT branch, COUNT(*)::int AS members,
-              COUNT(*) FILTER (WHERE status = 'ACTIVE')::int AS active
-       FROM gym_members
-       WHERE gym_id = $1 AND status <> 'CANCELLED' AND branch IS NOT NULL
-       GROUP BY branch ORDER BY members DESC LIMIT 20`,
+      `SELECT b.id, b.name, b.status,
+              COUNT(m.id) FILTER (WHERE m.id IS NOT NULL)::int AS members,
+              COUNT(m.id) FILTER (WHERE m.status = 'ACTIVE')::int AS active
+       FROM gym_branches b
+       LEFT JOIN gym_members m
+         ON m.primary_branch_id = b.id AND m.status <> 'CANCELLED'
+       WHERE b.gym_id = $1
+       GROUP BY b.id, b.name, b.status
+       ORDER BY (b.status = 'ACTIVE') DESC, members DESC, b.name`,
       [gymId]
     ),
     query('SELECT currency FROM gyms WHERE id = $1', [gymId]),
@@ -257,6 +321,9 @@ async function dashboard(gymId) {
         : 0,
     },
     branches: branchRows.rows,
+    branch_filter: branchFilter
+      ? { id: branchFilter.id, name: branchFilter.name, status: branchFilter.status }
+      : null,
     generated_at: new Date().toISOString(),
     as_of_local: nowLocal,
   };

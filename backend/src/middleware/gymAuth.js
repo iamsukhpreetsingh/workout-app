@@ -97,12 +97,15 @@ function requireGymPermission(permission) {
 
 // Middleware factory: the resolved gym role must hold AT LEAST ONE of these
 // permissions (anyOf semantics, mirrors the web portal's hasPermission).
-function requireGymPermissionAny(permissions) {
+// Accepts either requireGymPermissionAny(['a','b']) or ('a','b') — both shapes
+// are used across the route file, so normalise here.
+function requireGymPermissionAny(...args) {
+  const permissions = Array.isArray(args[0]) ? args[0] : args;
   return (req, res, next) => {
     const ctx = req.gymContext;
     if (!ctx) return res.status(500).json({ error: 'gym context missing — mount requireGymContext first' });
-    const held = (permissions || []).some((p) => (ctx.permissions || []).includes(p));
-    if (!held) return res.status(403).json({ error: `Requires permission: ${(permissions || []).join(' or ')}` });
+    const held = (ctx.permissions || []).some((p) => permissions.includes(p));
+    if (!held) return res.status(403).json({ error: `Requires permission: ${permissions.join(' or ')}` });
     next();
   };
 }

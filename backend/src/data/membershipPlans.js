@@ -12,6 +12,7 @@
 //  - works identically for members with and without app accounts — nothing
 //    in this module ever touches app_user_id.
 const { query, transaction } = require('../db/pool');
+const branches = require('./gymBranches');
 const billing = require('./gymBilling');
 
 class HttpError extends Error {
@@ -133,6 +134,8 @@ function planValidation(data, { partial = false } = {}) {
 async function createPlan(gymId, actor, ip, data, gymAudit) {
   const fields = planValidation(data, { partial: false });
   return transaction(async (client) => {
+    // branch availability (Phase 16): [] / omitted = every branch
+    const planBranchIds = await branches.sanitizeBranchIds(client, gymId, data.branch_ids, 'branch_ids');
     const { rows: dupes } = await client.query(
       'SELECT id FROM membership_plans WHERE gym_id = $1 AND lower(name) = lower($2)',
       [gymId, fields.name]
@@ -141,11 +144,11 @@ async function createPlan(gymId, actor, ip, data, gymAudit) {
     const { rows } = await client.query(
       `INSERT INTO membership_plans
          (gym_id, name, description, duration_value, duration_unit, price_cents,
-          currency, access_level, included_pt_sessions, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+          currency, access_level, included_pt_sessions, status, branch_ids)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::uuid[]) RETURNING *`,
       [gymId, fields.name, fields.description ?? null, fields.duration_value, fields.duration_unit,
        fields.price_cents, fields.currency, fields.access_level, fields.included_pt_sessions,
-       fields.status ?? 'DRAFT']
+       fields.status ?? 'DRAFT', planBranchIds]
     );
     await gymAudit(client, {
       gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
@@ -158,7 +161,13 @@ async function createPlan(gymId, actor, ip, data, gymAudit) {
 
 async function updatePlan(gymId, planId, actor, ip, patch, gymAudit) {
   const fields = planValidation(patch, { partial: true });
+  if (patch.branch_ids !== undefined) {
+    fields.branch_ids = null; // placeholder — sanitized inside the tx below
+  }
   return transaction(async (client) => {
+    if (fields.branch_ids === null) {
+      fields.branch_ids = await branches.sanitizeBranchIds(client, gymId, patch.branch_ids, 'branch_ids');
+    }
     const { rows: beforeRows } = await client.query(
       'SELECT * FROM membership_plans WHERE id = $1 AND gym_id = $2 FOR UPDATE',
       [planId, gymId]
@@ -283,6 +292,21 @@ async function assignMembership(gymId, memberId, actor, ip, { plan_id, starts_on
     }
     if (plan.status === 'ARCHIVED') {
       throw new HttpError(409, 'Archived plans cannot be assigned to members');
+    }
+    // BRANCH-SPECIFIC PLANS (Phase 16): a plan sold at selected branches can
+    // only go to members whose PRIMARY branch is one of them. A legacy member
+    // (no primary branch) needs a primary before such a plan. Renewals are
+    // grandfathered — historical terms are never re-validated.
+    const planBranchIds = plan.branch_ids || [];
+    if (planBranchIds.length) {
+      const memberPrimary = memberRows[0].primary_branch_id;
+      if (!memberPrimary) {
+        throw new HttpError(400,
+          'This plan is limited to specific branches — assign the member a primary branch first');
+      }
+      if (!planBranchIds.includes(memberPrimary)) {
+        throw new HttpError(400, 'This plan is not offered at the member\u2019s primary branch');
+      }
     }
 
     // one running term per member — FROZEN counts (a plan change ends the freeze)

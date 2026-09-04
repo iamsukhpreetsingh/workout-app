@@ -53,7 +53,9 @@ export interface DashboardTrainers {
 }
 
 export interface DashboardBranchRow {
-  branch: string;
+  id: string;
+  name: string;
+  status: 'ACTIVE' | 'INACTIVE';
   members: number;
   active: number;
 }
@@ -65,9 +67,10 @@ export interface GymDashboard {
   attendance: DashboardAttendance;
   trainers: DashboardTrainers;
   branches: DashboardBranchRow[];
+  branch_filter: { id: string; name: string; status: string } | null;
   generated_at: string;
   as_of_local: string;           // "YYYY-MM-DD HH:mm" in the gym's timezone
 }
 
-export const getDashboard = (gymId: string) =>
-  api<GymDashboard>(`/gym/${gymId}/dashboard`);
+export const getDashboard = (gymId: string, branchId?: string) =>
+  api<GymDashboard>(`/gym/${gymId}/dashboard${branchId ? `?branch_id=${branchId}` : ''}`);

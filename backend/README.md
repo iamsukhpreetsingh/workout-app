@@ -201,7 +201,7 @@ need to scan the wider codebase:
 
 | File | Contents |
 |---|---|
-| `migrations/043…053` | 043 core (gyms, gym_roles, gym_staff, gym_members, audit_logs) · 044 onboarding (website/logo/hours/branding, status INACTIVE) · 045 member profiles + `gym_member_invites` + GM- codes · 046 invite expiry/DECLINED · 047 `membership_plans` + `member_memberships` (price snapshots) · 048 `membership_freezes` + `membership_events` + FROZEN · 049 `gym_trainer_assignments` + `gym_staff_invites` · 050 billing (`membership_charges`/`membership_payments`/`payment_refunds`) · 051 `gym_attendance` + `gym_members.qr_token` · 052 `gym_workouts(+exercises)/assignments/saves` · 053 `gym_nutrition_items/assignments/saves` |
+| `migrations/043…056` | 043 core (gyms, gym_roles, gym_staff, gym_members, audit_logs) · 044 onboarding (website/logo/hours/branding, status INACTIVE) · 045 member profiles + `gym_member_invites` + GM- codes · 046 invite expiry/DECLINED · 047 `membership_plans` + `member_memberships` (price snapshots) · 048 `membership_freezes` + `membership_events` + FROZEN · 049 `gym_trainer_assignments` + `gym_staff_invites` · 050 billing (`membership_charges`/`membership_payments`/`payment_refunds`) · 051 `gym_attendance` + `gym_members.qr_token` · 052 `gym_workouts(+exercises)/assignments/saves` · 053 `gym_nutrition_items/assignments/saves` · 054 unified content assignments (drift-tolerant) · 055 announcements + deliveries + `gym_members.branch` label · 056 multi-branch (`gym_branches`, member primary/allowed, staff `branch_ids`, plan `branch_ids`, attendance `branch_id`, `gym_branch_transfers`, label→branch backfill) |
 | `src/middleware/gymAuth.js` | `resolveGymContext(userId, gymId)` (staff path → member path; 403 identical for no-relationship/inactive/removed; rejects non-ACTIVE gyms), `requireGymContext()` (reads `:gymId` or `X-Gym-Id`, validates UUID), `requireGymPermission(perm)` |
 | `src/data/gymPermissions.js` | THE role→permission matrix (`GYM_PERMISSIONS`), `permissionsFor/hasPermission`. Owner has everything; front desk = members.view/create, memberships.view, checkin.manage, payments.record (no financial reports); trainer = assigned_members.view, workouts.manage, nutrition.manage, assignments.manage |
 | `src/data/gyms.js` | gyms CRUD + validation (timezone/hours/branding/contact), profile completion, logo pass-through, staff CRUD (add-by-email auto-creates staff invitations; last-active-OWNER protection; trainer-with-assignments guard), members CRUD + profiles + duplicate-email guard + app linking (exact email, consumes pending invites) + leave/reactivate, `listGymMembershipsForUser` (mobile My Gym, incl. current plan term), audit read, staff-invite lifecycle (create/accept/decline/register — register creates User + staff row atomically), member invite lifecycle (same token mechanics) |
@@ -211,9 +211,13 @@ need to scan the wider codebase:
 | `src/data/gymAttendance.js` | QR tokens (ensure/rotate/resolve — foreign-gym and invalid tokens both → null), `recordCheckIn` (idempotency: same gym-local day OR <6h window = same visit; strict eligibility for QR/workout sources), offline batch (per-item results, future device times corrected + flagged), manual backdate (≤90 days) + delete, list, member ✓/− calendar, dashboard stats (today/week/month, peak hours, inactive 14+ days) |
 | `src/data/gymWorkouts.js` | gym-owned workouts + exercises stored BY NAME, version bump on content edits, assign/end (drafts/archived rejected, duplicates 409), member history, snapshot saves (save/update/delete) + `listForMember` (recommended = published+flagged AND active membership term; assigned = regardless) |
 | `src/data/gymNutrition.js` | same architecture for RECIPE/MEAL_PLAN/DIET_RECOMMENDATION items with `content.entries` + optional targets; assign/save/update/delete + `listForMember` |
+| `src/data/gymContentAssignments.js` | UNIFIED assignment table (Phase 13) for workouts/nutrition direct assignment + gym recommendations; `effective_status` windowing (SCHEDULED/ACTIVE/EXPIRED/ENDED, gym-tz today), EXPIRED-renewal supersedes, gymWorkouts/gymNutrition assignment fns are compat delegates over it |
+| `src/data/gymCommunications.js` | announcements (Phase 14): DRAFT→SCHEDULED→SENT/CANCELLED lifecycle, send-time audience resolution (ALL / specific members / branch label), channels IN_APP (notifications inbox) + PUSH (real Expo token else SKIPPED) + EMAIL (non-app members, SMTP-gated), per-recipient dedupe + crash-safe `dispatchDue`, gym-local wall-clock scheduling |
+| `src/data/gymDashboard.js` | business dashboard (Phase 15/16): ONE payload, ALL aggregation in SQL, gym-scoped, zero-safe; member buckets + expiring, app adoption, financial (net collected/outstanding/overdue), attendance (today/week/month, 24h peak, inactive 7+), trainers, per-branch split; optional `?branch_id=` scope |
+| `src/data/gymBranches.js` | multi-branch (Phase 16): branch CRUD + close/reopen (never delete), member primary/allowed branches + auto label sync (Phase 14 audiences keep working), branch transfers + append-only history, staff branch restriction (`branch_ids`, empty = all; OWNER always all), `resolveVisitBranch` (branch ACTIVE + member access + staff restriction), trainer branch-overlap guard, branch-specific plan guard |
 | `src/data/storageService.js` | shared file storage (S3-or-local) — also hosts the gym-logo functions `uploadGymLogo`/`getGymLogoStream`/`removeGymLogo` (uploads/gym-logos/<gymId>/…; bytes served only via `GET /gym/:gymId/logo` after gym-context authorization) |
-| `src/routes/gym.js` | ALL `/gym` HTTP routes. Structure (in order): `POST /` + `GET /mine`, `/my/memberships` → **`/invite/:token` + `/my/*` routes (MUST precede `/:gymId/*` — Express would read 'my'/'invite' as a gym id; the /my block sits right before the gym-settings section)** → gym settings/lifecycle → logo → members → staff → invites → trainer assignments → plans/memberships → billing → attendance → workouts → nutrition → audit |
-| `backend/test/gym*.test.js` | gymAuth (19), gymOnboarding (18), gymMembers (16), gymInvites (16), gymPlans (14), gymLifecycle (16), gymStaffTrainers (16), gymBilling (14), gymAttendance (17), gymWorkouts (14), gymNutrition (11) — 209 gym tests of the 234 total. All mount the real routers on a throwaway Express app against the real DATABASE_URL with self-cleaning fixtures (fresh random suffix, delete gyms→users in `after`) |
+| `src/routes/gym.js` | ALL `/gym` HTTP routes. Structure (in order): `POST /` + `GET /mine`, `/my/memberships` → **`/invite/:token` + `/my/*` routes (MUST precede `/:gymId/*` — Express would read 'my'/'invite' as a gym id; the /my block sits right before the gym-settings section)** → gym settings/lifecycle → logo → members → staff → invites → trainer assignments (unified) → plans/memberships → billing → attendance → workouts → nutrition → audit → announcements → dashboard → branches |
+| `backend/test/gym*.test.js` | gymAuth (19), gymOnboarding (18), gymMembers (16), gymInvites (16), gymPlans (14), gymLifecycle (16), gymStaffTrainers (16), gymBilling (14), gymAttendance (17), gymWorkouts (14), gymNutrition (11), gymContentAssignments (21), gymCommunications (15), gymDashboard (7), gymBranches (14) — 266 gym tests of the 291 total. All mount the real routers on a throwaway Express app against the real DATABASE_URL with self-cleaning fixtures (fresh random suffix, delete gyms→users in `after`) |
 
 **Conventions an agent must not break:**
 
@@ -446,6 +450,39 @@ need to scan the wider codebase:
   enforced in the data module on every mutation/list, never the frontend.
 - **Standalone users are unaffected**: zero gyms is a fully supported
   state; classes are NOT implemented yet.
+
+#### 3.5.0.1 Multi-branch (Phase 16) — in detail
+
+- **Branch entity**: `gym_branches` (name unique per gym case-insensitive,
+  address, phone, email, hours, timezone, status ACTIVE/INACTIVE). Branches
+  are NEVER deleted — closing (`POST …/close`) sets INACTIVE and blocks NEW
+  check-ins only; members, staff links and every historical row stay.
+- **Member access** = `{primary_branch_id}` ∪ `allowed_branch_ids`; a member
+  with NO primary (legacy/branch-less) may check in at ANY ACTIVE branch.
+  `gym_members.branch` (the Phase 14 text label) is auto-synced to the
+  primary branch's NAME on every write and on branch rename, so
+  SPECIFIC_BRANCH announcement audiences keep resolving unchanged.
+- **Staff restriction**: `gym_staff.branch_ids` (empty = all branches; OWNER
+  rows are always unrestricted and cannot be restricted). Enforced inside
+  every branch-tagged attendance write (`resolveVisitBranch`) — a restricted
+  Front Desk cannot scan or manual-check into another branch (403).
+- **Attendance**: visits accept `branch_id` (explicit) else the member's
+  primary; rows carry `branch_id` (NULL = legacy). The one-visit-per-day
+  dedupe still applies per member per gym-local day — a cross-branch second
+  visit the same day is absorbed into the day's visit.
+- **Plans**: `membership_plans.branch_ids` (empty = all branches); assignment
+  requires the member's PRIMARY branch to be listed (legacy members need a
+  primary first). Renewals are grandfathered.
+- **Trainers**: a branch-restricted trainer can only take members whose
+  `{primary} ∪ allowed` overlaps the trainer's branches.
+- **Transfers**: `POST /members/:id/transfer-branch` moves the primary
+  (promoting it out of `allowed_branch_ids`) and appends an immutable row to
+  `gym_branch_transfers`; per-member history via
+  `GET /members/:id/branch-history`.
+- **Dashboard**: `GET /gym/:gymId/dashboard?branch_id=` scopes every KPI —
+  members/adoption/financial/inactive by member PRIMARY branch, attendance by
+  visit branch, trainers by who can operate there; `branches` always returns
+  the full split (selector + table data in one payload).
 
 #### 3.5.1 Billing & payment ledger (Phase 9) — in detail
 

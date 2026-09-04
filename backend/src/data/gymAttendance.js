@@ -22,6 +22,7 @@
 const crypto = require('crypto');
 const { query, transaction } = require('../db/pool');
 const plans = require('./membershipPlans');
+const branches = require('./gymBranches');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -132,12 +133,17 @@ async function eligibility(client, gymId, memberId, source) {
 
 // ── the one visit = one record check-in ──────────────────────────────────
 
-async function recordCheckIn(gymId, memberId, source, actor, ip, { when, note } = {}, gymAudit) {
+// BRANCH (Phase 16): opts.branch_id (explicit) else the member's PRIMARY
+// branch; legacy members (no primary) stay branch-less. resolveVisitBranch
+// enforces: branch ACTIVE, member access ({primary} ∪ allowed), and the
+// acting staff member's branch restriction (opts.staff_branch_ids).
+async function recordCheckIn(gymId, memberId, source, actor, ip, { when, note, branch_id, staff_branch_ids } = {}, gymAudit) {
   if (!SOURCES.includes(source)) throw new HttpError(400, 'invalid attendance source');
   let claimedTime = null;
   let timeCorrected = false;
   return transaction(async (client) => {
     const { member, warning } = await eligibility(client, gymId, memberId, source);
+    const visitBranchId = await branches.resolveVisitBranch(client, gymId, memberId, branch_id, staff_branch_ids);
 
     // resolve the instant: server time unless an offline sync claims a time
     let checkInAt;
@@ -164,7 +170,7 @@ async function recordCheckIn(gymId, memberId, source, actor, ip, { when, note } 
     // IDEMPOTENCY: lock the member's latest record; same local day or
     // within the visit window → this attempt IS that visit (no new row).
     const { rows: prevRows } = await client.query(
-      `SELECT a.id, a.local_date, a.source, a.check_in_at,
+      `SELECT a.id, a.local_date, a.source, a.check_in_at, a.branch_id,
               (a.check_in_at AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $2))::date AS prev_local_date
        FROM gym_attendance a
        WHERE a.gym_id = $2 AND a.member_id = $1
@@ -190,17 +196,17 @@ async function recordCheckIn(gymId, memberId, source, actor, ip, { when, note } 
 
     const { rows } = await client.query(
       `INSERT INTO gym_attendance
-         (gym_id, member_id, source, check_in_at, local_date, client_time, time_corrected, recorded_by, note)
+         (gym_id, member_id, source, check_in_at, local_date, client_time, time_corrected, recorded_by, note, branch_id)
        VALUES ($1,$2,$3,$4::timestamptz,
                ($4::timestamptz AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $1))::date,
-               $5,$6,$7,$8) RETURNING *`,
+               $5,$6,$7,$8,$9) RETURNING *`,
       [gymId, memberId, source, checkInAt, claimedTime, timeCorrected,
-       actor?.userId ?? actor ?? null, note ?? null]
+       actor?.userId ?? actor ?? null, note ?? null, visitBranchId]
     );
     await gymAudit(client, {
       gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
       action: 'attendance.recorded', entity: 'gym_attendance', entityId: rows[0].id,
-      after: { source, local_date: rows[0].local_date, member_id: memberId },
+      after: { source, local_date: rows[0].local_date, member_id: memberId, branch_id: visitBranchId },
     });
     return {
       attendance: rows[0], duplicate: false, warning,
@@ -211,7 +217,7 @@ async function recordCheckIn(gymId, memberId, source, actor, ip, { when, note } 
 
 // Offline batch: a scanner that was offline syncs queued scans. Per-item
 // result so partial failures never lose the rest of the queue.
-async function recordOfflineBatch(gymId, actor, ip, { items } = {}, gymAudit) {
+async function recordOfflineBatch(gymId, actor, ip, { items, staff_branch_ids } = {}, gymAudit) {
   if (!Array.isArray(items) || !items.length) throw new HttpError(400, 'items is required');
   if (items.length > 200) throw new HttpError(400, 'batch too large (max 200)');
   const results = [];
@@ -225,7 +231,7 @@ async function recordOfflineBatch(gymId, actor, ip, { items } = {}, gymAudit) {
       }
       if (!memberId) { results.push({ ok: false, reason: 'member_id_or_qr_required' }); continue; }
       const r = await recordCheckIn(gymId, memberId, item.source || 'QR_CHECK_IN', actor, ip,
-        { when: item.client_time, note: item.note }, gymAudit);
+        { when: item.client_time, note: item.note, branch_id: item.branch_id, staff_branch_ids }, gymAudit);
       results.push({ ok: true, member_id: memberId, duplicate: r.duplicate, attendance: r.attendance });
     } catch (e) {
       results.push({ ok: false, member_id: item.member_id, reason: e.status ? e.message : 'failed' });
@@ -237,12 +243,13 @@ async function recordOfflineBatch(gymId, actor, ip, { items } = {}, gymAudit) {
 // ── manual correction ────────────────────────────────────────────────────
 
 // Backdated manual entry (up to 90 days) — same dedupe rule applies.
-async function recordManual(gymId, memberId, actor, ip, { local_date, note } = {}, gymAudit) {
+async function recordManual(gymId, memberId, actor, ip, { local_date, note, branch_id, staff_branch_ids } = {}, gymAudit) {
   if (!local_date || !DATE_RE.test(String(local_date))) {
     throw new HttpError(400, 'local_date must be a YYYY-MM-DD date');
   }
   return transaction(async (client) => {
     await eligibility(client, gymId, memberId, 'ADMIN_MANUAL');
+    const visitBranchId = await branches.resolveVisitBranch(client, gymId, memberId, branch_id, staff_branch_ids);
     const { rows: tzRows } = await client.query(
       `SELECT (now() AT TIME ZONE g.timezone)::date AS today,
               now() AT TIME ZONE g.timezone AS local_now
@@ -268,9 +275,9 @@ async function recordManual(gymId, memberId, actor, ip, { local_date, note } = {
       [local_date, gymId]
     );
     const { rows } = await client.query(
-      `INSERT INTO gym_attendance (gym_id, member_id, source, check_in_at, local_date, recorded_by, note)
-       VALUES ($1,$2,'ADMIN_MANUAL',$3::timestamptz,$4::date,$5,$6) RETURNING *`,
-      [gymId, memberId, at.rows[0].ts, local_date, actor?.userId ?? actor ?? null, note ?? null]
+      `INSERT INTO gym_attendance (gym_id, member_id, source, check_in_at, local_date, recorded_by, note, branch_id)
+       VALUES ($1,$2,'ADMIN_MANUAL',$3::timestamptz,$4::date,$5,$6,$7) RETURNING *`,
+      [gymId, memberId, at.rows[0].ts, local_date, actor?.userId ?? actor ?? null, note ?? null, visitBranchId]
     );
     await gymAudit(client, {
       gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
@@ -309,9 +316,12 @@ async function listAttendance(gymId, { date, member_id, limit = 100, offset = 0 
   const limitSql = `LIMIT ${Math.min(Number(limit) || 100, 300)}`;
   const offsetSql = `OFFSET ${Math.max(Number(offset) || 0, 0)}`;
   const { rows } = await query(
-    `SELECT a.*, gm.first_name, gm.last_name, gm.member_code, gm.app_user_id, u.name AS recorded_by_name
+    `SELECT a.*, gm.first_name, gm.last_name, gm.member_code, gm.app_user_id,
+            b.name AS branch_name,
+            u.name AS recorded_by_name
      FROM gym_attendance a
      JOIN gym_members gm ON gm.id = a.member_id
+     LEFT JOIN gym_branches b ON b.id = a.branch_id
      LEFT JOIN users u ON u.id = a.recorded_by
      WHERE ${where.join(' AND ')}
      ORDER BY a.check_in_at DESC ${limitSql} ${offsetSql}`,

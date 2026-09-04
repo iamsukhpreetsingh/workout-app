@@ -1,12 +1,13 @@
-// Reports — the business dashboard (Phase 15). Five KPI groups the owner
-// wakes up for: Members, App adoption, Financial, Attendance, Trainer
-// coverage, plus the per-branch split. Every number comes from ONE backend
-// endpoint that aggregates in SQL on the gym's own calendar — this page is
-// pure presentation. Requires reports.view (OWNER, ADMIN).
+// Reports — the business dashboard (Phase 15, multi-branch since Phase 16).
+// Five KPI groups the owner wakes up for: Members, App adoption, Financial,
+// Attendance, Trainer coverage, plus the per-branch split. The [All Branches
+// ▼] selector scopes every KPI to one branch (or the whole gym). Every
+// number comes from ONE backend endpoint that aggregates in SQL on the gym's
+// own calendar — this page is pure presentation. Requires reports.view.
 import React, { useCallback, useState } from 'react';
 import {
   Card, Col, Row, Statistic, Alert, Button, Skeleton, Tooltip, Table,
-  Typography, Tag,
+  Typography, Tag, Select,
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import PageContainer from '../components/PageContainer';
@@ -19,15 +20,18 @@ export default function ReportsPage() {
   const ctx = useGymContext();
   const gymId = ctx?.gymId ?? null;
   const [data, setData] = useState<GymDashboard | null>(null);
+  const [branchId, setBranchId] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
+  // ONE request per render: the payload carries the full per-branch split,
+  // so the [All Branches ▼] selector re-scopes with a single call
+  const load = useCallback(async (bid?: string) => {
     if (!gymId) return;
     setLoading(true);
     setError(null);
     try {
-      setData(await getDashboard(gymId));
+      setData(await getDashboard(gymId, bid));
     } catch (e: any) {
       setError(e.message || 'Could not load the dashboard');
     } finally {
@@ -36,6 +40,20 @@ export default function ReportsPage() {
   }, [gymId]);
 
   React.useEffect(() => { load(); }, [load]);
+
+  const branchSelector = data && (
+    <Select
+      value={branchId ?? '__all__'}
+      onChange={(v) => { setBranchId(v === '__all__' ? undefined : v); load(v === '__all__' ? undefined : v as string); }}
+      style={{ minWidth: 180 }}
+      options={[
+        { value: '__all__', label: 'All Branches' },
+        ...(data.branches || []).map((b) => ({
+          value: b.id, label: `${b.name}${b.status === 'INACTIVE' ? ' (closed)' : ''}`,
+        })),
+      ]}
+    />
+  );
 
   if (loading) {
     return (
@@ -60,7 +78,7 @@ export default function ReportsPage() {
           showIcon
           message="Could not load the dashboard"
           description={error}
-          action={<Button icon={<ReloadOutlined />} onClick={load}>Retry</Button>}
+          action={<Button icon={<ReloadOutlined />} onClick={() => load(branchId)}>Retry</Button>}
         />
       </PageContainer>
     );
@@ -72,9 +90,11 @@ export default function ReportsPage() {
   return (
     <PageContainer
       title="Reports"
-      subtitle={`Business overview — as of ${data.as_of_local} gym time.`}
+      subtitle={`Business overview — as of ${data.as_of_local} gym time. Showing: ${
+        data.branch_filter ? data.branch_filter.name : 'All Branches'
+      }.`}
       crumbs={[{ label: 'Home', to: '/' }, { label: 'Reports' }]}
-      extra={<Button icon={<ReloadOutlined />} onClick={load}>Refresh</Button>}
+      extra={<>{branchSelector}<Button icon={<ReloadOutlined />} onClick={() => load(branchId)}>Refresh</Button></>}
     >
       {/* ── Members ─────────────────────────────────────────────────────── */}
       <Typography.Title level={5} style={{ marginBottom: 8 }}>Members</Typography.Title>
@@ -160,18 +180,24 @@ export default function ReportsPage() {
       {data.branches.length > 0 && (
         <>
           <Typography.Title level={5} style={{ marginTop: 24, marginBottom: 8 }}>Branches</Typography.Title>
-          <Table
+          <Table<GymDashboard['branches'][number]>
             size="small"
-            rowKey="branch"
+            rowKey="id"
             dataSource={data.branches}
             pagination={false}
             columns={[
-              { title: 'Branch', dataIndex: 'branch' },
+              { title: 'Branch', key: 'name', render: (_: any, r) => (
+                <>
+                  {r.name}{' '}
+                  {r.status === 'INACTIVE' && <Tag color="red">closed</Tag>}
+                  {data.branch_filter?.id === r.id && <Tag color="blue">viewing</Tag>}
+                </>
+              ) },
               { title: 'Members', dataIndex: 'members', width: 140 },
               { title: 'Active', dataIndex: 'active', width: 140,
                 render: (v: number) => <Tag color="green">{v}</Tag> },
               { title: 'Share', key: 'share',
-                render: (_: any, r: { members: number }) =>
+                render: (_: any, r) =>
                   `${Math.round((r.members / Math.max(1, data.app_adoption.total)) * 100)}%` },
             ]}
           />
