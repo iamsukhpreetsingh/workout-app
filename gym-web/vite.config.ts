@@ -37,7 +37,15 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_API_BASE_URL': JSON.stringify(apiBaseUrl),
     },
     server: {
-      port: 5174,
+      port: Number(env.GYMWEB_PORT) || 5174,
+      // GYMWEB_HOST — bind address override (e.g. 0.0.0.0 inside containers
+      // or preview environments where the dev server must accept external
+      // traffic). Unset keeps Vite's localhost-only default.
+      host: env.GYMWEB_HOST || undefined,
+      // GYMWEB_ALLOWED_HOSTS=1 disables the Host-header check for dev-server
+      // requests — required when the server is reached through a preview/
+      // reverse-proxy hostname instead of localhost.
+      allowedHosts: env.GYMWEB_ALLOWED_HOSTS === '1' ? true : undefined,
       proxy: {
         '/auth': { target: proxyTarget, changeOrigin: true },
         '/gym': { target: proxyTarget, changeOrigin: true },
