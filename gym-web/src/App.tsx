@@ -36,7 +36,6 @@ import AttendancePage from './pages/AttendancePage';
 import WorkoutsPage from './pages/WorkoutsPage';
 import NutritionPage from './pages/NutritionPage';
 import AnnouncementsPage from './pages/AnnouncementsPage';
-import AnnouncementsPage from './pages/AnnouncementsPage';
 import ReportsPage from './pages/ReportsPage';
 import StaffPage from './pages/StaffPage';
 import TrainersPage from './pages/TrainersPage';

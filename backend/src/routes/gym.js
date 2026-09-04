@@ -29,8 +29,6 @@ const router = express.Router();
 // Phase 14 announcements (kept beside the router for a stable patch anchor)
 const communications = require('../data/gymCommunications');
 
-// Phase 14 announcements (kept beside the router for a stable patch anchor)
-const communications = require('../data/gymCommunications');
 // Phase 15 business dashboard (same anchor strategy)
 const dashboard = require('../data/gymDashboard');
 
