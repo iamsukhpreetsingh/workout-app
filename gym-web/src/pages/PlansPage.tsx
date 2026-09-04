@@ -3,7 +3,7 @@
 // never rewrites history: existing memberships keep their assignment-time
 // snapshot (see member_memberships).
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Drawer, Form, Input, InputNumber, Select, Tag, App as AntApp, Popconfirm } from 'antd';
+import { Button, Drawer, Form, Input, InputNumber, Select, App as AntApp, Popconfirm } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import PageContainer from '../components/PageContainer';
 import DataTable from '../components/DataTable';

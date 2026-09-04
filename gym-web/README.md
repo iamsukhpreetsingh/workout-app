@@ -11,7 +11,7 @@ mobile app) and speaks to the `/gym` API.
 | File | Contents |
 |---|---|
 | `src/main.tsx` | AntD `ConfigProvider` (ember primary #E8481F, dark algorithm) + `AntApp` wrapper |
-| `src/api.ts` | THE typed backend client. Top: session token storage/refresh (`/auth/login`, `/auth/signup`, `/auth/refresh`, `/auth/me`), `api()` wrapper (Bearer + automatic one-shot refresh on 401 + `X-Gym-Id` selector header). Then typed sections in phase order: gyms (`getMyGyms`, `createGym`, logo, deactivate/reactivate/leave, `getGymPermissions`), members (`listMembers` w/ q/status/connection, `getMember`, link/unlink app, lifecycle cancel/reactivate, invites), billing (`Charge/Payment/Receipt`, summary/ledger/record/refund, `formatMoney`), attendance (`scanQr`, `markAttendance`, backdate/delete, stats, member ✓/− calendar, QR tokens), staff (`listStaff/addStaff/updateStaff` — add may return an INVITATION instead of a row), trainers (assignable list, member assignments, roster), workouts (CRUD, assignments), nutrition (CRUD, assignments), plus `timezoneOptions` |
+| `src/api/` | THE typed backend client, split per domain. `client.ts`: session token storage/refresh (`/auth/login`, `/auth/signup`, `/auth/refresh`, `/auth/logout`), the `api()` wrapper (Bearer + automatic one-shot refresh on 401 + `X-Gym-Id` selector header) and `API_BASE` (from the root `.env`'s `VITE_API_BASE_URL`). Domain modules: `gyms.ts` (profile, permissions, logo, timezones), `members.ts` (members, app invites, public invitation bridge), `staff.ts` (staff + trainer assignments/roster), `memberships.ts` (plans + membership terms/lifecycle), `billing.ts` (charges/payments/receipts, `formatMoney`), `attendance.ts`, `workouts.ts`, `nutrition.ts`. `index.ts` re-exports everything — the app imports `../api` |
 | `src/permissions.tsx` | `GymContext` ({gymId, role, permissions}), `hasPermission(ctx, ...anyOf)` — nav + route guards read this; the data comes from `GET /gym/:id/permissions` |
 | `src/App.tsx` | The shell. Order matters: public `/invite/:token` landing page renders FIRST (before auth gating); then boot (session restore → `getMyGyms` → gym select → permissions fetch); then `Layout` with header (gym switcher, account dropdown with `trigger={['click']}`) + Sider (`NAV_ITEMS` filtered by permission) + `Content` routes via `permGuard(perms, node)`. Also: `signedOut` MUST clear the selected gym id (otherwise re-login skips the permission refetch — this was a real bug) |
 | `src/pages/LoginPage.tsx` | Sign-in / sign-up tabs (same accounts as the mobile app) |
@@ -49,10 +49,12 @@ mobile app) and speaks to the `/gym` API.
    `toISOString()` on date-only values.
 5. **Logo/images**: the logo endpoint authorizes via Bearer token, so
    render it through `fetchGymLogoBlobUrl` (blob URL), not a plain `src`.
-6. **Adding a phase section**: new page in `src/pages`, new typed client
-   section in `src/api.ts`, nav item + guarded route in `App.tsx`, member
-   tab component in `src/components` wired into `MemberDetailPage`. Keep
-   placeholders as `ComingSoon` until the backend ships — no fake data.
+6. **Adding a phase section**: new page in `src/pages`, new typed functions
+   in the matching `src/api/<domain>.ts` module (create the module if it
+   doesn't exist + re-export from `src/api/index.ts`), nav item + guarded
+   route in `App.tsx`, member tab component in `src/components` wired into
+   `MemberDetailPage`. Keep placeholders as `ComingSoon` until the backend
+   ships — no fake data.
 
 ## Run
 
@@ -60,7 +62,33 @@ mobile app) and speaks to the `/gym` API.
 npm install
 npm run dev        # http://localhost:5174 — proxies /auth and /gym to :4000
 npm run build      # tsc -b && vite build
+npm test           # vitest unit tests (no backend needed)
+npm run lint       # eslint (flat config, prettier-aware)
 ```
+
+## Configuration (repo root `.env` — no hard-coded URLs)
+
+All configuration is read from the **repo root `.env`** (one file for the
+mobile app, the backend and this portal — see `../.env.example`). Copy
+`.env.example` to `.env` and adjust:
+
+| Variable | Used by | Meaning |
+|---|---|---|
+| `GYMWEB_PROXY_TARGET` | `npm run dev` | Where the Vite dev server proxies `/auth` and `/gym`. Default `http://localhost:4000`. Point it at any remote backend, e.g. `https://api.mygym.com`. |
+| `VITE_API_BASE_URL` | `npm run build` | Backend origin **baked into the production bundle**. Set it before building to deploy `dist/` as static files against a remote backend (the backend sends permissive CORS). Leave empty for a same-origin deploy behind a reverse proxy. |
+
+```bash
+# develop against a remote backend
+echo 'GYMWEB_PROXY_TARGET=https://api.mygym.com' >> ../.env && npm run dev
+
+# build for a remote backend deploy
+echo 'VITE_API_BASE_URL=https://api.mygym.com' >> ../.env && npm run build
+# → upload dist/ anywhere static; all fetches go to https://api.mygym.com
+```
+
+The api client resolves every request against `API_BASE`
+(`src/api/client.ts`): empty in dev (proxy handles it), the baked-in origin
+in production. There are **no** hard-coded `localhost` URLs in `src/`.
 
 ## Shell & navigation
 
@@ -168,7 +196,7 @@ see `../GYM_MANAGEMENT_DESIGN.md` §16 for phasing.
 
 | File                                     | Contents                                                                                                                                                                                                                                                                                                                                 |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/api.ts`                           | `Charge`, `Payment`, `BillingSummary`, `Receipt` types; `getBillingSummary`, `listGymPayments`, `listGymCharges`, `getMemberBilling`, `createCharge`, `recordPayment`, `refundPayment`, `getReceipt`; `formatMoney` (integer paise → ₹ string)                                                               |
+| `src/api/billing.ts`                     | `Charge`, `Payment`, `BillingSummary`, `Receipt` types; `getBillingSummary`, `listGymPayments`, `listGymCharges`, `getMemberBilling`, `createCharge`, `recordPayment`, `refundPayment`, `getReceipt`; `formatMoney` (integer paise → ₹ string)                                                               |
 | `src/pages/PaymentsPage.tsx`           | `/payments` — four summary cards (Revenue this month / Collected / Due / Overdue) + the receipt ledger (search, method filter, prev/next paging). OWNER/ADMIN only                                                                                                                                                                    |
 | `src/components/MemberPaymentsTab.tsx` | The member's Payments tab: dues table with balances, receipts table,**Record payment** modal (charge picker pre-filled with the outstanding balance, amount, method, backdate picker), **Add charge** modal (payments.manage), per-receipt **Receipt** (printable view) and **Refund** (payments.manage) actions |
 | `src/pages/MemberDetailPage.tsx`       | Mounts`MemberPaymentsTab` as the member's Payments tab                                                                                                                                                                                                                                                                                 |

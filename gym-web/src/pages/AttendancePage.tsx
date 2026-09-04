@@ -14,7 +14,8 @@ import dayjs from 'dayjs';
 import PageContainer from '../components/PageContainer';
 import { useGymContext } from '../permissions';
 import {
-  scanQr, markAttendance, listAttendance, getAttendanceStats, AttendanceRecord, AttendanceStats,
+  scanQr, markAttendance, listAttendance, getAttendanceStats, searchMembers, deleteAttendance,
+  AttendanceRecord, AttendanceStats, GymMember,
 } from '../api';
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
@@ -72,16 +73,12 @@ export default function AttendancePage() {
     if (!search.trim()) return;
     setSearching(true);
     try {
-      const token = localStorage.getItem('gymweb_access');
-      const res = await fetch(`/gym/${ctx!.gymId}/members?q=${encodeURIComponent(search.trim())}&limit=1`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const members = await res.json();
+      const members = await searchMembers(ctx!.gymId, search.trim(), 1);
       if (!Array.isArray(members) || !members.length) {
         message.error('No member found');
         return;
       }
-      const m = members[0];
+      const m = members[0] as GymMember;
       const r = await markAttendance(ctx!.gymId, m.id);
       message.success(r.duplicate
         ? `${m.first_name} was already marked present today`
@@ -199,7 +196,6 @@ export default function AttendancePage() {
                         <Button size="small" danger type="text"
                           onClick={async () => {
                             try {
-                              const { deleteAttendance } = await import('../api');
                               await deleteAttendance(ctx!.gymId, r.id);
                               message.success('Record removed');
                               load();

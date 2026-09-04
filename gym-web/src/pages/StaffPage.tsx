@@ -9,7 +9,6 @@ import { PlusOutlined } from '@ant-design/icons';
 import PageContainer from '../components/PageContainer';
 import DataTable from '../components/DataTable';
 import FilterBar from '../components/FilterBar';
-import StatusBadge from '../components/StatusBadge';
 import { useGymContext } from '../permissions';
 import { listStaff, addStaff, updateStaff, StaffRow } from '../api';
 

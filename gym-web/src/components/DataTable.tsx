@@ -32,7 +32,7 @@ interface Props<T> {
 export default function DataTable<T>({
   columns, rows, rowKey, loading, error, onRetry,
   emptyTitle, emptyDescription, emptyAction,
-  page, pageSize, hasNext, onPageChange,
+  page, hasNext, onPageChange,
   toolbar, onRow, scrollX = 900,
 }: Props<T>) {
   return (

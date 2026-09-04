@@ -10,7 +10,7 @@ import FilterBar from '../components/FilterBar';
 import StatusBadge from '../components/StatusBadge';
 import { usePagedList } from '../hooks/usePagedList';
 import { useGymContext } from '../permissions';
-import { listGymPayments, formatMoney, Payment } from '../api';
+import { listGymPayments, formatMoney, getBillingSummary, Payment } from '../api';
 
 const METHODS = ['CASH', 'UPI', 'CARD', 'BANK_TRANSFER', 'OTHER'];
 
@@ -23,8 +23,8 @@ export default function PaymentsPage() {
   const loadSummary = useCallback(async () => {
     setSummaryError(null);
     try {
-      const { getBillingSummary } = await import('../api');
-      setSummary(await getBillingSummary(ctx!.gymId));
+      const summary = await getBillingSummary(ctx!.gymId);
+      setSummary(summary);
     } catch (e: any) {
       setSummaryError(e);
     }

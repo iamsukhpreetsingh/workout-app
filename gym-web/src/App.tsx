@@ -8,7 +8,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import {
-  Layout, Menu, Select, Typography, Spin, Dropdown, App as AntApp, Button, Empty,
+  Layout, Menu, Select, Typography, Spin, Dropdown, Button, Empty,
 } from 'antd';
 import {
   DashboardOutlined, TeamOutlined, IdcardOutlined, CreditCardOutlined,
@@ -68,7 +68,6 @@ export default function App() {
 }
 
 function Shell() {
-  const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const location = useLocation();
   const [user, setUser] = useState<UserProfile | null>(null);

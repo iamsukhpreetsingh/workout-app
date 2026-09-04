@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Button, Card, Table, Tag, Modal, Form, Input, InputNumber, Select, DatePicker,
-  Typography, App as AntApp, Popconfirm, Descriptions, Space,
+  Typography, App as AntApp, Descriptions, Space,
 } from 'antd';
 import { PlusOutlined, FileTextOutlined, RollbackOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -21,7 +21,7 @@ const METHODS = ['CASH', 'UPI', 'CARD', 'BANK_TRANSFER', 'OTHER'].map((m) => ({ 
 
 export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
   const ctx = useGymContext();
-  const { message, modal } = AntApp.useApp();
+  const { message } = AntApp.useApp();
   const [charges, setCharges] = useState<Charge[] | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [error, setError] = useState<any>(null);

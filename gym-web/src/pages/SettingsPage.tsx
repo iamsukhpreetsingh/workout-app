@@ -9,11 +9,11 @@
 // non-owner staff simply get 403s surfaced as messages.
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Card, Tabs, Form, Input, Button, Select, Upload, Avatar, ColorPicker, Alert,
+  Tabs, Form, Input, Button, Select, Upload, Avatar, ColorPicker, Alert,
   App as AntApp, Popconfirm, Space, Typography, Divider, Skeleton, Tag,
 } from 'antd';
 import { UploadOutlined, DeleteOutlined, PauseCircleOutlined, PlayCircleOutlined } from '@ant-design/icons';
-import { useNavigate, useParams, Navigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   Gym, getGym, updateGym, uploadGymLogo, removeGymLogo, fetchGymLogoBlobUrl,
   deactivateGym, reactivateGym, timezoneOptions,

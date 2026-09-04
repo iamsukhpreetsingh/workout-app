@@ -3,15 +3,14 @@
 // front-desk/backdate actions.
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Button, Card, Tag, Tooltip, Typography, App as AntApp, Popconfirm, DatePicker, Space,
+  Button, Card, Tooltip, Typography, App as AntApp, Popconfirm, DatePicker, Space,
 } from 'antd';
-import { QrcodeOutlined, ReloadOutlined } from '@ant-design/icons';
+import { QrcodeOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import StatusBadge from './StatusBadge';
 import { ErrorState } from './States';
 import { useGymContext, hasPermission } from '../permissions';
 import {
-  getMemberAttendanceHistory, getMemberQr, rotateMemberQr, markAttendance,
+  getMemberAttendanceHistory, getMemberQr, rotateMemberQr, markAttendance, backdateAttendance,
   MemberDay, MemberQr, AttendanceSource,
 } from '../api';
 
@@ -119,7 +118,7 @@ export default function MemberAttendanceTab({ memberId }: { memberId: string }) 
               onConfirm={async () => {
                 if (!backdate) return;
                 try {
-                  await (await import('../api')).backdateAttendance(ctx!.gymId, memberId, backdate.format('YYYY-MM-DD'));
+                  await backdateAttendance(ctx!.gymId, memberId, backdate.format('YYYY-MM-DD'));
                   message.success('Backdated attendance recorded');
                   setBackdate(null);
                   load();

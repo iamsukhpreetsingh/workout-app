@@ -4,8 +4,8 @@
 // reactivation for owners.
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Card, Col, Row, Statistic, Progress, Tag, List, Alert, Button, Skeleton,
-  Typography, Space, Descriptions, App as AntApp, Popconfirm, Result,
+  Card, Col, Row, Progress, Tag, List, Alert, Button, Skeleton,
+  Typography, Space, Descriptions, App as AntApp, Popconfirm,
 } from 'antd';
 import {
   EnvironmentOutlined, PhoneOutlined, MailOutlined, GlobalOutlined,

@@ -32,7 +32,9 @@ export default function TrainersPage() {
   const [assignments, setAssignments] = useState<TrainerAssignment[]>([]);
   const [assignmentsLoading, setAssignmentsLoading] = useState(true);
   const [assignmentsError, setAssignmentsError] = useState<any>(null);
-  const [assignmentsTick, setAssignmentsTick] = useState(0);
+  // the tick is kept for symmetry with StaffPage's reload pattern; nothing
+  // re-bumps it today (assignments reload only with the gym context)
+  const [assignmentsTick] = useState(0);
 
   const loadAssignments = useCallback(async () => {
     setAssignmentsLoading(true);

@@ -5,7 +5,7 @@
 // their own sub-routes. Everything here works with appUserId = NULL.
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Descriptions, Tabs, Button, Tag, Drawer, Modal, Input, App as AntApp, Spin,
+  Descriptions, Tabs, Button, Drawer, Modal, Input, App as AntApp, Spin,
   Typography, Card, Space, Popconfirm, Form,
 } from 'antd';
 import {

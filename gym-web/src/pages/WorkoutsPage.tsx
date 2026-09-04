@@ -7,14 +7,13 @@ import {
   Space, Typography,
 } from 'antd';
 import { PlusOutlined, DeleteOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
 import PageContainer from '../components/PageContainer';
 import DataTable from '../components/DataTable';
 import FilterBar from '../components/FilterBar';
 import StatusBadge from '../components/StatusBadge';
 import { useGymContext, hasPermission } from '../permissions';
 import {
-  listWorkouts, createWorkout, updateWorkout, WorkoutRow,
+  listWorkouts, createWorkout, updateWorkout, getWorkout, WorkoutRow,
 } from '../api';
 
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced'].map((v) => ({ value: v, label: v }));
@@ -23,7 +22,6 @@ const GOALS = ['strength', 'fat_loss', 'endurance', 'mobility', 'general'].map((
 export default function WorkoutsPage() {
   const ctx = useGymContext();
   const { message } = AntApp.useApp();
-  const navigate = useNavigate();
   const [rows, setRows] = useState<WorkoutRow[] | null>(null);
   const [error, setError] = useState<any>(null);
   const [q, setQ] = useState('');
@@ -62,7 +60,6 @@ export default function WorkoutsPage() {
 
   const openEdit = async (w: WorkoutRow) => {
     try {
-      const { getWorkout } = await import('../api');
       const full = await getWorkout(ctx!.gymId, w.id);
       setEditing(full);
       form.setFieldsValue({
