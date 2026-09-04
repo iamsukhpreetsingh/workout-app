@@ -35,6 +35,7 @@ import PaymentsPage from './pages/PaymentsPage';
 import AttendancePage from './pages/AttendancePage';
 import WorkoutsPage from './pages/WorkoutsPage';
 import NutritionPage from './pages/NutritionPage';
+import AnnouncementsPage from './pages/AnnouncementsPage';
 import StaffPage from './pages/StaffPage';
 import TrainersPage from './pages/TrainersPage';
 import PlaceholderPage from './pages/PlaceholderPage';
@@ -209,8 +210,7 @@ function Shell() {
           description="Class schedule, capacity and member bookings." />)} />
 
       <Route path="/communications" element={permGuard(['communications.manage'],
-        <PlaceholderPage section="Communications" title="Communications" phase="Phase 3"
-          description="Announcements and broadcasts to your members." />)} />
+        <AnnouncementsPage gymId={gymId!} />)} />
       <Route path="/reports" element={permGuard(['reports.view'],
         <PlaceholderPage section="Reports" title="Reports" phase="Phase 3"
           description="Revenue, attendance and membership reports." />)} />

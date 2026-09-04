@@ -11,3 +11,4 @@ export * from './attendance';
 export * from './workouts';
 export * from './nutrition';
 export * from './assignments';
+export * from './announcements';
