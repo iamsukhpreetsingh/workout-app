@@ -12,7 +12,8 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import PageContainer from '../components/PageContainer';
-import { useGymContext } from '../permissions';
+import CheckinPosterCard from '../components/CheckinPosterCard';
+import { useGymContext, hasPermission } from '../permissions';
 import {
   scanQr, markAttendance, listAttendance, getAttendanceStats, searchMembers, deleteAttendance,
   AttendanceRecord, AttendanceStats, GymMember,
@@ -95,6 +96,10 @@ export default function AttendancePage() {
 
   const maxPeak = stats?.peak_hours?.length ? Math.max(...stats.peak_hours.map((h) => h.count)) : 1;
   const canCorrect = ctx!.permissions.includes('attendance.manage');
+  // the door poster is a checkin.manage artifact — hide the slot for roles
+  // that can run the desk but must not touch the gym's check-in secret
+  const canPoster = hasPermission(ctx, 'checkin.manage');
+  const topSpan = canPoster ? 8 : 12;
 
   return (
     <PageContainer
@@ -104,7 +109,7 @@ export default function AttendancePage() {
       extra={<Button icon={<ReloadOutlined />} onClick={load}>Refresh</Button>}
     >
       <Row gutter={[16, 16]}>
-        <Col xs={24} md={12}>
+        <Col xs={24} md={topSpan}>
           <Card size="small" title={<><QrcodeOutlined /> QR check-in</>}>
             <Space.Compact style={{ width: '100%' }}>
               <Input
@@ -122,7 +127,7 @@ export default function AttendancePage() {
             </Typography.Text>
           </Card>
         </Col>
-        <Col xs={24} md={12}>
+        <Col xs={24} md={topSpan}>
           <Card size="small" title={<><SearchOutlined /> Search & mark present</>}>
             <Space.Compact style={{ width: '100%' }}>
               <Input
@@ -139,6 +144,11 @@ export default function AttendancePage() {
             </Typography.Text>
           </Card>
         </Col>
+        {canPoster && (
+          <Col xs={24} md={8}>
+            <CheckinPosterCard />
+          </Col>
+        )}
       </Row>
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>

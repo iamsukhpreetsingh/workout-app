@@ -79,3 +79,22 @@ export const getMemberQr = (gymId: string, memberId: string) =>
 
 export const rotateMemberQr = (gymId: string, memberId: string) =>
   api<MemberQr>(`/gym/${gymId}/members/${memberId}/qr/rotate`, { method: 'POST' });
+
+// ── Door poster check-in code (Mobile M6) ────────────────────────────────
+// The QR members scan at the door encodes a 128-bit gym secret (NOT the
+// gym id — a guessable id would let anyone fabricate check-ins). The
+// backend get-or-creates it; rotating invalidates every printed poster.
+export interface GymCheckinCode {
+  checkin_code: string;
+}
+
+// The full payload printed into the poster QR. The mobile check-in screen
+// also accepts the bare code when typed by hand (it strips this prefix
+// case-insensitively server-side), so posters stay scannable AND readable.
+export const checkinPosterPayload = (code: string) => `gymcheckin:v1:${code}`;
+
+export const getCheckinCode = (gymId: string) =>
+  api<GymCheckinCode>(`/gym/${gymId}/attendance/checkin-code`);
+
+export const rotateCheckinCode = (gymId: string) =>
+  api<GymCheckinCode>(`/gym/${gymId}/attendance/checkin-code/rotate`, { method: 'POST' });

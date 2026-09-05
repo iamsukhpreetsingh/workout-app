@@ -254,7 +254,7 @@ export default function MemberDocumentsTab({ memberId }: { memberId: string }) {
               accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
               maxCount={1} onRemove={() => setFile(null)}
               fileList={file ? [{ uid: 'f', name: file.name } as any] : []}
-              beforeUpload={(f) => { setFile(f as unknown as File); return false; }}
+              beforeUpload={(f: any) => { setFile(f as unknown as File); return false; }}
             >
               <p className="ant-upload-drag-icon"><FileTextOutlined /></p>
               <p className="ant-upload-text">Click or drag a file here</p>

@@ -8,6 +8,7 @@ export const GymContext = createContext<{
   gymId: string;
   role: string;
   permissions: string[];
+  gymName?: string;
 } | null>(null);
 
 export function useGymContext() {

@@ -12,7 +12,6 @@ export * from './workouts';
 export * from './nutrition';
 export * from './assignments';
 export * from './announcements';
-export * from './announcements';
 export * from './dashboard';
 export * from './branches';
 export * from './classes';

@@ -144,7 +144,7 @@ function Shell() {
 
   const mine = gyms || [];
   const ctx = perm && perm.gymId === gymId
-    ? { gymId: perm.gymId, role: perm.gymRole, permissions: perm.permissions }
+    ? { gymId: perm.gymId, role: perm.gymRole, permissions: perm.permissions, gymName: perm.gymName }
     : null;
 
   const visibleNav = NAV_ITEMS.filter(
