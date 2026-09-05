@@ -14,6 +14,9 @@ export const TAB_DIET = 'Diet';
 export const HISTORY = 'History';
 export const TAB_PLANS = 'Plans';
 export const TAB_PROGRESS = 'Progress';
+// Gym tab (Mobile M1) — rendered only while the user has a valid gym
+// relationship (GymContext.hasGym); standalone users never see it.
+export const TAB_GYM = 'Gym';
 export const TAB_PROFILE = 'Profile';
 export const EDIT_PROFILE = 'EditProfile';
 export const MAIN_TABS = 'Main';
@@ -36,6 +39,7 @@ export const NOTIFICATION_CENTER = 'NotificationCenter';
 export const DIET_PLAN_BUILDER = 'DietPlanBuilder';
 export const CLIENT_DIET_PLAN_DETAIL = 'ClientDietPlanDetail';
 export const MY_DISHES = 'MyDishes';
+export const GYM_HOME = 'GymMain';
 export const GYM_CLASSES = 'GymClasses';
 export const GYM_DOCUMENTS = 'GymDocuments';
 export const SUPPLEMENT_PLAN_BUILDER = 'SupplementPlanBuilder';

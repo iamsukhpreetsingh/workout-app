@@ -4,42 +4,37 @@
 //   Premium Annual   [ACTIVE]
 //   Valid until 31 Dec 2026
 //
-// Data comes from GET /gym/my/memberships (current plan term) and
-// GET /gym/my/content (Phase 13 UNIFIED assigned + recommended gym content —
-// one call for workouts AND nutrition; the diet strip on Diet home uses the
-// same endpoint). A standalone user gets [] and the card renders nothing —
-// a gym is never required. Assignment rows live on the gym member, so
-// content assigned BEFORE the app account was linked shows up here too.
-// Historical record integrity is unaffected by when the app account was
-// linked: the term predating the link shows exactly the same.
+// Membership rows come from GymContext (Mobile M1) — ONE server-
+// authoritative snapshot shared with the Gym tab; this card no longer
+// fetches /gym/my/memberships itself. (This also fixes the latent crash
+// from importing a non-exported `api` binding here.) Content counts still
+// come from GET /gym/my/content (Phase 13 UNIFIED assigned + recommended
+// gym content — one call for workouts AND nutrition; the diet strip on
+// Diet home uses the same endpoint). A standalone user gets [] and the
+// card renders nothing — a gym is never required. Assignment rows live on
+// the gym member, so content assigned BEFORE the app account was linked
+// shows up here too. Historical record integrity is unaffected by when
+// the app account was linked: the term predating the link shows exactly
+// the same.
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../theme';
 import { GYM_CLASSES, GYM_DOCUMENTS } from '../shared/constants/routes';
-import { api, fetchMyGymContent } from '../lib/gymApi';
-
-const STATUS_COLORS = {
-  ACTIVE: '#16A34A',
-  FROZEN: '#D97706',
-  UPCOMING: '#5856D6',
-  PENDING: '#5856D6',
-  EXPIRED: '#78716C',
-  CANCELLED: '#DC2626',
-};
+import { fetchMyGymContent } from '../lib/gymApi';
+import { useGym } from '../store/GymContext';
+import { statusColor } from '../lib/gymState';
 
 export default function MyGymCard() {
   const colors = useColors();
   const navigation = useNavigation();
-  const [memberships, setMemberships] = useState(null); // null = loading
+  // single source of truth — the Gym tab and this card share one snapshot
+  const { loading, hasGym, memberships } = useGym();
   const [contentCounts, setContentCounts] = useState({});
 
   React.useEffect(() => {
     let cancelled = false;
-    api('/gym/my/memberships')
-      .then((rows) => { if (!cancelled) setMemberships(Array.isArray(rows) ? rows : []); })
-      .catch(() => { if (!cancelled) setMemberships([]); });
     fetchMyGymContent()
       .then((perGym) => {
         if (cancelled || !Array.isArray(perGym)) return;
@@ -56,7 +51,7 @@ export default function MyGymCard() {
     return () => { cancelled = true; };
   }, []);
 
-  if (!memberships || memberships.length === 0) return null; // standalone user
+  if (loading || !hasGym) return null; // standalone user (or still resolving)
 
   const styles = makeStyles(colors);
   return (
@@ -97,8 +92,8 @@ export default function MyGymCard() {
                 </Text>
               ) : null}
             </View>
-            <View style={[styles.badge, { backgroundColor: `${STATUS_COLORS[status] || colors.textDim}22` }]}>
-              <Text style={[styles.badgeText, { color: STATUS_COLORS[status] || colors.textDim }]}>
+            <View style={[styles.badge, { backgroundColor: `${statusColor(status, colors.textDim)}22` }]}>
+              <Text style={[styles.badgeText, { color: statusColor(status, colors.textDim) }]}>
                 {status}
               </Text>
             </View>

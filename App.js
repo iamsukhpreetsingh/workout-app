@@ -6,6 +6,7 @@ import { WorkoutProvider } from './src/store/WorkoutContext';
 import { AppProvider, useApp } from './src/store/AppContext';
 import { AuthProvider, useAuth } from './src/store/AuthContext';
 import { NotificationProvider } from './src/store/NotificationContext';
+import { GymProvider } from './src/store/GymContext';
 import { setHapticsEnabled } from './src/lib/haptics';
 import { syncPendingSessions, syncPendingMeasurements } from './src/lib/syncService';
 import { getViewChoice, setViewChoice, clearViewChoice } from './src/lib/viewMode';
@@ -327,11 +328,16 @@ export default function App() {
   return (
     <AuthProvider>
       <NotificationProvider>
-        <AppProvider>
-          <WorkoutProvider>
-            <AppContent />
-          </WorkoutProvider>
-        </AppProvider>
+        {/* Gym foundation (Mobile M1): needs auth (session gate) and the
+            notification unread count; sits above AppProvider so the Gym
+            tab and MyGymCard share one server-authoritative snapshot. */}
+        <GymProvider>
+          <AppProvider>
+            <WorkoutProvider>
+              <AppContent />
+            </WorkoutProvider>
+          </AppProvider>
+        </GymProvider>
       </NotificationProvider>
     </AuthProvider>
   );

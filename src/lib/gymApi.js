@@ -82,3 +82,14 @@ export async function signGymDocument(documentId, signatureName) {
     body: { signature_name: signatureName },
   });
 }
+
+// ── Gym Foundation (Mobile M1) ──────────────────────────────────────────────
+// The member's own ✓/− attendance calendar across ALL their gyms (last 90
+// days, gym-local): [{ gym_id, gym_name, member_code, history: […] }].
+// READ-ONLY — the foundation phase only displays a summary (see
+// lib/gymState.summarizeAttendance); marking attendance still happens in
+// the existing workout-completion and desk flows. Server-authoritative as
+// always: the member rows come from the JWT, no gym id from the client.
+export async function fetchMyGymAttendanceHistory() {
+  return api('/gym/my/attendance/history');
+}

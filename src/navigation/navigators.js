@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { useApp } from '../store/AppContext';
 import { useAuth } from '../store/AuthContext';
+import { useGym } from '../store/GymContext';
 
 // Screens
 import IntakeFormScreen from '../screens/IntakeFormScreen';
@@ -39,6 +40,7 @@ import ClientDietPlanDetailScreen from '../screens/ClientDietPlanDetailScreen';
 import MyDishesScreen from '../screens/MyDishesScreen';
 import GymClassesScreen from '../screens/GymClassesScreen';
 import GymDocumentsScreen from '../screens/GymDocumentsScreen';
+import GymHomeScreen from '../screens/GymHomeScreen';
 import MealCatalogScreen from '../screens/MealCatalogScreen';
 import WorkoutTemplatesScreen from '../screens/WorkoutTemplatesScreen';
 import WorkoutTemplateEditorScreen from '../screens/WorkoutTemplateEditorScreen';
@@ -67,6 +69,8 @@ import {
   HISTORY,
   TAB_PLANS,
   TAB_PROGRESS,
+  TAB_GYM,
+  GYM_HOME,
   MAIN_TABS,
   SESSION_DETAIL,
   PLAN_DETAIL,
@@ -229,6 +233,7 @@ const TAB_ICONS = {
   [TAB_DIET]: 'nutrition',
   [TAB_PLANS]: 'list',
   [TAB_PROGRESS]: 'trending-up',
+  [TAB_GYM]: 'barbell',
   [TAB_PROFILE]: 'person',
 };
 
@@ -238,6 +243,10 @@ const TAB_ICONS = {
 // workout (full-screen modal) and authentication sit above the shell.
 export function Tabs({ onSwitchView }) {
   const { colors } = useApp();
+  // Gym tab (Mobile M1): exists only while the user has a valid gym
+  // relationship (server-resolved via GymContext). Standalone users get the
+  // exact same 5-tab bar as before — the gym experience never intrudes.
+  const { hasGym } = useGym();
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -279,6 +288,15 @@ export function Tabs({ onSwitchView }) {
           </TabStack>
         )}
       </Tab.Screen>
+      {hasGym && (
+        <Tab.Screen name={TAB_GYM} listeners={tabResetListeners(GYM_HOME)}>
+          {() => (
+            <TabStack onSwitchView={onSwitchView}>
+              <Stack.Screen name={GYM_HOME} component={GymHomeScreen} options={{ title: 'My Gym' }} />
+            </TabStack>
+          )}
+        </Tab.Screen>
+      )}
       <Tab.Screen name={TAB_PROFILE} listeners={tabResetListeners("ProfileMain")}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>

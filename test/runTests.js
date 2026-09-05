@@ -8,6 +8,11 @@ import double from '../src/progressionFormulas/doubleProgression.js';
 import rpe from '../src/progressionFormulas/rpeAutoregulated.js';
 import percentage from '../src/progressionFormulas/percentageBased.js';
 import { positionalPrevs } from '../src/store/prefillSets.js';
+import {
+  resolveActiveMembershipRow,
+  summarizeAttendance,
+  statusColor,
+} from '../src/lib/gymState.js';
 
 let passed = 0;
 const test = (name, fn) => {
@@ -719,4 +724,81 @@ test('trend: recent 3-day improvement reads as moving toward target', () => {
   // avg 2520 → above target, but the recent 3 days (2300) sit closer to 2200
   // than the first 3 (2633) — trending DOWN toward target, not "trending high"
   assert.strictEqual(s.calorieSummary, 'trending down toward target');
+});
+
+// ---- Gym state derivation (Mobile M1) ----
+const GYM_ROWS = [
+  { gym_id: 'g-a', gym_name: 'Alpha Gym', member_code: 'GM-1', membership_status: 'FROZEN', status: 'ACTIVE', ends_on: '2026-02-01' },
+  { gym_id: 'g-b', gym_name: 'Beta Gym', member_code: 'GM-2', membership_status: 'ACTIVE', status: 'ACTIVE', ends_on: '2026-03-01' },
+];
+
+test('gym: first ACTIVE membership term wins when no preference', () => {
+  const row = resolveActiveMembershipRow(GYM_ROWS);
+  assert.strictEqual(row.gym_id, 'g-b');
+});
+
+test('gym: explicit gym selection (multi-gym) wins while still present', () => {
+  const row = resolveActiveMembershipRow(GYM_ROWS, 'g-a');
+  assert.strictEqual(row.gym_id, 'g-a');
+});
+
+test('gym: stale selection falls back to the derived active row', () => {
+  const row = resolveActiveMembershipRow(GYM_ROWS, 'g-gone');
+  assert.strictEqual(row.gym_id, 'g-b');
+});
+
+test('gym: no ACTIVE term anywhere falls back to the first row', () => {
+  const rows = [
+    { gym_id: 'g-x', membership_status: null, status: 'PENDING' },
+    { gym_id: 'g-y', membership_status: null, status: 'FROZEN' },
+  ];
+  assert.strictEqual(resolveActiveMembershipRow(rows).gym_id, 'g-x');
+});
+
+test('gym: empty/absent rows resolve to null (standalone user)', () => {
+  assert.strictEqual(resolveActiveMembershipRow([]), null);
+  assert.strictEqual(resolveActiveMembershipRow(null), null);
+});
+
+test('gym: unknown status uses the fallback color', () => {
+  assert.strictEqual(statusColor('ACTIVE'), '#16A34A');
+  assert.strictEqual(statusColor('WEIRD', '#FB7185'), '#FB7185');
+});
+
+test('attendance: null/empty calendar summarizes to null', () => {
+  assert.strictEqual(summarizeAttendance(null), null);
+  assert.strictEqual(summarizeAttendance([]), null);
+});
+
+test('attendance: counts 7/30-day windows and finds the last visit', () => {
+  // server builds the calendar newest-first; index 0 is the reference day
+  const history = [
+    { date: '2026-03-10', present: false, source: null },
+    { date: '2026-03-09', present: true, source: 'QR_CHECK_IN' },
+    { date: '2026-03-08', present: true, source: 'FRONT_DESK' },
+    { date: '2026-02-20', present: true, source: 'QR_CHECK_IN' }, // 18 days back → 30d only
+    { date: '2026-01-15', present: true, source: 'QR_CHECK_IN' }, // 54 days back → neither
+  ];
+  const s = summarizeAttendance(history, '2026-03-10');
+  assert.strictEqual(s.visits7, 2);
+  assert.strictEqual(s.visits30, 3);
+  assert.strictEqual(s.lastVisit, '2026-03-09');
+});
+
+test('attendance: boundary — exactly 7 days back is outside the 7-day window', () => {
+  const history = [
+    { date: '2026-03-10', present: false, source: null },
+    { date: '2026-03-03', present: true, source: 'QR_CHECK_IN' }, // 7 days back
+  ];
+  const s = summarizeAttendance(history, '2026-03-10');
+  assert.strictEqual(s.visits7, 0);
+  assert.strictEqual(s.visits30, 1);
+  assert.strictEqual(s.lastVisit, '2026-03-03');
+});
+
+test('attendance: all-absent calendar still reports zero visits', () => {
+  const s = summarizeAttendance([{ date: '2026-03-10', present: false, source: null }], '2026-03-10');
+  assert.strictEqual(s.visits7, 0);
+  assert.strictEqual(s.visits30, 0);
+  assert.strictEqual(s.lastVisit, null);
 });
