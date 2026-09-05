@@ -85,6 +85,85 @@ async function resolveQrToken(gymId, token) {
   return member;
 }
 
+// ── gym check-in code (Mobile M6: the member scans the gym's posted QR) ──
+// A posted QR that said only "gym id" would let anyone fabricate check-ins
+// by typing a guessable id. The poster encodes instead a 128-bit secret
+// stored in gyms.settings.checkin_code — rotatable whenever a poster is
+// replaced (old printed copies stop working). The code only IDENTIFIES the
+// gym; the member endpoint still resolves the caller from the JWT and runs
+// the same strict eligibility + idempotency rule as the desk scan.
+
+function newCheckInCode() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+// Get-or-create (FOR UPDATE so two first-calls converge on one code).
+async function ensureCheckInCode(gymId) {
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      'SELECT settings FROM gyms WHERE id = $1 FOR UPDATE',
+      [gymId]
+    );
+    if (!rows.length) throw new HttpError(404, 'Gym not found');
+    const existing = rows[0].settings && rows[0].settings.checkin_code;
+    if (existing) return existing;
+    const code = newCheckInCode();
+    await client.query(
+      `UPDATE gyms SET settings = settings || jsonb_build_object('checkin_code', $2::text),
+                       updated_at = now() WHERE id = $1`,
+      [gymId, code]
+    );
+    return code;
+  });
+}
+
+// Front desk re-prints the poster (lost / worn / suspected copied).
+async function rotateCheckInCode(gymId, actor, ip, gymAudit) {
+  return transaction(async (client) => {
+    const code = newCheckInCode();
+    const { rows } = await client.query(
+      `UPDATE gyms SET settings = settings || jsonb_build_object('checkin_code', $2::text),
+                       updated_at = now()
+       WHERE id = $1 RETURNING settings->>'checkin_code' AS code`,
+      [gymId, code]
+    );
+    if (!rows.length) throw new HttpError(404, 'Gym not found');
+    await gymAudit(client, {
+      gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
+      action: 'gym.checkin_code_rotated', entity: 'gym', entityId: gymId,
+    });
+    return rows[0].code;
+  });
+}
+
+// Resolve a scanned/typed code to its gym. Unknown codes, wrong-length
+// junk and SUSPENDED gyms all answer null — the caller replies 404 the
+// same way for every failure (nothing about the gym estate leaks).
+async function resolveCheckInCode(code) {
+  const trimmed = String(code || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^gymcheckin:v1:/i, ''); // tolerate the full poster payload
+  if (trimmed.length < 8 || trimmed.length > 128) return null;
+  const { rows } = await query(
+    `SELECT id, name, timezone FROM gyms
+     WHERE settings->>'checkin_code' = $1 AND status = 'ACTIVE'
+     LIMIT 1`,
+    [trimmed]
+  );
+  return rows[0] || null;
+}
+
+// The gym's local calendar day right now (drives the history screen's
+// "today" marker without trusting the device clock).
+async function gymLocalToday(gymId) {
+  const { rows } = await query(
+    `SELECT (now() AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $1))::date AS d`,
+    [gymId]
+  );
+  return rows.length ? String(rows[0].d) : null;
+}
+
 // ── membership eligibility (source-aware) ────────────────────────────────
 
 async function eligibility(client, gymId, memberId, source) {
@@ -390,6 +469,7 @@ async function getStats(gymId) {
 
 module.exports = {
   SOURCES, ensureQrToken, rotateQrToken, resolveQrToken,
+  ensureCheckInCode, rotateCheckInCode, resolveCheckInCode, gymLocalToday,
   recordCheckIn, recordOfflineBatch, recordManual, deleteAttendance,
   listAttendance, memberAttendanceCalendar, getStats,
 };

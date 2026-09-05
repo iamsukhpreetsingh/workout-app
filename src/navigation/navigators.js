@@ -43,6 +43,8 @@ import GymDocumentViewScreen from '../screens/GymDocumentViewScreen';
 import GymHomeScreen from '../screens/GymHomeScreen';
 import GymWorkoutsScreen from '../screens/GymWorkoutsScreen';
 import GymNutritionScreen from '../screens/GymNutritionScreen';
+import GymAttendanceScreen from '../screens/GymAttendanceScreen';
+import GymCheckInScreen from '../screens/GymCheckInScreen';
 import GymWorkoutDetailScreen from '../screens/GymWorkoutDetailScreen';
 import GymNutritionDetailScreen from '../screens/GymNutritionDetailScreen';
 import MealCatalogScreen from '../screens/MealCatalogScreen';
@@ -99,6 +101,8 @@ import {
   GYM_NUTRITION_DETAIL,
   GYM_WORKOUTS,
   GYM_NUTRITION,
+  GYM_ATTENDANCE,
+  GYM_CHECK_IN,
   SUPPLEMENT_PLAN_BUILDER,
   COACHING_PLAN_BUILDER,
   COACHING_PLAN_DETAIL,
@@ -188,6 +192,10 @@ function renderDetailScreens(onSwitchView) {
           ACTIVE gym (the dashboard card only shows counts + these links) */}
       <Stack.Screen name={GYM_WORKOUTS} component={GymWorkoutsScreen} options={{ title: 'Gym Workouts' }} />
       <Stack.Screen name={GYM_NUTRITION} component={GymNutritionScreen} options={{ title: 'Gym Nutrition' }} />
+      {/* M6 — attendance experience: month-by-month ✓/− history + the QR
+          check-in (member scans the gym's posted poster code) */}
+      <Stack.Screen name={GYM_ATTENDANCE} component={GymAttendanceScreen} options={{ title: 'Attendance' }} />
+      <Stack.Screen name={GYM_CHECK_IN} component={GymCheckInScreen} options={{ title: 'Check In' }} />
       <Stack.Screen
         name={SUPPLEMENT_PLAN_BUILDER}
         component={CoachingPlanBuilderScreen}

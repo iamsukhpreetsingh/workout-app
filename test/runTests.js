@@ -17,6 +17,12 @@ import {
   pickNextClass,
   billingForGym,
   trainerForGym,
+  attendanceSourceLabel,
+  monthLabel,
+  availableMonths,
+  attendanceMonthRows,
+  attendanceStats,
+  normalizeCheckInCode,
 } from '../src/lib/gymState.js';
 
 let passed = 0;
@@ -902,4 +908,132 @@ test('formatMoney and pickNextClass agree with the frozen/expired dashboard rule
   // amount itself must render identically whatever the term status
   assert.strictEqual(formatMoney(80000, 'INR'), '₹800');
   assert.strictEqual(formatDayMonthYear('2026-08-31'), '31 Aug 2026'); // "Expired on: 31 Aug 2026"
+});
+
+// ── Mobile M6 — attendance experience helpers ────────────────────────────
+
+test('attendanceSourceLabel maps every recorded source and nulls unknowns', () => {
+  assert.strictEqual(attendanceSourceLabel('WORKOUT_COMPLETION'), 'Workout');
+  assert.strictEqual(attendanceSourceLabel('QR_CHECK_IN'), 'QR check-in');
+  assert.strictEqual(attendanceSourceLabel('FRONT_DESK'), 'Front desk');
+  assert.strictEqual(attendanceSourceLabel('ADMIN_MANUAL'), 'Added by gym');
+  assert.strictEqual(attendanceSourceLabel('SOMETHING_NEW'), null); // server may add sources later
+  assert.strictEqual(attendanceSourceLabel(null), null);
+});
+
+test('monthLabel renders full month names and rejects junk', () => {
+  assert.strictEqual(monthLabel('2026-09'), 'September 2026');
+  assert.strictEqual(monthLabel('2026-01'), 'January 2026');
+  assert.strictEqual(monthLabel('2026-13'), null);
+  assert.strictEqual(monthLabel('junk'), null);
+  assert.strictEqual(monthLabel(null), null);
+});
+
+test('availableMonths lists exactly the months the fetched window covers, newest first', () => {
+  // window starts mid-August (oldest row 2026-08-05), today 2026-09-05
+  const history = [
+    { date: '2026-09-05', present: false, source: null },
+    { date: '2026-08-20', present: true, source: 'QR_CHECK_IN' },
+    { date: '2026-08-05', present: false, source: null },
+  ];
+  assert.deepStrictEqual(availableMonths(history, '2026-09-05'), ['2026-09', '2026-08']);
+  // today comes from the server row when the caller omits it
+  assert.deepStrictEqual(availableMonths(history, null), ['2026-09', '2026-08']);
+  assert.deepStrictEqual(availableMonths([], '2026-09-05'), []);
+  assert.deepStrictEqual(availableMonths(null, null), []);
+});
+
+test('attendanceMonthRows renders ✓/−/· honestly: window, future and pre-window days', () => {
+  // September 2026 has 30 days. Server today = 2026-09-05; the fetched
+  // window starts 2026-09-03, so 1–2 are 'unknown' (not faked as absents),
+  // 6–30 are 'future' (the month is still running).
+  const history = [
+    { date: '2026-09-05', present: true, source: 'WORKOUT_COMPLETION' },
+    { date: '2026-09-04', present: false, source: null },
+    { date: '2026-09-03', present: true, source: 'FRONT_DESK' },
+  ];
+  const rows = attendanceMonthRows(history, '2026-09', '2026-09-05');
+  assert.strictEqual(rows.length, 30);
+  const byDay = (d) => rows.find((r) => r.day === d);
+  assert.strictEqual(byDay(1).state, 'unknown');
+  assert.strictEqual(byDay(2).state, 'unknown');
+  assert.strictEqual(byDay(3).state, 'present');
+  assert.strictEqual(byDay(3).sourceLabel, 'Front desk');
+  assert.strictEqual(byDay(4).state, 'absent');
+  assert.strictEqual(byDay(4).sourceLabel, null);
+  assert.strictEqual(byDay(5).state, 'present');
+  assert.strictEqual(byDay(5).sourceLabel, 'Workout');
+  assert.strictEqual(byDay(6).state, 'future');
+  assert.strictEqual(byDay(30).state, 'future');
+  // a past month renders whole: no futures, nothing unknown inside the window
+  const august = attendanceMonthRows(
+    [{ date: '2026-08-31', present: true, source: 'QR_CHECK_IN' }],
+    '2026-08',
+    '2026-09-05'
+  );
+  assert.strictEqual(august.length, 31);
+  assert.strictEqual(august.find((r) => r.day === 31).state, 'present');
+  assert.strictEqual(august.find((r) => r.day === 30).state, 'unknown');
+  assert.strictEqual(august.find((r) => r.day === 1).state, 'unknown');
+  assert.deepStrictEqual(attendanceMonthRows([], '2026-09', '2026-09-05'), []);
+  assert.deepStrictEqual(attendanceMonthRows(history, 'junk', '2026-09-05'), []);
+});
+
+test('attendanceStats: total, this-month, streak (yesterday boundary) and longest run', () => {
+  // today 2026-09-05; visits 1,2,3 (run of 3), then 4 absent, 5 visited
+  const history = [
+    { date: '2026-09-05', present: true, source: 'WORKOUT_COMPLETION' },
+    { date: '2026-09-04', present: false, source: null },
+    { date: '2026-09-03', present: true, source: 'QR_CHECK_IN' },
+    { date: '2026-09-02', present: true, source: null },
+    { date: '2026-09-01', present: true, source: null },
+    { date: '2026-08-31', present: true, source: null }, // streak crosses the month edge
+    { date: '2026-08-15', present: true, source: 'FRONT_DESK' },
+  ];
+  const s = attendanceStats(history, '2026-09-05');
+  assert.strictEqual(s.total, 6);
+  assert.strictEqual(s.thisMonth, 4); // 1,2,3,5 — August days stay out
+  assert.strictEqual(s.streak, 1); // last visit is TODAY, but the 4th broke the run
+  assert.strictEqual(s.longest, 4); // Aug 31–Sep 3
+
+  // streak counts when the last visit was YESTERDAY (gym may not be open
+  // yet today); it dies when the last visit is older
+  const yesterday = attendanceStats(
+    [
+      { date: '2026-09-04', present: true, source: null },
+      { date: '2026-09-03', present: true, source: null },
+      { date: '2026-09-01', present: true, source: null },
+    ],
+    '2026-09-05'
+  );
+  assert.strictEqual(yesterday.streak, 2);
+  const stale = attendanceStats(
+    [{ date: '2026-09-01', present: true, source: null }],
+    '2026-09-05'
+  );
+  assert.strictEqual(stale.streak, 0);
+  assert.strictEqual(stale.total, 1);
+
+  // future-dated rows (bad clock, server lag) never inflate totals
+  const future = attendanceStats(
+    [{ date: '2026-09-06', present: true, source: null }],
+    '2026-09-05'
+  );
+  assert.strictEqual(future.total, 0);
+
+  assert.deepStrictEqual(attendanceStats([], '2026-09-05'), { total: 0, thisMonth: 0, streak: 0, longest: 0 });
+  assert.deepStrictEqual(attendanceStats(null, null), { total: 0, thisMonth: 0, streak: 0, longest: 0 });
+});
+
+test('normalizeCheckInCode accepts poster payloads and typed codes, refuses junk', () => {
+  // full poster payload (case-insensitive prefix) → bare code
+  assert.strictEqual(normalizeCheckInCode('GymCheckIn:V1:abc123def4567890'), 'abc123def4567890');
+  // already-bare code, stray whitespace from manual typing
+  assert.strictEqual(normalizeCheckInCode('  abc123def4567890  '), 'abc123def4567890');
+  // uppercase scan → lowercased (backend stores lowercase)
+  assert.strictEqual(normalizeCheckInCode('ABC123DEF4567890'), 'abc123def4567890');
+  // too short / empty / junk → null, the screen refuses to round-trip it
+  assert.strictEqual(normalizeCheckInCode('abc'), null);
+  assert.strictEqual(normalizeCheckInCode(''), null);
+  assert.strictEqual(normalizeCheckInCode(null), null);
 });

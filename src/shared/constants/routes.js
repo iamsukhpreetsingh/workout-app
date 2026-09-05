@@ -49,6 +49,10 @@ export const GYM_NUTRITION_DETAIL = 'GymNutritionDetail';
 // "Gym Recommended" card on the gym home
 export const GYM_WORKOUTS = 'GymWorkouts';
 export const GYM_NUTRITION = 'GymNutrition';
+// M6 — attendance experience (pool): month-by-month ✓/− history and the
+// member QR check-in (scan the gym's posted poster code)
+export const GYM_ATTENDANCE = 'GymAttendance';
+export const GYM_CHECK_IN = 'GymCheckIn';
 export const SUPPLEMENT_PLAN_BUILDER = 'SupplementPlanBuilder';
 export const COACHING_PLAN_BUILDER = 'CoachingPlanBuilder';
 export const COACHING_PLAN_DETAIL = 'CoachingPlanDetail';

@@ -214,21 +214,57 @@ export default function WorkoutScreen({ navigation }) {
       dispatch({ type: 'CLEAR_WORKOUT' });
       sessionBest.current = {};
       navigation.goBack();
-      // Phase 10 — "Mark today's gym attendance?" Only asked when the user
-      // has an ACTIVE gym membership; the server collapses this into any
-      // earlier QR/desk check-in for the same visit, so tapping Yes after a
-      // QR morning check-in never double-counts. Best-effort: never blocks
-      // or errors on the workout flow.
+      // Mobile M6 — "Mark today's gym attendance?" Explicit confirmation,
+      // never an automatic write: the ask happens only when the user has an
+      // ACTIVE membership (a server fact via /my/memberships), the server
+      // re-validates eligibility, and the one-visit-per-day rule collapses
+      // the mark into any earlier QR/desk check-in. Tapping Mark twice (or
+      // finishing two workouts in a row) shares one in-flight request; the
+      // response's per-gym duplicate flags are reported honestly instead of
+      // silently swallowed.
       hasActiveGymMembership().then((active) => {
         if (!active) return;
+        const submitMark = () => {
+          markGymAttendanceFromWorkout()
+            .then((res) => {
+              const results = Array.isArray(res && res.results) ? res.results : [];
+              const created = results.filter((r) => r && r.attendance && !r.duplicate);
+              const dupes = results.filter((r) => r && r.duplicate);
+              const failed = results.filter((r) => r && r.ok === false);
+              if (created.length) {
+                const where = created.map((g) => g.gym_name).join(', ');
+                Alert.alert('Attendance marked', `Your visit at ${where} is on the books. Nice session.`);
+              } else if (dupes.length) {
+                const where = dupes.map((g) => g.gym_name).join(', ');
+                Alert.alert('Already checked in', `Today's visit at ${where} was already counted — scanning or checking in twice never double-counts.`);
+              } else if (failed.length) {
+                Alert.alert('Could not mark attendance', failed[0].reason || 'The gym could not record this visit.', [
+                  { text: 'Not Now', style: 'cancel' },
+                  { text: 'Retry', onPress: submitMark },
+                ]);
+              } else {
+                // eligible flipped between the membership check and the
+                // mark (renewal lapsed, unlinked) — stay truthful
+                Alert.alert('Attendance not recorded', 'Your gym membership is not active right now.');
+              }
+            })
+            .catch((err) => {
+              const offline = !err || err.status === 0 || err.status == null;
+              Alert.alert(
+                offline ? 'No connection' : 'Could not mark attendance',
+                offline
+                  ? "Couldn't reach the gym server — your visit isn't recorded yet. Retry when you're back online."
+                  : String((err && err.message) || 'Try again.'),
+                [
+                  { text: 'Not Now', style: 'cancel' },
+                  { text: 'Retry', onPress: submitMark },
+                ]
+              );
+            });
+        };
         Alert.alert("Mark today's gym attendance?", 'You just finished a workout.', [
-          { text: 'No', style: 'cancel' },
-          {
-            text: 'Yes',
-            onPress: () => {
-              markGymAttendanceFromWorkout().catch(() => {});
-            },
-          },
+          { text: 'Not Now', style: 'cancel' },
+          { text: 'Mark Attendance', onPress: submitMark },
         ]);
       });
     };

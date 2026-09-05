@@ -339,20 +339,50 @@ registerRoute(router, {
 }, [requireAuth]);
 
 registerRoute(router, {
-  method: 'GET',
-  path: '/my/attendance/history',
-  description: "The app member's own ✓/− calendar across their gyms (last 90 days, gym-local). Requires authentication only.",
+  method: 'POST',
+  path: '/my/attendance/check-in',
+  description: "The connected member checks in by scanning the QR poster at their gym (payload gymcheckin:v1:<code>, or the bare code). The code is the gym's rotatable 128-bit check-in secret — it IDENTIFIES the gym, it never authorizes by itself: unknown codes and suspended gyms answer 404, a gym the caller is not an app-linked member of answers 403, and the visit itself goes through the same strict eligibility + one-visit-per-day idempotency as the desk scan (source QR_CHECK_IN). Auth only (member resolved from the JWT).",
   requiresAuth: true,
   allowedRoles: ['user', 'trainer', 'gym_staff'],
   category: 'Gym',
 }, [requireAuth], async (req, res) => {
   try {
+    const gym = await attendance.resolveCheckInCode((req.body || {}).code);
+    if (!gym) return res.status(404).json({ error: 'Invalid check-in code — ask the front desk' });
+    const memberships = await gyms.listGymMembershipsForUser(req.user.id);
+    const mine = memberships.find((m) => m.gym_id === gym.id);
+    if (!mine) {
+      return res.status(403).json({ error: "This check-in code belongs to another gym — you're not a member there" });
+    }
+    const result = await attendance.recordCheckIn(
+      gym.id, mine.id, 'QR_CHECK_IN', { userId: req.user.id }, req.ip, {}, gyms.gymAudit
+    );
+    res.status(result.duplicate ? 200 : 201).json({
+      gym_id: gym.id, gym_name: gym.name,
+      source: 'QR_CHECK_IN', ...result,
+    });
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/attendance/history',
+  description: "The app member's own ✓/− calendar across their gyms, gym-local and server-dated (each row carries today = the gym's current calendar date, so the device clock is never trusted). Optional ?days= widens the window (default 90, capped at 365) so the app can render previous months. Requires authentication only.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const days = Math.min(Math.max(Number.parseInt(req.query.days, 10) || 90, 7), 365);
     const memberships = await gyms.listGymMembershipsForUser(req.user.id);
     const out = [];
     for (const m of memberships) {
       out.push({
         gym_id: m.gym_id, gym_name: m.gym_name, member_code: m.member_code,
-        history: await attendance.memberAttendanceCalendar(m.gym_id, m.id, 90),
+        today: await attendance.gymLocalToday(m.gym_id),
+        history: await attendance.memberAttendanceCalendar(m.gym_id, m.id, days),
       });
     }
     res.json(out);
@@ -1608,6 +1638,38 @@ registerRoute(router, {
       gyms.gymAudit
     );
     res.status(result.duplicate ? 200 : 201).json(result);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('checkin.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/attendance/checkin-code',
+  description: "The gym's posted QR check-in code — get-or-create (a 128-bit secret in gym settings). Print it as the poster members scan at the door; rotating it invalidates every printed copy. Requires permission: checkin.manage.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('checkin.manage')], async (req, res) => {
+  try {
+    res.json({ checkin_code: await attendance.ensureCheckInCode(req.gymContext.gymId) });
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('checkin.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/attendance/checkin-code/rotate',
+  description: 'Re-issues the posted QR check-in code (lost poster, staff change, suspected copies). Old printed codes stop working immediately; the rotation is audit-logged. Requires permission: checkin.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('checkin.manage')], async (req, res) => {
+  try {
+    res.json({ checkin_code: await attendance.rotateCheckInCode(
+      req.gymContext.gymId, { userId: req.user.id }, req.ip, gyms.gymAudit
+    ) });
   } catch (e) {
     httpError(res, e, 400);
   }

@@ -161,3 +161,170 @@ export function trainerForGym(rows, gymId) {
   const list = Array.isArray(rows) ? rows : [];
   return list.find((r) => r && r.gym_id === gymId) || null;
 }
+
+// ── M6 attendance experience (pure, React-free) ───────────────────────────
+// Everything the history screen and check-in flow DISPLAY is derived here
+// from server facts (the ✓/− calendar, the gym's local `today`). The client
+// never decides eligibility and never derives a date from the device clock.
+
+// Recorded visit sources → the short label shown on ✓ days.
+export const ATTENDANCE_SOURCE_LABELS = {
+  QR_CHECK_IN: 'QR check-in',
+  FRONT_DESK: 'Front desk',
+  WORKOUT_COMPLETION: 'Workout',
+  ADMIN_MANUAL: 'Added by gym',
+};
+
+export function attendanceSourceLabel(source) {
+  return ATTENDANCE_SOURCE_LABELS[source] || null;
+}
+
+const MONTHS_FULL = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+
+/** '2026-09' → 'September 2026' (null for junk — callers fall back). */
+export function monthLabel(ym) {
+  const [y, m] = String(ym || '').slice(0, 7).split('-').map(Number);
+  if (!y || !m || m < 1 || m > 12) return null;
+  return `${MONTHS_FULL[m - 1]} ${y}`;
+}
+
+function daysInMonth(ym) {
+  const [y, m] = String(ym || '').slice(0, 7).split('-').map(Number);
+  if (!y || !m || m < 1 || m > 12) return 0;
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
+const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Months the fetched window can honestly render, newest first, never past
+ * the gym-local today. The window starts at the OLDEST row the server sent
+ * (history is newest-first), so months before that stay unlisted.
+ */
+export function availableMonths(history, todayIso) {
+  if (!Array.isArray(history) || history.length === 0) return [];
+  const today = String(todayIso || (history[0] && history[0].date) || '').slice(0, 10);
+  if (!ISO_RE.test(today)) return [];
+  const oldest = history.reduce(
+    (min, e) => (e && ISO_RE.test(String(e.date)) && String(e.date) < min ? String(e.date) : min),
+    today
+  );
+  const months = [];
+  let [y, m] = oldest.slice(0, 7).split('-').map(Number);
+  const [ty, tm] = today.slice(0, 7).split('-').map(Number);
+  while (y < ty || (y === ty && m <= tm)) {
+    months.push(`${y}-${String(m).padStart(2, '0')}`);
+    m += 1;
+    if (m > 12) { m = 1; y += 1; }
+  }
+  return months.reverse();
+}
+
+/**
+ * One month's ✓/− rows for the history screen:
+ *   state 'present' ✓ (with sourceLabel when the server recorded one),
+ *   'absent' − (inside the fetched window, no visit),
+ *   'future'  · (after the gym-local today — the month is still running),
+ *   'unknown' · (before the fetched window begins — honestly not "no visit").
+ * Days are 1..N of the month regardless of window, so the calendar reads
+ * like a real month.
+ */
+export function attendanceMonthRows(history, ym, todayIso) {
+  if (!Array.isArray(history) || history.length === 0) return [];
+  if (!/^\d{4}-\d{2}$/.test(String(ym || ''))) return [];
+  const today = String(todayIso || (history[0] && history[0].date) || '').slice(0, 10);
+  if (!ISO_RE.test(today)) return [];
+  const oldestFetched = String(history[history.length - 1].date || '');
+  const byDate = new Map();
+  for (const e of history) {
+    if (e && ISO_RE.test(String(e.date))) byDate.set(String(e.date), e);
+  }
+  const n = daysInMonth(ym);
+  const rows = [];
+  for (let d = 1; d <= n; d++) {
+    const iso = `${ym}-${String(d).padStart(2, '0')}`;
+    const entry = byDate.get(iso);
+    let state = 'absent';
+    if (entry) state = entry.present ? 'present' : 'absent';
+    else if (today && iso > today) state = 'future';
+    else if (oldestFetched && iso < oldestFetched) state = 'unknown';
+    rows.push({
+      day: d,
+      iso,
+      state,
+      sourceLabel: state === 'present' ? attendanceSourceLabel(entry.source) : null,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Headline numbers for the history screen — display aggregation of server
+ * facts only (eligibility stays server-side, as always).
+ *   total     — every ✓ day in the fetched window
+ *   thisMonth — ✓ days in the gym-local current month
+ *   streak    — consecutive ✓ days ending today or yesterday (gym-local);
+ *               0 when the last visit is older than yesterday
+ *   longest   — longest ✓ run inside the fetched window
+ */
+export function attendanceStats(history, todayIso) {
+  const empty = { total: 0, thisMonth: 0, streak: 0, longest: 0 };
+  if (!Array.isArray(history) || history.length === 0) return empty;
+  const today = String(todayIso || (history[0] && history[0].date) || '').slice(0, 10);
+  if (!ISO_RE.test(today)) return empty;
+
+  const present = history
+    .filter((e) => e && e.present && ISO_RE.test(String(e.date)) && String(e.date) <= today)
+    .map((e) => String(e.date))
+    .sort(); // ascending
+
+  const month = today.slice(0, 7);
+  let total = 0;
+  let thisMonth = 0;
+  for (const iso of present) {
+    total += 1;
+    if (iso.slice(0, 7) === month) thisMonth += 1;
+  }
+
+  let longest = 0;
+  let run = 0;
+  let prevMs = null;
+  for (const iso of present) {
+    const ms = Date.parse(`${iso}T00:00:00Z`);
+    run = prevMs !== null && ms - prevMs === 86400000 ? run + 1 : 1;
+    if (run > longest) longest = run;
+    prevMs = ms;
+  }
+
+  let streak = 0;
+  if (present.length) {
+    const todayMs = Date.parse(`${today}T00:00:00Z`);
+    const lastMs = Date.parse(`${present[present.length - 1]}T00:00:00Z`);
+    const gap = (todayMs - lastMs) / 86400000;
+    if (gap === 0 || gap === 1) {
+      streak = 1;
+      for (let i = present.length - 1; i > 0; i--) {
+        const a = Date.parse(`${present[i]}T00:00:00Z`);
+        const b = Date.parse(`${present[i - 1]}T00:00:00Z`);
+        if (a - b === 86400000) streak += 1;
+        else break;
+      }
+    }
+  }
+
+  return { total, thisMonth, streak, longest };
+}
+
+/**
+ * The poster payload → the code the backend expects. Scans arrive as
+ * gymcheckin:v1:<code>; typed entry is usually already the bare code.
+ * Null for anything that cannot possibly be a code (empty / absurd length)
+ * so the screen can refuse to submit instead of round-tripping junk.
+ */
+export function normalizeCheckInCode(raw) {
+  const code = String(raw || '')
+    .replace(/\s+/g, '')
+    .replace(/^gymcheckin:v1:/i, '');
+  return code.length >= 8 && code.length <= 128 ? code.toLowerCase() : null;
+}

@@ -7,11 +7,14 @@ import { useColors } from '../theme';
 // Full-screen barcode scanner. Emits the scanned code via onScanned(code)
 // and closes. Handles the Android 13+ permission flow; a denied permission
 // offers a jump to the app settings (typed entry remains the fallback).
-export default function BarcodeScannerModal({ visible, onClose, onScanned }) {
+// barcodeTypes/title/hint are optional so the gym QR check-in (Mobile M6)
+// can reuse this for QR posters without changing the diet scanner's behavior.
+export default function BarcodeScannerModal({ visible, onClose, onScanned, barcodeTypes, title, hint }) {
   const colors = useColors();
   const styles = makeStyles(colors);
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
+  const types = barcodeTypes || ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128'];
 
   useEffect(() => {
     if (visible) setScanned(false); // fresh scan state each open
@@ -72,7 +75,7 @@ export default function BarcodeScannerModal({ visible, onClose, onScanned }) {
         <CameraView
           style={styles.camera}
           barcodeScannerSettings={{
-            barcodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128'],
+            barcodeTypes: types,
           }}
           onBarcodeScanned={handleBarcode}
         />
@@ -90,10 +93,10 @@ export default function BarcodeScannerModal({ visible, onClose, onScanned }) {
           <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
             <Ionicons name="close" size={26} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.title}>Scan Barcode</Text>
+          <Text style={styles.title}>{title || 'Scan Barcode'}</Text>
           <View style={{ width: 40 }} />
         </View>
-        <Text style={styles.hint}>Point at the product's barcode</Text>
+        <Text style={styles.hint}>{hint || "Point at the product's barcode"}</Text>
       </View>
     </Modal>
   );

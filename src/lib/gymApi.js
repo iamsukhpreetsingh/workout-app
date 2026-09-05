@@ -38,8 +38,30 @@ export async function fetchMyGymContent() {
 // The actual mark. Server-side this is source WORKOUT_COMPLETION and the
 // idempotency rule collapses it into an earlier QR/desk check-in — the
 // same intended visit is never double-counted.
-export async function markGymAttendanceFromWorkout() {
-  return api('/gym/my/attendance/workout', { method: 'POST' });
+// Single-flight guard: finishing two workouts back-to-back (or a retry
+// racing a slow first call) shares ONE request — the backend is idempotent
+// anyway (same local day collapses into the earlier visit), this just
+// keeps the UI honest and halves the traffic.
+let workoutMarkInFlight = null;
+export function markGymAttendanceFromWorkout() {
+  if (workoutMarkInFlight) return workoutMarkInFlight;
+  workoutMarkInFlight = api('/gym/my/attendance/workout', { method: 'POST' }).finally(() => {
+    workoutMarkInFlight = null;
+  });
+  return workoutMarkInFlight;
+}
+
+// ── Gym attendance experience (Mobile M6) ─────────────────────────────
+// Member-initiated QR check-in: the poster QR at the gym encodes the
+// gym's rotatable secret code (payload gymcheckin:v1:<code> — typed codes
+// work too). The backend resolves the gym from the code, verifies the
+// caller's membership THERE, and records QR_CHECK_IN under the same
+// one-visit-per-day rule as the desk scan. The client never sends a gym id.
+export async function checkInWithGymQr(code) {
+  return api('/gym/my/attendance/check-in', {
+    method: 'POST',
+    body: { code },
+  });
 }
 
 
@@ -84,17 +106,22 @@ export async function signGymDocument(documentId, signatureName) {
 }
 
 // ── Gym Foundation (Mobile M1) ──────────────────────────────────────────────
-// The member's own ✓/− attendance calendar across ALL their gyms (last 90
-// days, gym-local): [{ gym_id, gym_name, member_code, history: […] }].
-// READ-ONLY — the foundation phase only displays a summary (see
-// lib/gymState.summarizeAttendance); marking attendance still happens in
-// the existing workout-completion and desk flows. Server-authoritative as
-// always: the member rows come from the JWT, no gym id from the client.
-export async function fetchMyGymAttendanceHistory() {
-  return api('/gym/my/attendance/history');
+// The member's own ✓/− attendance calendar across ALL their gyms, gym-local:
+// [{ gym_id, gym_name, member_code, today, history: […] }]. Server-
+// authoritative as always: the member rows come from the JWT, no gym id
+// from the client. Since M6 the display is a full month-by-month history
+// (see gymState.attendanceMonthRows) and marking is no longer read-only —
+// the member can check in via the gym's posted QR (below) or the explicit
+// workout-completion prompt (above).
+export async function fetchMyGymAttendanceHistory({ days } = {}) {
+  // ?days= widens the server window (default 90, capped 365) so the
+  // history screen can render previous months. Every row is gym-local and
+  // carries the gym's `today` — the device clock is never trusted.
+  const qs = days ? `?days=${encodeURIComponent(String(days))}` : '';
+  return api(`/gym/my/attendance/history${qs}`);
 }
 
-// ── Gym Member Home dashboard (Mobile M5) ───────────────────────────────────
+// ── Gym Member Home dashboard (Mobile M5) ────────────────────────────────
 // All surfaces below are per-gym arrays keyed by gym_id — the home screen
 // slices them to the ACTIVE gym (same shape as fetchMyGymContent; classes
 // come from the Phase 17 wrapper above). Everything authoritative stays

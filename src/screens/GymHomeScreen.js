@@ -65,7 +65,7 @@ import {
   billingForGym,
   trainerForGym,
 } from '../lib/gymState';
-import { GYM_WORKOUTS, GYM_NUTRITION, GYM_CLASSES } from '../shared/constants/routes';
+import { GYM_WORKOUTS, GYM_NUTRITION, GYM_CLASSES, GYM_ATTENDANCE, GYM_CHECK_IN } from '../shared/constants/routes';
 
 // "Tue, 1 Sep" — the same UTC-safe class date rendering GymClassesScreen
 // uses (gym-local schedule dates must not shift with the device timezone).
@@ -305,6 +305,33 @@ export default function GymHomeScreen() {
       {!attendance.lastVisit ? (
         <Text style={styles.meta}>No visits in the last 90 days.</Text>
       ) : null}
+      {/* M6 — attendance experience entries. Check In only when the server
+          says the membership is ACTIVE (the endpoint re-validates anyway);
+          history stays open for EXPIRED/FROZEN members — recorded visits
+          are facts, not privileges. */}
+      <View style={styles.attActions}>
+        {membership?.status === 'ACTIVE' ? (
+          <TouchableOpacity
+            style={[styles.attAction, styles.attActionPrimary]}
+            onPress={() => navigation.navigate(GYM_CHECK_IN)}
+            accessibilityRole="button"
+            accessibilityLabel="Check in with QR"
+          >
+            <Ionicons name="qr-code-outline" size={15} color="#fff" />
+            <Text style={styles.attActionPrimaryText}>Check in with QR</Text>
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity
+          style={styles.attAction}
+          onPress={() => navigation.navigate(GYM_ATTENDANCE)}
+          accessibilityRole="button"
+          accessibilityLabel="View full attendance history"
+        >
+          <Ionicons name="calendar-outline" size={15} color={colors.primary} />
+          <Text style={styles.attActionText}>View full history</Text>
+          <Ionicons name="chevron-forward" size={13} color={colors.textDim} />
+        </TouchableOpacity>
+      </View>
     </>
   ) : (
     <Text style={styles.meta}>No attendance recorded yet.</Text>
@@ -457,7 +484,7 @@ export default function GymHomeScreen() {
     <Text style={styles.meta}>No announcements right now.</Text>
   ) : (
     myAnnouncements.map((a, i) => (
-      <View key={a.id} style={[styles.annRow, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+      <View key={a.id} style={[styles.annRow, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: spacing.sm }]}>
         <View style={styles.annHead}>
           <Text style={styles.annTitle} numberOfLines={1}>{a.title}</Text>
           <Text style={styles.annDate}>
@@ -642,7 +669,7 @@ const makeStyles = (colors) => StyleSheet.create({
   footnote: { color: colors.textDim, fontSize: 11, marginTop: spacing.sm },
   settledRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   settledText: { color: colors.text, fontSize: 14, fontWeight: '800' },
-  annRow: { paddingTop: i0 => i0, paddingBottom: spacing.sm },
+  annRow: { paddingTop: 0, paddingBottom: spacing.sm },
   annHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   annTitle: { color: colors.text, fontSize: 13, fontWeight: '700', flex: 1 },
   annDate: { color: colors.textDim, fontSize: 11 },

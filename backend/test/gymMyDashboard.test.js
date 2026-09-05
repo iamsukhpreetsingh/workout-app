@@ -305,3 +305,111 @@ test('trainer: stays visible after the term expires (assignment is member-scoped
   const a = rows.find((r) => r.gym_id === gymA.id);
   assert.strictEqual(a.trainer_name, 'Rohit Sharma');
 });
+
+// ── Mobile M6 — the member attendance experience ───────────────────────────
+
+const HEX_RE = /^[0-9a-f]{32}$/;
+
+test('checkin-code: staff can issue (get-or-create) and rotate the posted QR code', async () => {
+  const first = await (await api(ownerToken(), 'GET', `/gym/${gymB.id}/attendance/checkin-code`)).json();
+  assert.strictEqual(first.checkin_code.length, 32, '128-bit secret');
+  assert.match(first.checkin_code, HEX_RE, 'lowercase hex, not a guessable gym id');
+
+  // get-or-create is stable — reprinting the poster never rotates the code
+  const again = await (await api(ownerToken(), 'GET', `/gym/${gymB.id}/attendance/checkin-code`)).json();
+  assert.strictEqual(again.checkin_code, first.checkin_code);
+
+  // rotate → brand-new code (old printed copies stop working)
+  const rot = await (await api(ownerToken(), 'POST', `/gym/${gymB.id}/attendance/checkin-code/rotate`, {})).json();
+  assert.strictEqual(rot.status !== undefined ? rot.status : 200, 200);
+  assert.match(rot.checkin_code, HEX_RE);
+  assert.notStrictEqual(rot.checkin_code, first.checkin_code);
+  global.__codeB = rot.checkin_code;
+});
+
+test('checkin-code: auth and role gates (member of the gym cannot manage codes)', async () => {
+  assert.strictEqual((await api(null, 'GET', `/gym/${gymB.id}/attendance/checkin-code`)).status, 401);
+  assert.strictEqual((await api(null, 'POST', `/gym/${gymB.id}/attendance/checkin-code/rotate`, {})).status, 401);
+  // the member IS a gym_member row here, but MEMBER holds no checkin.manage
+  assert.strictEqual((await api(memberToken(), 'GET', `/gym/${gymB.id}/attendance/checkin-code`)).status, 403);
+});
+
+test('member QR check-in: happy path, then a re-scan reconciles (never double-counts)', async () => {
+  // member B holds no membership term at gym B — the Phase-10 ledger rule
+  // admits term-less members (trial / day visitor), same as the desk scan
+  const first = await api(memberToken(), 'POST', '/gym/my/attendance/check-in', { code: global.__codeB });
+  assert.strictEqual(first.status, 201, `first scan: ${first.status}`);
+  const body = await first.json();
+  assert.strictEqual(body.gym_id, gymB.id);
+  assert.strictEqual(body.gym_name, gymB.name);
+  assert.strictEqual(body.source, 'QR_CHECK_IN');
+  assert.strictEqual(body.duplicate, false);
+  assert.ok(body.attendance.id, 'visit recorded');
+  assert.ok(body.attendance.local_date, 'gym-local date derived server-side');
+
+  // tap/scan again → the SAME visit comes back, honestly flagged
+  const second = api(memberToken(), 'POST', '/gym/my/attendance/check-in', { code: global.__codeB });
+  const again = await second;
+  assert.strictEqual(again.status, 200, 'idempotent re-scan is 200, not a new 201');
+  const dup = await again.json();
+  assert.strictEqual(dup.duplicate, true);
+  assert.strictEqual(dup.attendance.id, body.attendance.id, 'one visit = one record');
+});
+
+test('member QR check-in: unknown, short and missing codes all answer 404 identically', async () => {
+  assert.strictEqual((await api(memberToken(), 'POST', '/gym/my/attendance/check-in', { code: 'nosuchcode1234' })).status, 404);
+  assert.strictEqual((await api(memberToken(), 'POST', '/gym/my/attendance/check-in', { code: 'ab' })).status, 404);
+  assert.strictEqual((await api(memberToken(), 'POST', '/gym/my/attendance/check-in', {})).status, 404);
+  assert.strictEqual((await api(memberToken(), 'POST', '/gym/my/attendance/check-in', { code: null })).status, 404);
+  // and the full poster payload form works too (prefix stripped server-side)
+  const payload = await api(memberToken(), 'POST', '/gym/my/attendance/check-in', { code: `gymcheckin:v1:${global.__codeB}` });
+  assert.strictEqual(payload.status, 200, 'payload form resolves to the same gym');
+  assert.strictEqual((await payload.json()).duplicate, true);
+});
+
+test('member QR check-in: a code from a gym the caller does not belong to is 403; suspended gym 404s', async () => {
+  // a third gym the member is NOT linked to
+  const gymC = (await (await api(ownerToken(), 'POST', '/gym', { name: `DashGym C ${suffix}` })).json()).gym;
+  createdGymIds.push(gymC.id);
+  const codeC = (await (await api(ownerToken(), 'GET', `/gym/${gymC.id}/attendance/checkin-code`)).json()).checkin_code;
+
+  const foreign = await api(memberToken(), 'POST', '/gym/my/attendance/check-in', { code: codeC });
+  assert.strictEqual(foreign.status, 403, 'never records a visit at a foreign gym');
+  assert.match((await foreign.json()).error, /another gym/);
+
+  // suspended gym → its code stops resolving entirely (no information leak)
+  const deact = await api(ownerToken(), 'POST', `/gym/${gymC.id}/deactivate`, {});
+  assert.strictEqual(deact.status, 200, `deactivate: ${deact.status}`);
+  assert.strictEqual((await api(memberToken(), 'POST', '/gym/my/attendance/check-in', { code: codeC })).status, 404);
+});
+
+test('member QR check-in: EXPIRED membership is rejected by the strict source rule', async () => {
+  // termA was expired by the memberships tests above; gym A now issues a code
+  const codeA = (await (await api(ownerToken(), 'GET', `/gym/${gymA.id}/attendance/checkin-code`)).json()).checkin_code;
+  const res = await api(memberToken(), 'POST', '/gym/my/attendance/check-in', { code: codeA });
+  assert.strictEqual(res.status, 403);
+  assert.match((await res.json()).error, /expired/, 'the rejection names the reason');
+});
+
+test('attendance history: ?days widens the window; rows carry the gym-local today', async () => {
+  // default window stays 90 (back-compat)
+  const def = await (await api(memberToken(), 'GET', '/gym/my/attendance/history')).json();
+  const defB = def.find((r) => r.gym_id === gymB.id);
+  assert.strictEqual(defB.history.length, 90);
+  assert.match(defB.today, /^\d{4}-\d{2}-\d{2}$/);
+  assert.strictEqual(defB.history[0].date, defB.today, 'the calendar starts at the gym-local today');
+  assert.strictEqual(defB.history[0].present, true, "today's QR visit shows ✓");
+  assert.strictEqual(defB.history[0].source, 'QR_CHECK_IN');
+
+  // widened window: 365 days for the month-by-month view
+  const wide = await (await api(memberToken(), 'GET', '/gym/my/attendance/history?days=365')).json();
+  const wideB = wide.find((r) => r.gym_id === gymB.id);
+  assert.strictEqual(wideB.history.length, 365);
+  assert.strictEqual(wideB.history[wideB.history.length - 1].present, false, 'oldest row is a plain − day');
+
+  // clamped: absurd values stay inside sane bounds
+  const tiny = await (await api(memberToken(), 'GET', '/gym/my/attendance/history?days=1')).json();
+  assert.strictEqual(tiny.find((r) => r.gym_id === gymB.id).history.length, 7, 'floor of 7 days');
+  const huge = await (await api(memberToken(), 'GET', '/gym/my/attendance/history?days=99999')).json();
+  assert.strictEqual(huge.find((r) => r.gym_id === gymB.id).history.length, 365, 'ceiling of 365 days');
+});
