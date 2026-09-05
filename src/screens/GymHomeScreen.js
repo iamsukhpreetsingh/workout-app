@@ -2,10 +2,10 @@
 //
 // One screen answers "what is my gym life right now": membership term
 // (ACTIVE / FROZEN / EXPIRED — exactly as the server says it), attendance
-// this month, the gym's recommended programs, the member's next BOOKED
-// class, outstanding payments and the latest announcements. The trainer
-// lives on Profile (+ Settings disconnect) only — one trainer surface, not
-// two. It stays a dashboard: the program LISTS moved to their own pool
+// this month, the gym's recommended programs, the member's BOOKED classes
+// (the enrolled list — never the whole schedule), outstanding payments and
+// the latest announcements. The trainer lives on Profile (+ Settings
+// disconnect) only — one trainer surface, not two. It stays a dashboard: the program LISTS moved to their own pool
 // screens (GymWorkouts / GymNutrition), reachable from the "Gym Recommended"
 // card, the way Classes and Documents already live on their own screens.
 //
@@ -61,7 +61,7 @@ import {
   statusColor,
   formatMoney,
   formatDayMonthYear,
-  pickMyNextBookedClass,
+  myBookedClasses,
   billingForGym,
 } from '../lib/gymState';
 import { GYM_WORKOUTS, GYM_NUTRITION, GYM_CLASSES, GYM_ATTENDANCE, GYM_CHECK_IN, GYM_DOCUMENTS } from '../shared/constants/routes';
@@ -77,13 +77,8 @@ function classDayLabel(iso) {
 
 const OPEN_CHARGE_STATUSES = ['DUE', 'OVERDUE', 'PARTIAL'];
 
-// booking/charge badge palettes — same hues the Classes screen and the
-// membership badge use, so status colors stay consistent across the app
-const CLASS_STATUS_COLORS = {
-  BOOKED: '#16A34A',
-  ATTENDED: '#5856D6',
-  WAITLISTED: '#D97706',
-};
+// charge badge palette — same hues the Classes screen and the membership
+// badge use, so status colors stay consistent across the app
 const CHARGE_STATUS_COLORS = {
   DUE: '#5856D6',
   OVERDUE: '#DC2626',
@@ -125,10 +120,12 @@ export default function GymHomeScreen() {
     const rows = Array.isArray(content.data) ? content.data : [];
     return rows.find((g) => g && g.gym_id === gymId) || null;
   }, [content.data, gymId]);
-  // MY next booked class — enrolled-only (a waitlist spot is not a seat; the
-  // full schedule lives on the Classes screen). The waitlist count keeps the
-  // empty state honest instead of silently hiding a pending spot.
-  const nextClass = useMemo(() => pickMyNextBookedClass(classes.data, gymId), [classes.data, gymId]);
+  // MY booked classes — the enrolled list, not a teaser: enrolled in 2 of 10
+  // → exactly those 2 rows (a waitlist spot is not a seat; the full schedule
+  // lives on the Classes screen and is never echoed here). The waitlist
+  // count keeps the empty state / footnote honest instead of silently
+  // hiding a pending spot.
+  const myBooked = useMemo(() => myBookedClasses(classes.data, gymId), [classes.data, gymId]);
   const waitlistedCount = useMemo(() =>
     (Array.isArray(classes.data) ? classes.data : [])
       .filter((c) => c && c.my_status === 'WAITLISTED' && (!gymId || c.gym_id === gymId)).length,
@@ -377,40 +374,41 @@ export default function GymHomeScreen() {
     </>
   );
 
-  // ── upcoming class card ───────────────────────────────────────────────────
-  const classBody = nextClass ? (
-    <TouchableOpacity
-      style={styles.classRow}
-      onPress={() => navigation.navigate(GYM_CLASSES)}
-      accessibilityRole="button"
-      accessibilityLabel="Open the class schedule"
-    >
-      <View style={{ flex: 1 }}>
-        <Text style={styles.planName} numberOfLines={1}>{nextClass.class_type}</Text>
-        <Text style={styles.meta}>
-          {classDayLabel(nextClass.class_date)} · {String(nextClass.start_time).slice(0, 5)}–{String(nextClass.end_time).slice(0, 5)}
-        </Text>
-        {nextClass.trainer_name || nextClass.branch_name || nextClass.room ? (
-          <Text style={styles.meta} numberOfLines={1}>
-            {[nextClass.trainer_name, nextClass.branch_name, nextClass.room].filter(Boolean).join(' · ')}
-          </Text>
-        ) : null}
-      </View>
-      {nextClass.my_status ? (
-        <View style={[styles.badge, { backgroundColor: `${CLASS_STATUS_COLORS[nextClass.my_status] || colors.textDim}22` }]}>
-          <Text style={[styles.badgeText, { color: CLASS_STATUS_COLORS[nextClass.my_status] || colors.textDim }]}>
-            {nextClass.my_status === 'WAITLISTED' ? 'WAITLIST' : nextClass.my_status}
-          </Text>
-        </View>
-      ) : null}
-      <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
-    </TouchableOpacity>
-  ) : (
+  // ── upcoming classes card — the member's enrolled list, display-only ──────
+  // Every row is a confirmed BOOKED seat, so no per-row badge and no
+  // tap-through: the dashboard never opens the full schedule (booking and
+  // cancelling live on the Classes screen, reached via Classes & Documents
+  // below). Server order = soonest first; nothing here re-sorts it.
+  const classBody = myBooked.length === 0 ? (
     <Text style={styles.meta}>
       {waitlistedCount
         ? `No booked classes — you're on the waitlist for ${waitlistedCount} upcoming class${waitlistedCount > 1 ? 'es' : ''}. See Classes & Documents below.`
         : 'No booked classes yet — book one under Classes & Documents below.'}
     </Text>
+  ) : (
+    <>
+      {myBooked.map((c, i) => (
+        <View key={c.id} style={[styles.classRow, i > 0 && styles.classRowNext]}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.planName} numberOfLines={1}>{c.class_type}</Text>
+            <Text style={styles.meta}>
+              {classDayLabel(c.class_date)} · {String(c.start_time).slice(0, 5)}–{String(c.end_time).slice(0, 5)}
+            </Text>
+            {c.trainer_name || c.branch_name || c.room ? (
+              <Text style={styles.meta} numberOfLines={1}>
+                {[c.trainer_name, c.branch_name, c.room].filter(Boolean).join(' · ')}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+      ))}
+      {waitlistedCount > 0 ? (
+        <Text style={styles.footnote}>
+          You&apos;re also on the waitlist for {waitlistedCount} upcoming class{waitlistedCount > 1 ? 'es' : ''} — a waitlist spot is not a seat yet.
+        </Text>
+      ) : null}
+      <Text style={styles.footnote}>Book or cancel under Classes &amp; Documents below.</Text>
+    </>
   );
 
   // ── payments card (amounts straight from the server's ledger) ─────────────
@@ -534,7 +532,7 @@ export default function GymHomeScreen() {
       {card('Membership', { loading: false, error: null, data: membership !== undefined ? membership : null, reload: gym.reload }, membershipBody)}
       {card('Attendance', { loading: false, error: null, data: attendance, reload: gym.reload }, attendanceBody)}
       {card('Gym Recommended', content, recommendedBody)}
-      {card('Upcoming Class', classes, classBody)}
+      {card('Upcoming Classes', classes, classBody)}
       {card('Payments', billing, paymentsBody)}
       {card('Announcements', announcements, announcementsBody)}
       {/* Classes & Documents: the permanent entries that used to sit on the
@@ -655,6 +653,10 @@ const makeStyles = (colors) => StyleSheet.create({
   entryText: { color: colors.text, fontSize: 13, fontWeight: '700', flex: 1 },
   entryHint: { color: colors.textDim, fontSize: 11 },
   classRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  classRowNext: {
+    paddingTop: spacing.sm, marginTop: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border,
+  },
   duesRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm },
   duesAmount: { fontSize: 24, fontWeight: '800', fontVariant: ['tabular-nums'] },
   duesLabel: { color: colors.textDim, fontSize: 13, fontWeight: '700' },

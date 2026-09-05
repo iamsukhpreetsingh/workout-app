@@ -145,14 +145,19 @@ export function pickNextClass(classes, gymId) {
 }
 
 /**
- * The next class the member actually holds a BOOKED seat in (the Upcoming
- * Class card). Enrolled-only by design: the full schedule lives on the
- * Classes screen — a waitlisted spot is not a seat and never surfaces here.
- * Same server-ordered head rule as pickNextClass, one gym at a time.
+ * ALL classes the member actually holds a BOOKED seat in, at ONE gym — the
+ * My Gym "Upcoming Classes" list. Enrolled-only by design: enrolled in 2 of
+ * 10 classes → exactly those 2 rows surface here; the full schedule lives
+ * on the Classes screen and is never echoed by the dashboard. A waitlisted
+ * spot is not a seat and never surfaces in the list (callers may mention
+ * the waitlist count in their empty state / footnote). The server already
+ * orders /gym/my/classes by class_date + start_time and only sends upcoming
+ * rows, so this is a filter, not a sort — the client never decides
+ * eligibility or scheduling.
  */
-export function pickMyNextBookedClass(classes, gymId) {
+export function myBookedClasses(classes, gymId) {
   const rows = Array.isArray(classes) ? classes : [];
-  return rows.find((c) => c && c.my_status === 'BOOKED' && (!gymId || c.gym_id === gymId)) || null;
+  return rows.filter((c) => c && c.my_status === 'BOOKED' && (!gymId || c.gym_id === gymId));
 }
 
 /**

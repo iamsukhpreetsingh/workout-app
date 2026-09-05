@@ -16,7 +16,7 @@ import {
   formatDayMonthYear,
   formatMoney,
   pickNextClass,
-  pickMyNextBookedClass,
+  myBookedClasses,
   billingForGym,
   trainerForGym,
   attendanceSourceLabel,
@@ -888,20 +888,23 @@ test('pickNextClass takes the head of the server-ordered list for one gym', () =
   assert.strictEqual(pickNextClass(null, 'g-a'), null);
 });
 
-test('pickMyNextBookedClass: only BOOKED seats surface — waitlist/unbooked never do', () => {
+test('myBookedClasses: the enrolled list only — 2 of 10 booked surfaces exactly those 2', () => {
   const rows = [
-    { id: 'c0', gym_id: 'g-a', my_status: null },
-    { id: 'c1', gym_id: 'g-a', my_status: 'WAITLISTED' },
+    { id: 'c0', gym_id: 'g-a', my_status: null },      // never enrolled
+    { id: 'c1', gym_id: 'g-a', my_status: 'WAITLISTED' }, // a waitlist spot is not a seat
     { id: 'c2', gym_id: 'g-a', my_status: 'BOOKED' },
-    { id: 'c3', gym_id: 'g-b', my_status: 'BOOKED' },
+    { id: 'c3', gym_id: 'g-b', my_status: 'BOOKED' },  // other gym — scoped out
+    { id: 'c4', gym_id: 'g-a', my_status: 'BOOKED' },
   ];
-  // head of the server-ordered list, but ONLY rows the member is booked in
-  assert.strictEqual(pickMyNextBookedClass(rows, 'g-a').id, 'c2');
-  assert.strictEqual(pickMyNextBookedClass(rows, 'g-b').id, 'c3');
-  // a waitlist spot is not a seat — with no booking the card is empty
-  assert.strictEqual(pickMyNextBookedClass(rows.filter((r) => r.id !== 'c2'), 'g-a'), null);
-  assert.strictEqual(pickMyNextBookedClass([], 'g-a'), null);
-  assert.strictEqual(pickMyNextBookedClass(null, 'g-a'), null);
+  // enrolled in 2 of the g-a rows → exactly those 2, in server order
+  assert.deepStrictEqual(
+    myBookedClasses(rows, 'g-a').map((c) => c.id), ['c2', 'c4']
+  );
+  assert.deepStrictEqual(myBookedClasses(rows, 'g-b').map((c) => c.id), ['c3']);
+  // no booking at this gym → empty list (the card renders its empty state)
+  assert.deepStrictEqual(myBookedClasses(rows.filter((r) => r.my_status !== 'BOOKED' || r.gym_id !== 'g-a'), 'g-a'), []);
+  assert.deepStrictEqual(myBookedClasses([], 'g-a'), []);
+  assert.deepStrictEqual(myBookedClasses(null, 'g-a'), []);
 });
 
 test('billingForGym picks one gym\u2019s dues slice; trainerForGym the trainer row', () => {
@@ -1125,10 +1128,11 @@ test('source line: honest nulls for no-trainer and missing optional fields', () 
   );
 });
 
-// ---- Wiring: ONE trainer surface, and the gym-home class card is enrolled-only ----
-// M8 regression guards: the trainer card moved OUT of the My Gym dashboard
-// (it lives on Profile + Settings disconnect only), and the "Upcoming Class"
-// card shows the member's BOOKED classes — not the whole schedule.
+// ---- Wiring: ONE trainer surface, and the gym-home classes card is enrolled-only ----
+// M8/M8.1 regression guards: the trainer card moved OUT of the My Gym dashboard
+// (it lives on Profile + Settings disconnect only), and the "Upcoming Classes"
+// card lists the member's BOOKED classes — never the whole schedule, and it
+// never taps through to it.
 test('the trainer card lives on Profile (+Settings) — the My Gym dashboard has none', () => {
   const gymHome = readFileSync(repo('../src/screens/GymHomeScreen.js'), 'utf8');
   assert.ok(
@@ -1147,12 +1151,18 @@ test('the trainer card lives on Profile (+Settings) — the My Gym dashboard has
   assert.ok(gymApi.includes("api('/client/trainer/gym-unlink'"), 'gymApi hits the member gym-unlink endpoint');
 });
 
-test('the Upcoming Class card is enrolled-only (BOOKED seats, never the whole schedule)', () => {
+test('the Upcoming Classes card is the enrolled list, display-only (no schedule tap-through)', () => {
   const gymHome = readFileSync(repo('../src/screens/GymHomeScreen.js'), 'utf8');
-  assert.ok(gymHome.includes('pickMyNextBookedClass'), 'the dashboard uses the booked-only picker');
-  assert.ok(!/pickNextClass\(/.test(gymHome), 'the raw schedule picker is gone from the dashboard');
+  assert.ok(gymHome.includes('myBookedClasses(classes.data, gymId)'), 'the dashboard renders the enrolled-only list');
+  assert.ok(!/pickMyNextBookedClass|pickNextClass\(/.test(gymHome), 'no schedule pickers remain on the dashboard');
+  assert.ok(gymHome.includes("card('Upcoming Classes'"), 'the card is titled Upcoming Classes');
+  const navToSchedule = (gymHome.match(/navigation\.navigate\(GYM_CLASSES\)/g) || []).length;
+  assert.strictEqual(
+    navToSchedule, 0,
+    'the Upcoming Classes card never opens the full schedule — booking lives on the Classes screen via the Classes & Documents entry'
+  );
   const gymState = readFileSync(repo('../src/lib/gymState.js'), 'utf8');
-  assert.ok(gymState.includes("my_status === 'BOOKED'"), 'the picker filters on the server booking status');
+  assert.ok(gymState.includes("my_status === 'BOOKED'"), 'the list filters on the server booking status');
 });
 
 console.log(`\n${passed} tests passed`);
