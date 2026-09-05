@@ -3,8 +3,9 @@
 // Server-authoritative, like every gym surface: the backend resolves the
 // caller's gym_members rows from the JWT (/gym/my/*), so the client never
 // sends a gymId and can never reach another gym's data. This provider is
-// the SINGLE owner of that snapshot — the Gym tab, the Gym home screen and
-// MyGymCard all consume it instead of fetching independently.
+// the SINGLE owner of that snapshot — the gym home screen (GymMain, pushed
+// from MyGymCard) and MyGymCard both consume it instead of fetching
+// independently.
 //
 // What it exposes (only what the foundation screens actually need):
 //   gym            the active gym row (gym + gymMember + membership term)
@@ -16,10 +17,13 @@
 //                  picks the row the screens show, setActiveGymId switches.
 //
 // Lifecycle contract:
-//   - loads when authStatus becomes 'authenticated'; reload() refetches
-//     (screens call it on focus, same as the other gym screens)
-//   - a standalone user resolves to memberships [] → hasGym false → the
-//     Gym tab is not rendered at all; the core app looks exactly as before
+//   - the FIRST load after login shows the loading state (memberships null);
+//     every reload() after that is a BACKGROUND refresh — the previous
+//     snapshot stays on screen until the fresh one swaps in, so hasGym
+//     never flickers and screens never lose their content mid-focus
+//   - a standalone user resolves to memberships [] → hasGym false →
+//     MyGymCard renders nothing and the gym home screen is unreachable;
+//     the core app looks exactly as before
 //   - logout / session loss resets everything — no gym data survives a
 //     session (reset is explicit here because no central store reset exists)
 //   - network failures surface as { error } for the screen's LoadError;
@@ -30,6 +34,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { useAuth } from './AuthContext';
@@ -48,21 +53,33 @@ export function GymProvider({ children }) {
   const [error, setError] = useState(null);
   const [activeGymId, setActiveGymId] = useState(null);
   const [tick, setTick] = useState(0);
+  // Which user the current snapshot belongs to. reload() (tick) must be a
+  // BACKGROUND refresh — the M1.1 bug: every focus refetch reset
+  // memberships to null, which flipped hasGym off and tore the consuming
+  // screens down mid-render. Now only the first load of a session does.
+  const snapshotUidRef = useRef(null);
 
   const reload = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
     if (authStatus !== 'authenticated' || !user) {
       // logout / auth loss — clear everything, nothing survives the session
+      snapshotUidRef.current = null;
       setMemberships(null);
       setHistories([]);
       setError(null);
       setActiveGymId(null);
       return;
     }
+    const uid = user.id || user.email || 'me';
+    const isFirstLoad = snapshotUidRef.current !== uid;
+    snapshotUidRef.current = uid;
     let mounted = true;
-    setMemberships(null);
-    setHistories([]);
+    if (isFirstLoad) {
+      // first load of this session — screens show their loading state
+      setMemberships(null);
+      setHistories([]);
+    }
     setError(null);
     (async () => {
       try {
@@ -86,8 +103,11 @@ export function GymProvider({ children }) {
         console.warn('[GymContext] load failed:', e?.message || e);
         if (!mounted) return;
         setError(e);
-        setMemberships([]); // resolved-with-error: screens show LoadError + retry
-        setHistories([]);
+        if (isFirstLoad) {
+          setMemberships([]); // first load failed: resolved-with-error → LoadError + retry
+          setHistories([]);
+        }
+        // background refresh failure: keep the previous snapshot on screen
       }
     })();
     return () => {

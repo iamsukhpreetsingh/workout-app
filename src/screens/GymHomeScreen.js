@@ -1,4 +1,4 @@
-// Gym home — the Gym tab root (Mobile M1 foundation).
+// Gym home — the member's gym hub (Mobile M1 foundation, revised M1.1).
 //
 // A calm, read-only home for the member's gym life: who the gym is, what
 // their membership term looks like, an attendance summary and doors into
@@ -7,13 +7,18 @@
 // class booking and content browsing stay in their own screens/phases; this
 // screen only links to things that work today.
 //
+// M1.1: this screen is NO LONGER a tab root. It is a shared-pool screen
+// (registered in every tab stack like GymClasses/GymDocuments) pushed from
+// MyGymCard on the Profile tab. The pool's default headerRight already
+// provides the standard bell + gear pair, so no useHeaderActions here.
+//
 // State comes from GymContext (one server-authoritative snapshot shared
 // with MyGymCard) — this screen never fetches on its own and never passes
 // a gym id anywhere: authorization is server-side, resolved from the JWT.
 //
-// Standalone users never reach this screen (the tab only exists when
-// GymContext.hasGym), but it still handles the empty state gracefully for
-// safety — e.g. a session whose membership was cancelled mid-flight.
+// Standalone users cannot reach this screen (the only entry is MyGymCard,
+// which renders nothing without a gym), but it still handles the empty
+// state gracefully for safety — e.g. a membership cancelled mid-flight.
 import React, { useCallback } from 'react';
 import {
   View,
@@ -27,7 +32,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useColors, spacing } from '../theme';
-import { useHeaderActions } from '../components/HeaderActions';
 import LoadError from '../shared/components/LoadError';
 import { useGym } from '../store/GymContext';
 import { statusColor } from '../lib/gymState';
@@ -51,14 +55,12 @@ export default function GymHomeScreen() {
     setActiveGymId,
   } = useGym();
 
-  // refresh whenever the tab becomes visible again (terms/attendance move)
+  // refresh whenever this screen becomes visible again (terms/attendance move)
   useFocusEffect(
     useCallback(() => {
       reload();
     }, [reload])
   );
-  // keep the standard bell + gear header, like every other tab root
-  useHeaderActions(navigation);
 
   const styles = makeStyles(colors);
 
@@ -73,8 +75,9 @@ export default function GymHomeScreen() {
     return <LoadError message="Couldn't load your gym." onRetry={reload} />;
   }
   if (!hasGym || !gym) {
-    // Defensive: the tab is hidden for standalone users; if we still get
-    // here (membership cancelled mid-session), show the graceful state.
+    // Defensive: standalone users cannot get here (MyGymCard renders
+    // nothing for them); if we still land here (membership cancelled
+    // mid-session), show the graceful state.
     return (
       <View style={[styles.center, { backgroundColor: colors.bg }]}>
         <Ionicons name="business-outline" size={40} color={colors.textDim} />

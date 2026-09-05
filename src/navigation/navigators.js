@@ -5,7 +5,6 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { useApp } from '../store/AppContext';
 import { useAuth } from '../store/AuthContext';
-import { useGym } from '../store/GymContext';
 
 // Screens
 import IntakeFormScreen from '../screens/IntakeFormScreen';
@@ -69,7 +68,6 @@ import {
   HISTORY,
   TAB_PLANS,
   TAB_PROGRESS,
-  TAB_GYM,
   GYM_HOME,
   MAIN_TABS,
   SESSION_DETAIL,
@@ -163,6 +161,14 @@ function renderDetailScreens(onSwitchView) {
       <Stack.Screen name={MY_DISHES} component={MyDishesScreen} options={{ title: 'My Dishes' }} />
       <Stack.Screen name={GYM_CLASSES} component={GymClassesScreen} options={{ title: 'Gym Classes' }} />
       <Stack.Screen name={GYM_DOCUMENTS} component={GymDocumentsScreen} options={{ title: 'My Documents' }} />
+      {/* Gym home (Mobile M1.1): a POOL screen pushed from MyGymCard on the
+          Profile tab — NOT a tab. The bottom bar must stay a static 5-tab
+          shell: conditionally inserting/removing a Tab.Screen after the
+          navigator has mounted corrupts React Navigation state (the tab
+          flickers and stops responding). The pool pattern gives every tab
+          stack a GymMain route, so navigate(GYM_HOME) always resolves with
+          the bar still visible. */}
+      <Stack.Screen name={GYM_HOME} component={GymHomeScreen} options={{ title: 'My Gym' }} />
       <Stack.Screen
         name={SUPPLEMENT_PLAN_BUILDER}
         component={CoachingPlanBuilderScreen}
@@ -233,7 +239,6 @@ const TAB_ICONS = {
   [TAB_DIET]: 'nutrition',
   [TAB_PLANS]: 'list',
   [TAB_PROGRESS]: 'trending-up',
-  [TAB_GYM]: 'barbell',
   [TAB_PROFILE]: 'person',
 };
 
@@ -243,10 +248,9 @@ const TAB_ICONS = {
 // workout (full-screen modal) and authentication sit above the shell.
 export function Tabs({ onSwitchView }) {
   const { colors } = useApp();
-  // Gym tab (Mobile M1): exists only while the user has a valid gym
-  // relationship (server-resolved via GymContext). Standalone users get the
-  // exact same 5-tab bar as before — the gym experience never intrudes.
-  const { hasGym } = useGym();
+  // Mobile M1.1: the bar is EXACTLY the 5 tabs below, always, for every
+  // user. The gym experience lives under Profile → MyGymCard → GymMain
+  // (shared detail pool), so nothing async can ever reshape the navigator.
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -288,15 +292,6 @@ export function Tabs({ onSwitchView }) {
           </TabStack>
         )}
       </Tab.Screen>
-      {hasGym && (
-        <Tab.Screen name={TAB_GYM} listeners={tabResetListeners(GYM_HOME)}>
-          {() => (
-            <TabStack onSwitchView={onSwitchView}>
-              <Stack.Screen name={GYM_HOME} component={GymHomeScreen} options={{ title: 'My Gym' }} />
-            </TabStack>
-          )}
-        </Tab.Screen>
-      )}
       <Tab.Screen name={TAB_PROFILE} listeners={tabResetListeners("ProfileMain")}>
         {() => (
           <TabStack onSwitchView={onSwitchView}>

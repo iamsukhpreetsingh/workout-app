@@ -5,8 +5,8 @@
 //   Valid until 31 Dec 2026
 //
 // Membership rows come from GymContext (Mobile M1) — ONE server-
-// authoritative snapshot shared with the Gym tab; this card no longer
-// fetches /gym/my/memberships itself. (This also fixes the latent crash
+// authoritative snapshot shared with the gym home screen; this card no
+// longer fetches /gym/my/memberships itself. (This also fixes the latent crash
 // from importing a non-exported `api` binding here.) Content counts still
 // come from GET /gym/my/content (Phase 13 UNIFIED assigned + recommended
 // gym content — one call for workouts AND nutrition; the diet strip on
@@ -21,7 +21,7 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../theme';
-import { GYM_CLASSES, GYM_DOCUMENTS } from '../shared/constants/routes';
+import { GYM_CLASSES, GYM_DOCUMENTS, GYM_HOME } from '../shared/constants/routes';
 import { fetchMyGymContent } from '../lib/gymApi';
 import { useGym } from '../store/GymContext';
 import { statusColor } from '../lib/gymState';
@@ -29,8 +29,9 @@ import { statusColor } from '../lib/gymState';
 export default function MyGymCard() {
   const colors = useColors();
   const navigation = useNavigation();
-  // single source of truth — the Gym tab and this card share one snapshot
-  const { loading, hasGym, memberships } = useGym();
+  // single source of truth — the gym home screen and this card share one
+  // snapshot
+  const { loading, hasGym, memberships, activeGymId, setActiveGymId } = useGym();
   const [contentCounts, setContentCounts] = useState({});
 
   React.useEffect(() => {
@@ -66,7 +67,19 @@ export default function MyGymCard() {
         const status = m.membership_status || m.status;
         const frozen = status === 'FROZEN';
         return (
-          <View key={`${m.gym_id}-${m.member_code}`} style={styles.gymRow}>
+          // M1.1: tapping a gym row opens the gym home (GymMain, shared
+          // detail pool). Multi-gym: the tapped row becomes the active gym
+          // first, so the home screen shows THAT gym's term/attendance.
+          <TouchableOpacity
+            key={`${m.gym_id}-${m.member_code}`}
+            style={styles.gymRow}
+            onPress={() => {
+              if (m.gym_id && m.gym_id !== activeGymId) setActiveGymId(m.gym_id);
+              navigation.navigate(GYM_HOME);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={`Open the ${m.gym_name} gym home`}
+          >
             <View style={{ flex: 1 }}>
               {m.plan_name ? (
                 <Text style={styles.gymName}>{m.plan_name}</Text>
@@ -97,7 +110,8 @@ export default function MyGymCard() {
                 {status}
               </Text>
             </View>
-          </View>
+            <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
+          </TouchableOpacity>
         );
       })}
       {/* Gym Classes (Phase 17): the class schedule + one-tap booking */}
