@@ -9,6 +9,7 @@ import rpe from '../src/progressionFormulas/rpeAutoregulated.js';
 import percentage from '../src/progressionFormulas/percentageBased.js';
 import { positionalPrevs } from '../src/store/prefillSets.js';
 import {
+  activeTrainerSourceLine,
   resolveActiveMembershipRow,
   summarizeAttendance,
   statusColor,
@@ -1076,6 +1077,34 @@ test('no orphan duplicate WorkoutScreen exists outside the features tree', () =>
     existsSync(repo('../src/screens/WorkoutScreen.js')),
     false,
     'src/screens/WorkoutScreen.js must stay deleted — its existence is what swallowed the M6 prompt'
+  );
+});
+
+console.log(`\n${passed} tests passed`);
+
+// ---- Active trainer source line (Profile + My Gym consistency) ----
+test('source line: gym assignment names the gym; invite connection says connected', () => {
+  assert.strictEqual(
+    activeTrainerSourceLine({ source: 'GYM', status: 'active', trainer: { name: 'John' }, gym: { name: 'ABC Fitness' } }),
+    'Assigned by ABC Fitness'
+  );
+  assert.strictEqual(
+    activeTrainerSourceLine({ source: 'USER', status: 'active', trainer: { name: 'Sarah' } }),
+    'Connected trainer'
+  );
+  assert.strictEqual(
+    activeTrainerSourceLine({ source: 'USER', status: 'pending', trainer: { name: 'Sarah' } }),
+    'Request sent — waiting to accept'
+  );
+});
+
+test('source line: honest nulls for no-trainer and missing optional fields', () => {
+  assert.strictEqual(activeTrainerSourceLine(null), null);
+  assert.strictEqual(activeTrainerSourceLine({ source: null, status: null, trainer: null }), null);
+  // GYM row with a malformed gym object still renders a truthful line
+  assert.strictEqual(
+    activeTrainerSourceLine({ source: 'GYM', status: 'active', trainer: { name: 'John' }, gym: null }),
+    'Assigned by your gym'
   );
 });
 

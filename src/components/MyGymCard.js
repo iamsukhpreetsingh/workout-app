@@ -1,34 +1,22 @@
-// My Gym — shown on the Profile tab for app-linked gym members (Phase 7):
+// My Gym — a NORMAL Profile card (same visual hierarchy as the Health
+// Profile card): one light row per app-linked gym membership; tapping it
+// opens the EXISTING My Gym detail page (GymMain pool). Nothing gym-related
+// is duplicated here — classes, documents, trainer, attendance all live on
+// the detail page, which is the single gym hub.
 //
-//   My Gym
-//   Premium Annual   [ACTIVE]
-//   Valid until 31 Dec 2026
-//
-// M2: this card is the GYM HUB entry — the gym row opens the gym home
-// (programs + attendance); Classes and Documents stay reachable from here
-// (they were de-duplicated off the gym home screen).
-// Membership rows come from GymContext (Mobile M1) — ONE server-
-// authoritative snapshot shared with the gym home screen; this card no
-// longer fetches /gym/my/memberships itself. (This also fixes the latent crash
-// from importing a non-exported `api` binding here.) Content counts still
-// come from GET /gym/my/content (Phase 13 UNIFIED assigned + recommended
-// gym content — one call for workouts AND nutrition; the diet strip on
-// Diet home uses the same endpoint). A standalone user gets [] and the
-// card renders nothing — a gym is never required. Assignment rows live on
-// the gym member, so content assigned BEFORE the app account was linked
-// shows up here too. Historical record integrity is unaffected by when
-// the app account was linked: the term predating the link shows exactly
-// the same.
+// Snapshot comes from GymContext (Mobile M1) — ONE server-authoritative
+// gym state shared with the detail screen; this card never fetches gym
+// data itself. A standalone user gets no gym row and instead sees the
+// manual invitation-code entry (M4) — the deep-link path lives in
+// InvitationContext.
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../theme';
-import { GYM_CLASSES, GYM_DOCUMENTS, GYM_HOME } from '../shared/constants/routes';
-import { fetchMyGymContent } from '../lib/gymApi';
+import { GYM_HOME } from '../shared/constants/routes';
 import { useGym } from '../store/GymContext';
 import { useInvitation } from '../store/InvitationContext';
-import { statusColor } from '../lib/gymState';
 import { extractInvitationToken } from '../lib/gymInvites';
 
 export default function MyGymCard() {
@@ -38,42 +26,19 @@ export default function MyGymCard() {
   // snapshot
   const { loading, hasGym, memberships, activeGymId, setActiveGymId } = useGym();
   const { openInvitation } = useInvitation();
-  const [contentCounts, setContentCounts] = useState({});
   const [codeOpen, setCodeOpen] = useState(false);
   const [code, setCode] = useState('');
   const [codeError, setCodeError] = useState(null);
   const [codeBusy, setCodeBusy] = useState(false);
 
-  // refresh on every focus too — counts go stale after a gym edits content
-  useFocusEffect(
-    React.useCallback(() => {
-      let cancelled = false;
-      fetchMyGymContent()
-        .then((perGym) => {
-          if (cancelled || !Array.isArray(perGym)) return;
-          const counts = {};
-          for (const g of perGym) {
-            counts[g.gym_id] = {
-              workouts: (g.workouts?.assigned?.length || 0) + (g.workouts?.recommended?.length || 0),
-              nutrition: (g.nutrition?.assigned?.length || 0) + (g.nutrition?.recommended?.length || 0),
-            };
-          }
-          setContentCounts(counts);
-        })
-        .catch(() => {});
-      return () => { cancelled = true; };
-    }, [])
-  );
-
   const styles = makeStyles(colors);
 
   if (loading) return null; // still resolving the session's gym snapshot
 
-  // M4: no gym connected — previously rendered nothing. Now this is also
-  // the MANUAL invitation entry point (desk reads the one-time code over
-  // the counter / WhatsApp; the deep link path lives in InvitationContext).
-  // The code is validated client-side only for shape — the server remains
-  // the sole authority (no member ids, no claiming logic here).
+  // M4: no gym connected — the MANUAL invitation entry point (desk reads
+  // the one-time code over the counter / WhatsApp; the deep link path
+  // lives in InvitationContext). The code is validated client-side only
+  // for shape — the server remains the sole authority.
   if (!hasGym) {
     const submitCode = async () => {
       if (codeBusy) return;
@@ -95,12 +60,8 @@ export default function MyGymCard() {
     };
     return (
       <View style={styles.card}>
-        <View style={styles.header}>
-          <Ionicons name="business-outline" size={16} color={colors.primary} />
-          <Text style={styles.title}>My Gym</Text>
-        </View>
         <View style={styles.emptyRow}>
-          <Ionicons name="ribbon-outline" size={18} color={colors.textDim} />
+          <Ionicons name="business-outline" size={18} color={colors.primary} />
           <View style={{ flex: 1 }}>
             <Text style={styles.emptyTitle}>Connect your gym membership</Text>
             <Text style={styles.emptyBody}>
@@ -160,127 +121,58 @@ export default function MyGymCard() {
   }
 
   return (
-    <View style={styles.card}>
-      <View style={styles.header}>
-        <Ionicons name="business-outline" size={16} color={colors.primary} />
-        <Text style={styles.title}>My Gym</Text>
-      </View>
+    <View>
       {memberships.map((m) => {
         // membership term status (ACTIVE/FROZEN/…) is what matters to the
         // member; fall back to the membership-record status when no term exists
         const status = m.membership_status || m.status;
-        const frozen = status === 'FROZEN';
         return (
-          // M1.1: tapping a gym row opens the gym home (GymMain, shared
-          // detail pool). Multi-gym: the tapped row becomes the active gym
-          // first, so the home screen shows THAT gym's term/attendance.
+          // one light row per gym — same shape as the Health Profile card
+          // (icon · title + sub · chevron). M1.1 rule kept: the tapped gym
+          // becomes the active gym BEFORE navigating, so the detail page
+          // opens on THAT gym.
           <TouchableOpacity
             key={`${m.gym_id}-${m.member_code}`}
-            style={styles.gymRow}
+            style={styles.card}
             onPress={() => {
               if (m.gym_id && m.gym_id !== activeGymId) setActiveGymId(m.gym_id);
               navigation.navigate(GYM_HOME);
             }}
             accessibilityRole="button"
-            accessibilityLabel={`Open the ${m.gym_name} gym home`}
+            accessibilityLabel={`Open the ${m.gym_name} gym page`}
           >
+            <Ionicons name="business-outline" size={19} color={colors.primary} />
             <View style={{ flex: 1 }}>
-              {m.plan_name ? (
-                <Text style={styles.gymName}>{m.plan_name}</Text>
-              ) : (
-                <Text style={styles.gymName}>{m.gym_name}</Text>
-              )}
-              <Text style={styles.gymMeta}>
-                {m.gym_name} · Member {m.member_code}
-              </Text>
-              {m.ends_on ? (
-                <Text style={styles.gymMeta}>
-                  {status === 'EXPIRED'
-                    ? `Expired on: ${String(m.ends_on).slice(0, 10)}`
-                    : `${frozen ? 'Frozen — valid until' : 'Valid until'} ${String(m.ends_on).slice(0, 10)}`}
-                </Text>
-              ) : null}
-              {contentCounts[m.gym_id]?.workouts ? (
-                <Text style={[styles.gymMeta, { color: colors.primary }]}>
-                  {contentCounts[m.gym_id].workouts} gym workout{contentCounts[m.gym_id].workouts > 1 ? 's' : ''} available
-                </Text>
-              ) : null}
-              {contentCounts[m.gym_id]?.nutrition ? (
-                <Text style={[styles.gymMeta, { color: colors.primary }]}>
-                  {contentCounts[m.gym_id].nutrition} gym nutrition item{contentCounts[m.gym_id].nutrition > 1 ? 's' : ''} available
-                </Text>
-              ) : null}
-            </View>
-            <View style={[styles.badge, { backgroundColor: `${statusColor(status, colors.textDim)}22` }]}>
-              <Text style={[styles.badgeText, { color: statusColor(status, colors.textDim) }]}>
-                {status}
+              <Text style={styles.rowTitle}>{m.gym_name}</Text>
+              <Text style={styles.rowSub} numberOfLines={1}>
+                {[
+                  m.plan_name || `Member ${m.member_code}`,
+                  status,
+                ].filter(Boolean).join(' · ')}
               </Text>
             </View>
-            <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
+            <Ionicons name="chevron-forward" size={17} color={colors.textDim} />
           </TouchableOpacity>
         );
       })}
-      {/* Gym Classes (Phase 17): the class schedule + one-tap booking */}
-      <TouchableOpacity
-        style={styles.classesRow}
-        onPress={() => navigation.navigate(GYM_CLASSES)}
-        accessibilityRole="button"
-        accessibilityLabel="Open the class schedule"
-      >
-        <Ionicons name="calendar-outline" size={16} color={colors.primary} />
-        <Text style={styles.classesText}>Classes</Text>
-        <Text style={styles.classesHint}>Book your spot</Text>
-        <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
-      </TouchableOpacity>
-      {/* Gym Documents (Phase 18): waivers & agreements + digital signing */}
-      <TouchableOpacity
-        style={styles.classesRow}
-        onPress={() => navigation.navigate(GYM_DOCUMENTS)}
-        accessibilityRole="button"
-        accessibilityLabel="Open your gym documents"
-      >
-        <Ionicons name="document-text-outline" size={16} color={colors.primary} />
-        <Text style={styles.classesText}>Documents</Text>
-        <Text style={styles.classesHint}>Waivers & agreements</Text>
-        <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
-      </TouchableOpacity>
     </View>
   );
 }
 
 const makeStyles = (colors) => StyleSheet.create({
   card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
     backgroundColor: colors.card,
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     padding: 14,
     marginBottom: 12,
   },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  title: { color: colors.text, fontSize: 13, fontWeight: '800', letterSpacing: 0.3 },
-  gymRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-  },
-  gymName: { color: colors.text, fontSize: 14, fontWeight: '700' },
-  gymMeta: { color: colors.textDim, fontSize: 11, marginTop: 2 },
-  badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
-  badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
-  classesRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 6,
-    paddingTop: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-  },
-  classesText: { color: colors.text, fontSize: 13, fontWeight: '700', flex: 1 },
-  classesHint: { color: colors.textDim, fontSize: 11 },
+  rowTitle: { color: colors.text, fontSize: 14, fontWeight: '700' },
+  rowSub: { color: colors.textDim, fontSize: 11, marginTop: 2 },
   emptyRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-start', paddingTop: 4 },
   emptyTitle: { color: colors.text, fontSize: 13.5, fontWeight: '800' },
   emptyBody: { color: colors.textDim, fontSize: 11.5, lineHeight: 16, marginTop: 3 },

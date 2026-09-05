@@ -65,6 +65,16 @@ export async function checkInWithGymQr(code) {
 }
 
 
+// The resolved ACTIVE trainer (server-side trainerResolution):
+//   GYM-assigned (portal) > USER-connected (invite code) > null.
+// ONE endpoint consumed by BOTH the Profile trainer card and the My Gym
+// trainer section — the two surfaces can never contradict each other. The
+// resolution is recomputed per request, so gym-portal assignments/removals
+// propagate on the next focus fetch.
+export async function fetchMyActiveTrainer() {
+  return api('/client/trainer/active');
+}
+
 // ── Gym Classes (Phase 17) ──────────────────────────────────────────────────
 // Upcoming scheduled classes across the member's ACTIVE gym memberships,
 // branch-filtered to what they can access, with spots left and the member's

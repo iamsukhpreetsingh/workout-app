@@ -54,7 +54,7 @@ import {
   fetchMyGymContent,
   fetchMyGymClasses,
   fetchMyGymAnnouncements,
-  fetchMyGymTrainers,
+  fetchMyActiveTrainer,
   fetchMyGymBilling,
 } from '../lib/gymApi';
 import {
@@ -63,9 +63,9 @@ import {
   formatDayMonthYear,
   pickNextClass,
   billingForGym,
-  trainerForGym,
+  activeTrainerSourceLine,
 } from '../lib/gymState';
-import { GYM_WORKOUTS, GYM_NUTRITION, GYM_CLASSES, GYM_ATTENDANCE, GYM_CHECK_IN } from '../shared/constants/routes';
+import { GYM_WORKOUTS, GYM_NUTRITION, GYM_CLASSES, GYM_ATTENDANCE, GYM_CHECK_IN, GYM_DOCUMENTS } from '../shared/constants/routes';
 
 // "Tue, 1 Sep" — the same UTC-safe class date rendering GymClassesScreen
 // uses (gym-local schedule dates must not shift with the device timezone).
@@ -103,7 +103,10 @@ export default function GymHomeScreen() {
   const content = useAsyncData(() => fetchMyGymContent(), [], { immediate: false });
   const classes = useAsyncData(() => fetchMyGymClasses(), [], { immediate: false });
   const announcements = useAsyncData(() => fetchMyGymAnnouncements({ limit: 20 }), [], { immediate: false });
-  const trainers = useAsyncData(() => fetchMyGymTrainers(), [], { immediate: false });
+  // THE resolved trainer (gym-assigned > invite-connected > none) — the same
+  // endpoint the Profile trainer card consumes, so the two surfaces always
+  // agree regardless of where the relationship came from.
+  const activeTrainer = useAsyncData(() => fetchMyActiveTrainer(), [], { immediate: false });
   const billing = useAsyncData(() => fetchMyGymBilling(), [], { immediate: false });
 
   // refresh everything whenever the dashboard becomes visible again
@@ -114,10 +117,10 @@ export default function GymHomeScreen() {
       content.reload();
       classes.reload();
       announcements.reload();
-      trainers.reload();
+      activeTrainer.reload();
       billing.reload();
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [gym.reload, content.reload, classes.reload, announcements.reload, trainers.reload, billing.reload])
+    }, [gym.reload, content.reload, classes.reload, announcements.reload, activeTrainer.reload, billing.reload])
   );
 
   const styles = makeStyles(colors);
@@ -129,7 +132,6 @@ export default function GymHomeScreen() {
     return rows.find((g) => g && g.gym_id === gymId) || null;
   }, [content.data, gymId]);
   const nextClass = useMemo(() => pickNextClass(classes.data, gymId), [classes.data, gymId]);
-  const myTrainer = useMemo(() => trainerForGym(trainers.data, gymId), [trainers.data, gymId]);
   const myBilling = useMemo(() => billingForGym(billing.data, gymId), [billing.data, gymId]);
   const myAnnouncements = useMemo(() => {
     const rows = Array.isArray(announcements.data) ? announcements.data : [];
@@ -337,24 +339,35 @@ export default function GymHomeScreen() {
     <Text style={styles.meta}>No attendance recorded yet.</Text>
   );
 
-  // ── trainer card ──────────────────────────────────────────────────────────
-  const trainerBody = myTrainer?.trainer_name ? (
+  // ── trainer card (the RESOLVED trainer — same source as Profile) ────────
+  const trainerBody = activeTrainer.data?.trainer ? (
     <View style={styles.gymHeader}>
       <View style={[styles.gymBadgeWrap, { backgroundColor: `${colors.blue}18` }]}>
         <Ionicons name="person-outline" size={17} color={colors.blue} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={styles.planName} numberOfLines={1}>{myTrainer.trainer_name}</Text>
+        <Text style={styles.planName} numberOfLines={1}>
+          {activeTrainer.data.trainer.name || 'Your trainer'}
+        </Text>
         <Text style={styles.meta}>
-          Your trainer
-          {myTrainer.starts_on
-            ? ` · since ${formatDayMonthYear(myTrainer.starts_on) || String(myTrainer.starts_on).slice(0, 10)}`
+          {activeTrainerSourceLine(activeTrainer.data)}
+          {activeTrainer.data.source === 'GYM' && activeTrainer.data.assigned_since
+            ? ` · since ${formatDayMonthYear(activeTrainer.data.assigned_since) || String(activeTrainer.data.assigned_since).slice(0, 10)}`
             : ''}
         </Text>
+        {activeTrainer.data.user_trainer ? (
+          <Text style={styles.meta}>
+            Invite-connected {activeTrainer.data.user_trainer.name} becomes your trainer
+            if the gym ends this assignment.
+          </Text>
+        ) : null}
       </View>
     </View>
   ) : (
-    <Text style={styles.meta}>No trainer assigned yet — your gym can assign one at the desk.</Text>
+    <Text style={styles.meta}>
+      No trainer yet — your gym can assign one at the desk, or connect one with an
+      invite code from Profile → Trainer.
+    </Text>
   );
 
   // ── gym recommended card (entry points — lists live on their own screens) ─
@@ -546,11 +559,25 @@ export default function GymHomeScreen() {
 
       {card('Membership', { loading: false, error: null, data: membership !== undefined ? membership : null, reload: gym.reload }, membershipBody)}
       {card('Attendance', { loading: false, error: null, data: attendance, reload: gym.reload }, attendanceBody)}
-      {card('Trainer', trainers, trainerBody)}
+      {card('Trainer', activeTrainer, trainerBody)}
       {card('Gym Recommended', content, recommendedBody)}
       {card('Upcoming Class', classes, classBody)}
       {card('Payments', billing, paymentsBody)}
       {card('Announcements', announcements, announcementsBody)}
+      {/* Classes & Documents: the permanent entries that used to sit on the
+          Profile My Gym card — the detail page is the single gym hub now */}
+      {card('Classes & Documents', { loading: false, error: null, data: true, reload: () => {} }, (
+        <>
+          {entryRow(
+            'calendar-outline', 'Classes', 'Schedule & booking',
+            GYM_CLASSES, 'Open the class schedule'
+          )}
+          {entryRow(
+            'document-text-outline', 'Documents', 'Waivers & agreements',
+            GYM_DOCUMENTS, 'Open your gym documents'
+          )}
+        </>
+      ))}
     </ScrollView>
   );
 }

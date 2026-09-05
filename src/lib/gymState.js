@@ -162,6 +162,23 @@ export function trainerForGym(rows, gymId) {
   return list.find((r) => r && r.gym_id === gymId) || null;
 }
 
+/**
+ * The source line for the RESOLVED active trainer (fetchMyActiveTrainer):
+ *   GYM  → "Assigned by <gym>"     (the portal decides, not the user)
+ *   USER → "Connected trainer"     (invite-code relationship)
+ *   USER pending → "Request sent — waiting to accept"
+ * Null when no trainer — callers render their own empty state. Pure display
+ * aggregation of server facts, exactly like the attendance labels.
+ */
+export function activeTrainerSourceLine(t) {
+  if (!t || !t.trainer) return null;
+  if (t.source === 'GYM') {
+    return t.gym && t.gym.name ? `Assigned by ${t.gym.name}` : 'Assigned by your gym';
+  }
+  if (t.status === 'pending') return 'Request sent — waiting to accept';
+  return 'Connected trainer';
+}
+
 // ── M6 attendance experience (pure, React-free) ───────────────────────────
 // Everything the history screen and check-in flow DISPLAY is derived here
 // from server facts (the ✓/− calendar, the gym's local `today`). The client

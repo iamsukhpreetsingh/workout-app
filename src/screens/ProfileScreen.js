@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, Modal, Alert, Share, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../store/AuthContext';
 import { api } from '../lib/api';
+import { fetchMyActiveTrainer } from '../lib/gymApi';
+import { activeTrainerSourceLine } from '../lib/gymState';
 import { useColors } from '../theme';
 import { useHeaderActions } from '../components/HeaderActions';
 import { TAB_CLIENTS, EDIT_PROFILE, INTAKE_FORM } from '../shared/constants/routes';
@@ -24,14 +27,28 @@ export default function ProfileScreen({ navigation, inTrainerView = false, onSwi
 // Split so the trainer-view hook rules don't depend on the early return
 function ProfileBody({ navigation, colors, styles, user, isTrainer, logout, inTrainerView, onSwitchView }) {
   const [inviteCode, setInviteCode] = useState('');
-  const [assoc, setAssoc] = useState(null); // { status, trainer_name }
   const [assocMsg, setAssocMsg] = useState(null); // confirmation / error
 
-  React.useEffect(() => {
-    api('/client/trainer')
-      .then(setAssoc)
-      .catch(() => {});
+  // THE resolved trainer (server-side: gym-assigned > invite-connected > none).
+  // undefined = still loading — the row shows an honest ellipsis instead of
+  // flashing "None". A failed refresh KEEPS the last good value (a network
+  // error never turns a real trainer into "None"); the error line says so.
+  const [active, setActive] = useState(undefined);
+  const [activeError, setActiveError] = useState(false);
+  const loadActive = React.useCallback(async () => {
+    try {
+      const next = await fetchMyActiveTrainer();
+      setActive(next);
+      setActiveError(false);
+    } catch {
+      setActiveError(true); // previous value survives
+    }
   }, []);
+  // refetch on every focus: gym-portal assignments/removals must reach this
+  // screen even though they happen entirely outside the app
+  useFocusEffect(
+    React.useCallback(() => { loadActive(); }, [loadActive])
+  );
 
   const [reconnect, setReconnect] = useState(null); // preview when is_reactivation
 
@@ -98,10 +115,10 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer, logout, inTr
       });
       setInviteCode('');
       setReconnect(null);
-      setAssoc({ status: row.status, trainer_name: row.trainer_name });
       setAssocMsg(row.trainer_name
         ? `Request sent to ${row.trainer_name}`
         : 'Request sent — waiting for your trainer to accept');
+      loadActive(); // the new pending/active relationship shows immediately
     } catch (e) {
       setAssocMsg(e.message || 'Could not send request');
     }
@@ -268,19 +285,41 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer, logout, inTr
           <Ionicons name="fitness-outline" size={18} color={colors.textDim} />
           <Text style={styles.rowLabel}>Trainer</Text>
           <Text style={styles.rowValue}>
-            {assoc?.status === 'active'
-              ? (assoc.trainer_name || 'Connected')
-              : assoc?.status === 'pending'
-              ? 'Request pending'
+            {active === undefined
+              ? '…'
+              : active?.trainer
+              ? (active.trainer.name || 'Connected')
               : 'None'}
           </Text>
         </View>
-        {assoc?.status === 'pending' && (
+        {activeError && active !== undefined && (
           <Text style={styles.pendingHint}>
-            Waiting for {assoc.trainer_name || 'your trainer'} to accept your request.
+            Could not refresh trainer — showing your last known trainer.
           </Text>
         )}
-        {assoc?.status !== 'active' && assoc?.status !== 'pending' && (
+        {active?.trainer ? (
+          <Text style={styles.trainerSource}>{activeTrainerSourceLine(active)}</Text>
+        ) : null}
+        {active?.source === 'GYM' && (
+          <Text style={styles.trainerNote}>
+            Your gym manages this assignment — ask the front desk to change trainers.
+          </Text>
+        )}
+        {active?.user_trainer ? (
+          <Text style={styles.trainerNote}>
+            You are also connected to {active.user_trainer.name} via invite code — they
+            become your trainer if the gym ends this assignment.
+          </Text>
+        ) : null}
+        {active?.status === 'pending' && (
+          <Text style={styles.pendingHint}>
+            Waiting for {active.trainer?.name || 'your trainer'} to accept your request.
+          </Text>
+        )}
+        {/* connect only makes sense when NO trainer is resolved — a gym
+            assignment is explained above, an existing connection is already
+            the one-active rule, and the server rejects redemptions anyway */}
+        {active && !active.trainer && (
           <>
             <TextInput
               style={styles.inviteInput}
@@ -487,6 +526,11 @@ const makeStyles = (colors) =>
     reconnectCancel: { alignItems: 'center', padding: 10, marginTop: 6 },
     reconnectCancelText: { color: colors.textDim, fontWeight: '700' },
     pendingHint: { color: colors.yellow, fontSize: 12, marginTop: 8 },
+    trainerSource: {
+      color: colors.primary, fontSize: 12.5, fontWeight: '700',
+      marginTop: 2, paddingHorizontal: 14,
+    },
+    trainerNote: { color: colors.textDim, fontSize: 11.5, lineHeight: 16, marginTop: 6, paddingHorizontal: 14 },
     inviteInput: {
       backgroundColor: colors.cardLight,
       color: colors.text,

@@ -1,5 +1,6 @@
 const express = require('express');
 const trainerClients = require('../data/trainerClients');
+const trainerResolution = require('../data/trainerResolution');
 const assignedPlans = require('../data/assignedPlans');
 const sessionSummaries = require('../data/sessionSummaries');
 const measurements = require('../data/measurements');
@@ -115,6 +116,27 @@ registerRoute(router, {
       console.error('[ProgressPhotos] share reset on unlink failed:', err.message);
     }
     res.json(rows[0]);
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// GET /client/trainer/active — THE resolved active trainer (trainerResolution):
+//   GYM-assigned (portal) > USER-connected (invite code) > null.
+// Both the Profile trainer card and the My Gym trainer section consume THIS
+// one endpoint, so the two surfaces can never contradict each other. Gym
+// portal changes propagate because the resolution is recomputed per request
+// and the clients refetch on focus.
+registerRoute(router, {
+  method: 'GET',
+  path: '/trainer/active',
+  description: "The caller's resolved ACTIVE trainer: a gym-assigned trainer takes precedence over an invite-connected one, otherwise null. Shape: { source: 'GYM'|'USER'|null, status, trainer, gym, assigned_since, user_trainer }.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Relationships',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    res.json(await trainerResolution.resolveActiveTrainer(req.user.id));
   } catch (e) {
     httpError(res, e);
   }

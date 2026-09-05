@@ -5,6 +5,7 @@ const { query } = require('../db/pool');
 const { getUserById } = require('./users');
 const coachingPlans = require('./coachingPlans');
 const assignedPlans = require('./assignedPlans');
+const gymTrainers = require('./gymTrainers');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -62,6 +63,10 @@ async function trainerCodePreview(clientId, code) {
     [invite.trainer_id, clientId]
   );
   const archived = rows[0] || null;
+  // Surface a gym assignment in the preview too — the client can explain
+  // the impending 409 BEFORE the request is sent (trainerResolution rule).
+  const gymAssigned = (await gymTrainers.listMyTrainers(clientId))
+    .find((r) => r.trainer_name) || null;
   let counts = null;
   if (archived) {
     const [assigned, diet] = await Promise.all([
@@ -88,6 +93,9 @@ async function trainerCodePreview(clientId, code) {
     archived_at: archived?.archived_at || null,
     purge_at: archived?.purge_at || null,
     counts,
+    gym_trainer: gymAssigned
+      ? { trainer_name: gymAssigned.trainer_name, gym_name: gymAssigned.gym_name }
+      : null,
   };
 }
 
@@ -123,6 +131,19 @@ async function requestAssociationByCode(clientId, code, restorePreference = null
   if (otherActive.rows.length) {
     // One trainer per client — never silently replace the existing relationship
     throw new HttpError(409, 'You already have an active trainer');
+  }
+
+  // Gym-assigned trainer takes precedence (trainerResolution): a member the
+  // GYM has assigned a trainer cannot open a second front with an invite
+  // code. Checked BEFORE the code is claimed — a blocked redemption never
+  // burns the invite. The message names the trainer and the gym so the UI
+  // can explain WHY instead of a generic failure.
+  const gymAssigned = (await gymTrainers.listMyTrainers(clientId))
+    .find((r) => r.trainer_name);
+  if (gymAssigned) {
+    throw new HttpError(409,
+      `Your gym (${gymAssigned.gym_name}) has already assigned you a trainer ` +
+      `(${gymAssigned.trainer_name}). Ask your gym to change the assignment.`);
   }
 
   // claim BEFORE inserting so concurrent redemptions of the same code
