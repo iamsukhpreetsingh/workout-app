@@ -27,6 +27,7 @@ const LAYER_LABELS = {
 export default function FoodSearchModal({
   visible, onClose, mealType, viewDate, onLogged, pickMode = false, onPickIngredient,
   trainerItems = [], trainerPlanName = null, intakeProfile = null,
+  gymItems = [],
 }) {
   const colors = useColors();
   const styles = makeStyles(colors);
@@ -55,9 +56,23 @@ export default function FoodSearchModal({
     return [...groups.entries()];
   })();
 
+  // From Gym grouping (M2) — gym nutrition recommendations from
+  // /gym/my/content, grouped by gym. Macros come from the item's targets
+  // (per recipe/serving); logging rides the same confirmLog path as every
+  // other layer — foodSourceType 'manual', quantity-scaled.
+  const gymGroups = (() => {
+    const groups = new Map();
+    for (const it of gymItems) {
+      const key = it.gym_name || 'Your gym';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(it);
+    }
+    return [...groups.entries()];
+  })();
+
   useEffect(() => {
     if (visible) {
-      setTab(trainerItems.length > 0 ? 'trainer' : 'search');
+      setTab(trainerItems.length > 0 ? 'trainer' : gymItems.length > 0 ? 'gym' : 'search');
       setQuery('');
       setBarcode('');
       setResults(null);
@@ -220,6 +235,7 @@ export default function FoodSearchModal({
                 { key: 'search', label: 'Search' },
                 { key: 'recent', label: 'Recent' },
                 ...(trainerItems.length > 0 ? [{ key: 'trainer', label: 'From Trainer' }] : []),
+                ...(gymItems.length > 0 ? [{ key: 'gym', label: 'Gym' }] : []),
                 { key: 'dishes', label: 'My Dishes' },
                 { key: 'manual', label: 'Manual' },
               ].map((t) => (
@@ -305,6 +321,23 @@ export default function FoodSearchModal({
                       </View>
                     ))}
                   </>
+                )
+              )}
+              {tab === 'gym' && (
+                gymItems.length === 0 ? (
+                  <Text style={styles.empty}>No gym recommendations available.</Text>
+                ) : (
+                  gymGroups.map(([gymName, items]) => (
+                    <View key={gymName}>
+                      <Text style={styles.planHint}>{gymName} · recommended by your gym</Text>
+                      {items.map((it) =>
+                        renderRow(
+                          { ...it, layer: 'manual' },
+                          it.id
+                        )
+                      )}
+                    </View>
+                  ))
                 )
               )}
               {tab === 'dishes' && (

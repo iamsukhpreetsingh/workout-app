@@ -14,6 +14,8 @@ import { useColors } from '../../../theme';
 import { todayLocalISO, isFutureDate } from '../../../lib/checkinDates';
 import { listEntriesForDate, deleteFoodEntry, updateFoodEntry } from '../../../db/diary';
 import GymNutritionRow from '../../../components/GymNutritionRow';
+import { fetchMyGymContent } from '../../../lib/gymApi';
+import { gymNutritionToPickerItems } from '../../../lib/gymContent';
 import { getSettings, updateSettings } from '../../../db/settings';
 import FoodSearchModal from '../components/FoodSearchModal';
 import SetTargetsModal from '../components/SetTargetsModal';
@@ -63,6 +65,10 @@ export default function DietHomeScreen({ navigation }) {
   const [hasTrainer, setHasTrainer] = useState(false);
   const [trainerPlan, setTrainerPlan] = useState(null);
   const [intakeProfile, setIntakeProfile] = useState(null);
+  // gym nutrition recommendations (M2) — surfaced as a pickable layer in
+  // the Add Food sheet, so logging a gym recipe is the SAME flow as any
+  // other food; nothing is logged from the strip itself
+  const [gymItems, setGymItems] = useState([]);
 
   const reloadEntries = useCallback(async () => {
     try {
@@ -104,6 +110,10 @@ export default function DietHomeScreen({ navigation }) {
       api('/client/intake-profile')
         .then((p) => setIntakeProfile(p && p.completed_at ? p : null))
         .catch(() => setIntakeProfile(null));
+      // gym nutrition recommendations for the Add Food sheet (standalone → [])
+      fetchMyGymContent()
+        .then((rows) => setGymItems(gymNutritionToPickerItems(rows)))
+        .catch(() => setGymItems([]));
     }, [reloadEntries])
   );
 
@@ -415,6 +425,7 @@ export default function DietHomeScreen({ navigation }) {
         trainerItems={hasTrainer ? trainerPlanItems : []}
         trainerPlanName={trainerPlan?.name || null}
         intakeProfile={intakeProfile}
+        gymItems={gymItems}
       />
 
       {/* quantity edit — every logged item is adjustable/removable */}

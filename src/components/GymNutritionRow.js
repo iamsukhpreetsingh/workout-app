@@ -4,20 +4,26 @@
 // row, one modal, no redesign of the existing Diet experience. Shows nothing
 // for standalone users. Assigned rows are window-aware server-side and carry
 // starts_on/ends_on/notes, which this modal renders for the member.
+//
+// M2: each item now OPENS the full gym nutrition detail (log to a meal /
+// save to My Dishes there), and content entries are normalized through
+// gymContent.normalizeNutritionEntries() — gym-authored data can carry
+// structured {text, type} lines, which crash React Native if rendered
+// directly as <Text> children ("Objects are not valid as a React child").
+// The pre-load placeholder row is gone too: the strip renders only once
+// the fetch resolves, so standalone users never see a flash of a fake row.
 import React, { useState } from 'react';
 import { View, Text, Modal, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../theme';
 import { fetchMyGymContent } from '../lib/gymApi';
-
-const KIND_LABELS = {
-  RECIPE: 'Recipe',
-  MEAL_PLAN: 'Meal plan',
-  DIET_RECOMMENDATION: 'Diet guide',
-};
+import { normalizeNutritionEntries, GYM_NUTRITION_KIND_LABELS } from '../lib/gymContent';
+import { GYM_NUTRITION_DETAIL } from '../shared/constants/routes';
 
 export default function GymNutritionRow() {
   const colors = useColors();
+  const navigation = useNavigation();
   const [perGym, setPerGym] = useState(null); // null = not loaded / nothing
   const [open, setOpen] = useState(false);
 
@@ -33,17 +39,15 @@ export default function GymNutritionRow() {
       .catch(() => setPerGym([]));
   };
 
+  // resolve once on mount — no tappable placeholder for standalone users
+  React.useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const styles = makeStyles(colors);
 
-  if (perGym === null) {
-    return (
-      <TouchableOpacity onPress={load} style={styles.row}>
-        <Ionicons name="restaurant-outline" size={15} color={colors.primary} />
-        <Text style={[styles.rowText, { color: colors.textDim }]}>Gym nutrition</Text>
-        <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
-      </TouchableOpacity>
-    );
-  }
+  if (perGym === null) return null; // still resolving
   if (perGym.length === 0) return null; // standalone user / nothing available
 
   const total = perGym.reduce(
@@ -75,11 +79,27 @@ export default function GymNutritionRow() {
                   <Text style={[styles.gymName, { color: colors.textDim }]}>{g.gym_name}</Text>
                   {[...(g.nutrition?.assigned || []).map((n) => ({ n, tag: 'Assigned' })),
                     ...(g.nutrition?.recommended || []).map((n) => ({ n, tag: 'Recommended' }))].map(({ n, tag }) => (
-                    <View key={`${tag}-${n.id}`} style={[styles.item, { borderColor: colors.border }]}>
+                    // M2: tap opens the full detail — logging to a meal /
+                    // saving to My Dishes happens there, on the existing
+                    // diet infrastructure
+                    <TouchableOpacity
+                      key={`${tag}-${n.id}`}
+                      style={[styles.item, { borderColor: colors.border }]}
+                      onPress={() => {
+                        setOpen(false);
+                        navigation.navigate(GYM_NUTRITION_DETAIL, {
+                          item: n,
+                          gymName: g.gym_name,
+                          tag,
+                        });
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open ${n.title}`}
+                    >
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.itemTitle, { color: colors.text }]}>{n.title}</Text>
                         <Text style={[styles.itemMeta, { color: colors.textDim }]}>
-                          {KIND_LABELS[n.kind] || n.kind}
+                          {GYM_NUTRITION_KIND_LABELS[n.kind] || n.kind}
                           {n.targets?.calories ? ` · ${n.targets.calories} kcal` : ''}
                           {n.version ? ` · v${n.version}` : ''}
                         </Text>
@@ -93,14 +113,14 @@ export default function GymNutritionRow() {
                         {n.notes ? (
                           <Text style={[styles.entry, { color: colors.textDim }]}>"{n.notes}"</Text>
                         ) : null}
-                        {(n.content?.entries || []).slice(0, 3).map((e, i) => (
-                          <Text key={i} style={[styles.entry, { color: colors.textDim }]}>· {e}</Text>
+                        {normalizeNutritionEntries(n.content).slice(0, 3).map((e, i) => (
+                          <Text key={`${i}-${e.text.slice(0, 20)}`} style={[styles.entry, { color: colors.textDim }]}>· {e.text}</Text>
                         ))}
                       </View>
                       <Text style={[styles.tag, { color: tag === 'Assigned' ? colors.primary : colors.textDim }]}>
                         {tag}
                       </Text>
-                    </View>
+                    </TouchableOpacity>
                   ))}
                 </View>
               ))}

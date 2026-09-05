@@ -4,6 +4,9 @@
 //   Premium Annual   [ACTIVE]
 //   Valid until 31 Dec 2026
 //
+// M2: this card is the GYM HUB entry — the gym row opens the gym home
+// (programs + attendance); Classes and Documents stay reachable from here
+// (they were de-duplicated off the gym home screen).
 // Membership rows come from GymContext (Mobile M1) — ONE server-
 // authoritative snapshot shared with the gym home screen; this card no
 // longer fetches /gym/my/memberships itself. (This also fixes the latent crash
@@ -19,7 +22,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useColors } from '../theme';
 import { GYM_CLASSES, GYM_DOCUMENTS, GYM_HOME } from '../shared/constants/routes';
 import { fetchMyGymContent } from '../lib/gymApi';
@@ -34,23 +37,26 @@ export default function MyGymCard() {
   const { loading, hasGym, memberships, activeGymId, setActiveGymId } = useGym();
   const [contentCounts, setContentCounts] = useState({});
 
-  React.useEffect(() => {
-    let cancelled = false;
-    fetchMyGymContent()
-      .then((perGym) => {
-        if (cancelled || !Array.isArray(perGym)) return;
-        const counts = {};
-        for (const g of perGym) {
-          counts[g.gym_id] = {
-            workouts: (g.workouts?.assigned?.length || 0) + (g.workouts?.recommended?.length || 0),
-            nutrition: (g.nutrition?.assigned?.length || 0) + (g.nutrition?.recommended?.length || 0),
-          };
-        }
-        setContentCounts(counts);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
+  // refresh on every focus too — counts go stale after a gym edits content
+  useFocusEffect(
+    React.useCallback(() => {
+      let cancelled = false;
+      fetchMyGymContent()
+        .then((perGym) => {
+          if (cancelled || !Array.isArray(perGym)) return;
+          const counts = {};
+          for (const g of perGym) {
+            counts[g.gym_id] = {
+              workouts: (g.workouts?.assigned?.length || 0) + (g.workouts?.recommended?.length || 0),
+              nutrition: (g.nutrition?.assigned?.length || 0) + (g.nutrition?.recommended?.length || 0),
+            };
+          }
+          setContentCounts(counts);
+        })
+        .catch(() => {});
+      return () => { cancelled = true; };
+    }, [])
+  );
 
   if (loading || !hasGym) return null; // standalone user (or still resolving)
 

@@ -1,25 +1,32 @@
-// Gym home — the member's gym hub (Mobile M1 foundation, revised M1.1).
+// Gym home — the member's gym hub (Mobile M1 foundation, revised M1.1/M2).
 //
-// A calm, read-only home for the member's gym life: who the gym is, what
-// their membership term looks like, an attendance summary and doors into
-// the gym features that already exist (Classes, Documents, Notifications).
-// Deliberately NO new feature surfaces here — payments, attendance marking,
-// class booking and content browsing stay in their own screens/phases; this
-// screen only links to things that work today.
+// A calm, read-only home for the member's gym life: who the gym is, an
+// attendance summary, and the gym's own program content — workouts and
+// nutrition the gym assigned or recommended to THIS member. Tapping a
+// workout opens its full detail (start it or add it to your routines);
+// tapping a nutrition item opens its detail (log it to a meal or save it
+// to My Dishes) — both ride the existing workout/diet infrastructure.
 //
-// M1.1: this screen is NO LONGER a tab root. It is a shared-pool screen
-// (registered in every tab stack like GymClasses/GymDocuments) pushed from
-// MyGymCard on the Profile tab. The pool's default headerRight already
-// provides the standard bell + gear pair, so no useHeaderActions here.
+// M2 de-duplication: the Membership card was removed (MyGymCard on the
+// Profile tab, right above this screen's entry point, already shows plan/
+// status/validity), and the Classes / Documents / Notifications rows were
+// removed — Classes and Documents stay reachable from MyGymCard, and
+// notifications have their own section (the header bell). Underlying
+// functionality is untouched; only the duplicate entry points are gone.
 //
-// State comes from GymContext (one server-authoritative snapshot shared
-// with MyGymCard) — this screen never fetches on its own and never passes
+// M1.1: this screen is a shared-pool screen (registered in every tab stack
+// like GymClasses/GymDocuments) pushed from MyGymCard on the Profile tab.
+// The pool's default headerRight provides the standard bell + gear pair.
+//
+// Membership/attendance state comes from GymContext (one server-
+// authoritative snapshot shared with MyGymCard); program content comes
+// from GET /gym/my/content, sliced to the active gym. Nothing here passes
 // a gym id anywhere: authorization is server-side, resolved from the JWT.
 //
 // Standalone users cannot reach this screen (the only entry is MyGymCard,
 // which renders nothing without a gym), but it still handles the empty
 // state gracefully for safety — e.g. a membership cancelled mid-flight.
-import React, { useCallback } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -29,13 +36,15 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useColors, spacing } from '../theme';
 import LoadError from '../shared/components/LoadError';
+import useAsyncData from '../shared/hooks/useAsyncData';
 import { useGym } from '../store/GymContext';
 import { statusColor } from '../lib/gymState';
-import { GYM_CLASSES, GYM_DOCUMENTS, NOTIFICATION_CENTER } from '../shared/constants/routes';
+import { fetchMyGymContent } from '../lib/gymApi';
+import { workoutMetaLine, GYM_NUTRITION_KIND_LABELS } from '../lib/gymContent';
+import { GYM_WORKOUT_DETAIL, GYM_NUTRITION_DETAIL } from '../shared/constants/routes';
 
 export default function GymHomeScreen() {
   const colors = useColors();
@@ -50,19 +59,27 @@ export default function GymHomeScreen() {
     gymMember,
     membership,
     attendance,
-    notificationsUnread,
     activeGymId,
     setActiveGymId,
   } = useGym();
+  // program content — one call covers every gym; sliced to the active one
+  const content = useAsyncData(() => fetchMyGymContent(), []);
 
   // refresh whenever this screen becomes visible again (terms/attendance move)
   useFocusEffect(
     useCallback(() => {
       reload();
+      content.reload();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [reload])
   );
 
   const styles = makeStyles(colors);
+
+  const activeContent = useMemo(() => {
+    const rows = Array.isArray(content.data) ? content.data : [];
+    return rows.find((g) => g && g.gym_id === (gym || {}).gym_id) || null;
+  }, [content.data, gym]);
 
   if (loading) {
     return (
@@ -93,8 +110,16 @@ export default function GymHomeScreen() {
   // membership-record status when no term exists (same rule as MyGymCard)
   const status = membership?.status || gym.status;
   const badgeColor = statusColor(status, colors.textDim);
-  const frozen = status === 'FROZEN';
   const multiGym = memberships.length > 1;
+
+  const workouts = [
+    ...(activeContent?.workouts?.assigned || []).map((w) => ({ w, tag: 'Assigned' })),
+    ...(activeContent?.workouts?.recommended || []).map((w) => ({ w, tag: 'Recommended' })),
+  ];
+  const nutrition = [
+    ...(activeContent?.nutrition?.assigned || []).map((n) => ({ n, tag: 'Assigned' })),
+    ...(activeContent?.nutrition?.recommended || []).map((n) => ({ n, tag: 'Recommended' })),
+  ];
 
   return (
     <ScrollView
@@ -145,93 +170,117 @@ export default function GymHomeScreen() {
         </View>
       </View>
 
-      {/* membership term */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Membership</Text>
-        {membership?.plan_name ? (
-          <Text style={styles.planName}>{membership.plan_name}</Text>
-        ) : (
-          <Text style={[styles.planName, { color: colors.textDim }]}>No plan assigned</Text>
-        )}
-        {membership?.ends_on ? (
-          <Text style={styles.meta}>
-            {frozen ? 'Frozen — valid until' : 'Valid until'} {String(membership.ends_on).slice(0, 10)}
-          </Text>
-        ) : (
-          <Text style={styles.meta}>
-            {frozen ? 'Frozen' : 'No active term — talk to the front desk'}
-          </Text>
-        )}
-        {membership?.starts_on ? (
-          <Text style={styles.meta}>Started {String(membership.starts_on).slice(0, 10)}</Text>
-        ) : null}
-      </View>
-
       {/* attendance summary — read-only by design in the foundation phase */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Attendance</Text>
         {attendance ? (
-          <>
-            <View style={styles.statRow}>
-              <View style={styles.stat}>
-                <Text style={styles.statValue}>{attendance.visits7}</Text>
-                <Text style={styles.statLabel}>last 7 days</Text>
-              </View>
-              <View style={styles.stat}>
-                <Text style={styles.statValue}>{attendance.visits30}</Text>
-                <Text style={styles.statLabel}>last 30 days</Text>
-              </View>
-              <View style={styles.stat}>
-                <Text style={[styles.statValue, { fontSize: 13, paddingTop: 6 }]}>
-                  {attendance.lastVisit ? String(attendance.lastVisit).slice(0, 10) : '—'}
-                </Text>
-                <Text style={styles.statLabel}>last visit</Text>
-              </View>
+          <View style={styles.statRow}>
+            <View style={styles.stat}>
+              <Text style={styles.statValue}>{attendance.visits7}</Text>
+              <Text style={styles.statLabel}>last 7 days</Text>
             </View>
-          </>
+            <View style={styles.stat}>
+              <Text style={styles.statValue}>{attendance.visits30}</Text>
+              <Text style={styles.statLabel}>last 30 days</Text>
+            </View>
+            <View style={styles.stat}>
+              <Text style={[styles.statValue, { fontSize: 13, paddingTop: 6 }]}>
+                {attendance.lastVisit ? String(attendance.lastVisit).slice(0, 10) : '—'}
+              </Text>
+              <Text style={styles.statLabel}>last visit</Text>
+            </View>
+          </View>
         ) : (
           <Text style={styles.meta}>No attendance in the last 90 days.</Text>
         )}
       </View>
 
-      {/* doors into existing gym features */}
-      <View style={styles.card}>
-        <TouchableOpacity
-          style={styles.row}
-          onPress={() => navigation.navigate(GYM_CLASSES)}
-          accessibilityRole="button"
-          accessibilityLabel="Open the class schedule"
-        >
-          <Ionicons name="calendar-outline" size={16} color={colors.primary} />
-          <Text style={styles.rowText}>Classes</Text>
-          <Text style={styles.rowHint}>Book your spot</Text>
-          <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.row}
-          onPress={() => navigation.navigate(GYM_DOCUMENTS)}
-          accessibilityRole="button"
-          accessibilityLabel="Open your gym documents"
-        >
-          <Ionicons name="document-text-outline" size={16} color={colors.primary} />
-          <Text style={styles.rowText}>Documents</Text>
-          <Text style={styles.rowHint}>Waivers &amp; agreements</Text>
-          <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.row, { borderBottomWidth: 0 }]}
-          onPress={() => navigation.navigate(NOTIFICATION_CENTER)}
-          accessibilityRole="button"
-          accessibilityLabel="Open notifications"
-        >
-          <Ionicons name="notifications-outline" size={16} color={colors.primary} />
-          <Text style={styles.rowText}>Notifications</Text>
-          <Text style={styles.rowHint}>
-            {notificationsUnread > 0 ? `${notificationsUnread} unread` : 'All caught up'}
-          </Text>
-          <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
-        </TouchableOpacity>
-      </View>
+      {/* program content — shared loader state for both sections; keep the
+          lists on screen while a background refetch runs */}
+      {content.loading && !content.data ? (
+        <View style={styles.contentLoading}>
+          <ActivityIndicator color={colors.primary} />
+        </View>
+      ) : content.error && !content.data ? (
+        <LoadError message="Couldn't load your gym's programs." onRetry={content.reload} />
+      ) : (
+        <>
+          {/* gym workouts */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Gym Workouts</Text>
+            {workouts.length === 0 ? (
+              <Text style={styles.emptyHint}>
+                Nothing right now — programs your gym assigns or recommends will appear here.
+              </Text>
+            ) : (
+              workouts.map(({ w, tag }, i) => (
+                <TouchableOpacity
+                  key={`${tag}-${w.id}`}
+                  style={[styles.row, i === workouts.length - 1 && { borderBottomWidth: 0 }]}
+                  onPress={() => navigation.navigate(GYM_WORKOUT_DETAIL, {
+                    workout: w,
+                    gymName: gym.gym_name,
+                    tag,
+                  })}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open gym workout ${w.title}`}
+                >
+                  <Ionicons name="barbell-outline" size={16} color={colors.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.rowText} numberOfLines={1}>{w.title}</Text>
+                    <Text style={styles.rowHint} numberOfLines={1}>
+                      {workoutMetaLine(w) || 'Gym program'}
+                    </Text>
+                  </View>
+                  <Text style={[styles.rowTag, { color: tag === 'Assigned' ? colors.primary : colors.textDim }]}>
+                    {tag}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+
+          {/* gym nutrition */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Gym Nutrition</Text>
+            {nutrition.length === 0 ? (
+              <Text style={styles.emptyHint}>
+                Nothing right now — recipes and diet guides from your gym will appear here.
+              </Text>
+            ) : (
+              nutrition.map(({ n, tag }, i) => (
+                <TouchableOpacity
+                  key={`${tag}-${n.id}`}
+                  style={[styles.row, i === nutrition.length - 1 && { borderBottomWidth: 0 }]}
+                  onPress={() => navigation.navigate(GYM_NUTRITION_DETAIL, {
+                    item: n,
+                    gymName: gym.gym_name,
+                    tag,
+                  })}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open gym nutrition ${n.title}`}
+                >
+                  <Ionicons name="restaurant-outline" size={16} color={colors.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.rowText} numberOfLines={1}>{n.title}</Text>
+                    <Text style={styles.rowHint} numberOfLines={1}>
+                      {[
+                        GYM_NUTRITION_KIND_LABELS[n.kind] || n.kind,
+                        n.targets?.calories != null ? `${n.targets.calories} kcal` : null,
+                      ].filter(Boolean).join(' · ')}
+                    </Text>
+                  </View>
+                  <Text style={[styles.rowTag, { color: tag === 'Assigned' ? colors.primary : colors.textDim }]}>
+                    {tag}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -272,13 +321,13 @@ const makeStyles = (colors) => StyleSheet.create({
   },
   gymName: { color: colors.text, fontSize: 17, fontWeight: '800' },
   meta: { color: colors.textDim, fontSize: 12, marginTop: 3 },
-  planName: { color: colors.text, fontSize: 15, fontWeight: '700', marginTop: 2 },
   badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
   badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
   statRow: { flexDirection: 'row' },
   stat: { flex: 1, alignItems: 'flex-start' },
   statValue: { color: colors.text, fontSize: 22, fontWeight: '800', fontVariant: ['tabular-nums'] },
   statLabel: { color: colors.textDim, fontSize: 11, marginTop: 2 },
+  contentLoading: { padding: spacing.xl, alignItems: 'center' },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -287,6 +336,8 @@ const makeStyles = (colors) => StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  rowText: { color: colors.text, fontSize: 13, fontWeight: '700', flex: 1 },
-  rowHint: { color: colors.textDim, fontSize: 11 },
+  rowText: { color: colors.text, fontSize: 13, fontWeight: '700' },
+  rowHint: { color: colors.textDim, fontSize: 11, marginTop: 1, textTransform: 'capitalize' },
+  rowTag: { fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
+  emptyHint: { color: colors.textDim, fontSize: 12, lineHeight: 17 },
 });

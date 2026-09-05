@@ -40,6 +40,8 @@ import MyDishesScreen from '../screens/MyDishesScreen';
 import GymClassesScreen from '../screens/GymClassesScreen';
 import GymDocumentsScreen from '../screens/GymDocumentsScreen';
 import GymHomeScreen from '../screens/GymHomeScreen';
+import GymWorkoutDetailScreen from '../screens/GymWorkoutDetailScreen';
+import GymNutritionDetailScreen from '../screens/GymNutritionDetailScreen';
 import MealCatalogScreen from '../screens/MealCatalogScreen';
 import WorkoutTemplatesScreen from '../screens/WorkoutTemplatesScreen';
 import WorkoutTemplateEditorScreen from '../screens/WorkoutTemplateEditorScreen';
@@ -78,7 +80,6 @@ import {
   SYNC_SETTINGS,
   INTAKE_FORM,
   PROFILE,
-  BODY,
   PROGRESS_PHOTOS,
   TRAINER_PROGRESS_PHOTOS,
   CLIENT_DETAIL,
@@ -90,6 +91,8 @@ import {
   MY_DISHES,
   GYM_CLASSES,
   GYM_DOCUMENTS,
+  GYM_WORKOUT_DETAIL,
+  GYM_NUTRITION_DETAIL,
   SUPPLEMENT_PLAN_BUILDER,
   COACHING_PLAN_BUILDER,
   COACHING_PLAN_DETAIL,
@@ -169,6 +172,9 @@ function renderDetailScreens(onSwitchView) {
           stack a GymMain route, so navigate(GYM_HOME) always resolves with
           the bar still visible. */}
       <Stack.Screen name={GYM_HOME} component={GymHomeScreen} options={{ title: 'My Gym' }} />
+      {/* M2 — gym program content, reusable from the gym home and the diet strip */}
+      <Stack.Screen name={GYM_WORKOUT_DETAIL} component={GymWorkoutDetailScreen} options={{ title: 'Gym Workout' }} />
+      <Stack.Screen name={GYM_NUTRITION_DETAIL} component={GymNutritionDetailScreen} options={{ title: 'Gym Nutrition' }} />
       <Stack.Screen
         name={SUPPLEMENT_PLAN_BUILDER}
         component={CoachingPlanBuilderScreen}

@@ -40,6 +40,9 @@ export const MY_DISHES = 'MyDishes';
 export const GYM_HOME = 'GymMain';
 export const GYM_CLASSES = 'GymClasses';
 export const GYM_DOCUMENTS = 'GymDocuments';
+// M2 — gym program content detail screens (pool)
+export const GYM_WORKOUT_DETAIL = 'GymWorkoutDetail';
+export const GYM_NUTRITION_DETAIL = 'GymNutritionDetail';
 export const SUPPLEMENT_PLAN_BUILDER = 'SupplementPlanBuilder';
 export const COACHING_PLAN_BUILDER = 'CoachingPlanBuilder';
 export const COACHING_PLAN_DETAIL = 'CoachingPlanDetail';
