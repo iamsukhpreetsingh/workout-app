@@ -6,24 +6,31 @@
 // app account was connected appears here too — documents belong to the
 // gym member row, not the app account.
 //
-// SIGNING is the core action: a PENDING waiver is signed by typing the
-// legal name (retained server-side as the signature of record). Expired
-// documents refuse to sign — the gym issues a fresh copy. REPLACED and
-// REVOKED copies stay at the desk (retention); the app shows live
+// TAPPING a card opens the actual document (Mobile M3): PDFs and scans
+// stream with the member's JWT into an in-app viewer (iOS) / the device's
+// PDF viewer (Android) — so the member can review the full text BEFORE
+// signing, and re-read anything they've already signed. REPLACED/REVOKED
+// copies stay at the desk (retention) and don't open; the app shows live
 // documents only, with expiry surfaced so the member sees what needs
-// renewing. Byte downloads stay on the web portal where authenticated
-// file saving works natively.
+// renewing.
+//
+// SIGNING is the core action: a PENDING waiver is signed by typing the
+// legal name (retained server-side as the signature of record) via the
+// shared GymSignSheet — the same sheet the viewer offers after reading.
+// Expired documents refuse to sign — the gym issues a fresh copy.
 import React, { useCallback, useState } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, TouchableOpacity, Modal, TextInput,
-  ActivityIndicator, ScrollView, Alert,
+  View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useColors } from '../theme';
 import useAsyncData from '../shared/hooks/useAsyncData';
 import LoadError from '../shared/components/LoadError';
-import { fetchMyGymDocuments, signGymDocument } from '../lib/gymApi';
+import { fetchMyGymDocuments } from '../lib/gymApi';
+import { documentKind, humanFileSize } from '../lib/gymDocuments';
+import GymSignSheet from '../components/GymSignSheet';
+import { GYM_DOCUMENT_VIEW } from '../shared/constants/routes';
 
 const STATUS_COLORS = {
   PENDING: '#D97706',
@@ -41,6 +48,8 @@ const CATEGORY_ICONS = {
   OTHER: 'folder-open-outline',
 };
 
+const KIND_LABELS = { pdf: 'PDF', image: 'Image' };
+
 function formatDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -50,33 +59,13 @@ function formatDate(iso) {
 
 export default function GymDocumentsScreen() {
   const colors = useColors();
+  const navigation = useNavigation();
   const [signTarget, setSignTarget] = useState(null);
-  const [signature, setSignature] = useState('');
-  const [signing, setSigning] = useState(false);
   const { data, loading, error, reload } = useAsyncData(fetchMyGymDocuments, []);
 
   useFocusEffect(useCallback(() => { reload(); }, [reload]));
 
   const documents = Array.isArray(data) ? data : [];
-
-  const doSign = () => {
-    const name = signature.trim();
-    if (!name) return;
-    setSigning(true);
-    signGymDocument(signTarget.id, name)
-      .then(() => {
-        setSignTarget(null);
-        setSignature('');
-        reload();
-      })
-      .catch((e) => {
-        // signing errors surface inline: expired, already signed, membership inactive
-        setSignTarget(null);
-        setSignature('');
-        Alert.alert('Could not sign', e?.message || 'Please try again.');
-      })
-      .finally(() => setSigning(false));
-  };
 
   const styles = makeStyles(colors);
 
@@ -109,8 +98,21 @@ export default function GymDocumentsScreen() {
         }
         renderItem={({ item: d }) => {
           const signable = d.status === 'PENDING' && !d.expired;
+          const viewable = !!documentKind(d.content_type) && d.is_live !== false;
+          const fileBits = [
+            d.original_filename,
+            humanFileSize(d.file_size),
+            KIND_LABELS[documentKind(d.content_type)] || '',
+          ].filter(Boolean);
           return (
-            <View style={styles.card}>
+            <TouchableOpacity
+              style={styles.card}
+              activeOpacity={0.75}
+              disabled={!viewable}
+              onPress={() => navigation.navigate(GYM_DOCUMENT_VIEW, { document: d })}
+              accessibilityRole={viewable ? 'button' : undefined}
+              accessibilityLabel={viewable ? `View ${d.title || d.category_label}` : undefined}
+            >
               <View style={styles.cardTop}>
                 <View style={[styles.iconWrap, { backgroundColor: `${STATUS_COLORS[d.effective_status] || colors.textDim}22` }]}>
                   <Ionicons
@@ -132,6 +134,9 @@ export default function GymDocumentsScreen() {
                     {d.effective_status}
                   </Text>
                 </View>
+                {viewable && (
+                  <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+                )}
               </View>
               <View style={styles.cardMeta}>
                 {d.authorized_signature ? (
@@ -145,11 +150,19 @@ export default function GymDocumentsScreen() {
                 ) : (
                   <Text style={styles.metaText}>Filed {formatDate(d.created_at)}</Text>
                 )}
+                {viewable && fileBits.length > 0 && (
+                  <View style={styles.fileRow}>
+                    <Ionicons name="document-attach-outline" size={13} color={colors.textDim} />
+                    <Text style={styles.fileText} numberOfLines={1}>
+                      {fileBits.join(' · ')} · Tap to view
+                    </Text>
+                  </View>
+                )}
               </View>
               {signable && (
                 <TouchableOpacity
                   style={styles.signButton}
-                  onPress={() => { setSignature(''); setSignTarget(d); }}
+                  onPress={() => setSignTarget(d)}
                   accessibilityRole="button"
                   accessibilityLabel={`Sign ${d.title || d.category_label}`}
                 >
@@ -157,50 +170,19 @@ export default function GymDocumentsScreen() {
                   <Text style={styles.signButtonText}>Sign document</Text>
                 </TouchableOpacity>
               )}
-            </View>
+            </TouchableOpacity>
           );
         }}
       />
 
-      <Modal visible={!!signTarget} transparent animationType="fade" onRequestClose={() => setSignTarget(null)}>
-        <View style={styles.modalBackdrop}>
-          <ScrollView contentContainerStyle={styles.modalScroll} keyboardShouldPersistTaps="handled">
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>
-                Sign {signTarget?.title || signTarget?.category_label}
-              </Text>
-              <Text style={styles.modalBody}>
-                Type your full legal name below. It is kept as the signature of
-                record for {signTarget?.gym_name || 'your gym'} and cannot be undone here.
-              </Text>
-              <TextInput
-                style={styles.signInput}
-                value={signature}
-                onChangeText={setSignature}
-                placeholder="Your full legal name"
-                placeholderTextColor={colors.textDim}
-                maxLength={80}
-                autoCapitalize="words"
-                autoFocus
-              />
-              <View style={styles.modalActions}>
-                <TouchableOpacity style={styles.modalCancel} onPress={() => setSignTarget(null)}>
-                  <Text style={styles.modalCancelText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalSign, (signing || !signature.trim()) && { opacity: 0.5 }]}
-                  onPress={doSign}
-                  disabled={signing || !signature.trim()}
-                >
-                  {signing
-                    ? <ActivityIndicator size="small" color="#fff" />
-                    : <Text style={styles.modalSignText}>Sign</Text>}
-                </TouchableOpacity>
-              </View>
-            </View>
-          </ScrollView>
-        </View>
-      </Modal>
+      <GymSignSheet
+        doc={signTarget}
+        onClose={() => setSignTarget(null)}
+        onSigned={() => {
+          setSignTarget(null);
+          reload();
+        }}
+      />
     </View>
   );
 }
@@ -235,6 +217,8 @@ const makeStyles = (colors) => StyleSheet.create({
   badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
   cardMeta: { marginTop: 10, paddingLeft: 2 },
   metaText: { color: colors.textDim, fontSize: 12 },
+  fileRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 5 },
+  fileText: { color: colors.textDim, fontSize: 11.5, flexShrink: 1 },
   signButton: {
     marginTop: 12,
     backgroundColor: colors.primary,
@@ -246,31 +230,4 @@ const makeStyles = (colors) => StyleSheet.create({
     gap: 6,
   },
   signButtonText: { color: '#fff', fontWeight: '800', fontSize: 13 },
-  modalBackdrop: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center', justifyContent: 'center', padding: 24,
-  },
-  modalScroll: { flexGrow: 1, justifyContent: 'center', width: '100%' },
-  modalCard: {
-    backgroundColor: colors.card, borderRadius: 16, padding: 18, width: '100%',
-    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
-  modalTitle: { color: colors.text, fontSize: 16, fontWeight: '800', marginBottom: 8 },
-  modalBody: { color: colors.textDim, fontSize: 13, lineHeight: 19, marginBottom: 14 },
-  signInput: {
-    borderWidth: 1, borderColor: colors.border, borderRadius: 10,
-    color: colors.text, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14,
-    marginBottom: 14,
-  },
-  modalActions: { flexDirection: 'row', gap: 10 },
-  modalCancel: {
-    flex: 1, alignItems: 'center', paddingVertical: 11, borderRadius: 10,
-    borderWidth: 1, borderColor: colors.border,
-  },
-  modalCancelText: { color: colors.textDim, fontWeight: '700' },
-  modalSign: {
-    flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 11,
-    borderRadius: 10, backgroundColor: colors.primary,
-  },
-  modalSignText: { color: '#fff', fontWeight: '800' },
 });

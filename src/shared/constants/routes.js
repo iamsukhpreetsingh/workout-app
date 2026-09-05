@@ -40,6 +40,8 @@ export const MY_DISHES = 'MyDishes';
 export const GYM_HOME = 'GymMain';
 export const GYM_CLASSES = 'GymClasses';
 export const GYM_DOCUMENTS = 'GymDocuments';
+// M3 — full document viewer (tap a document card in GymDocuments)
+export const GYM_DOCUMENT_VIEW = 'GymDocumentView';
 // M2 — gym program content detail screens (pool)
 export const GYM_WORKOUT_DETAIL = 'GymWorkoutDetail';
 export const GYM_NUTRITION_DETAIL = 'GymNutritionDetail';
