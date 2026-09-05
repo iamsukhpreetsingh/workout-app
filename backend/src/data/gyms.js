@@ -616,7 +616,30 @@ async function getGymMember(gymId, memberId) {
     'SELECT * FROM gym_members WHERE id = $1 AND gym_id = $2',
     [memberId, gymId]
   );
-  return memberToClient(rows[0] || null);
+  if (!rows.length) return null;
+  const member = memberToClient(rows[0]);
+  // Mobile M10 — read-only overlay: for members linked before the signup
+  // profile existed, surface the app user's DOB/gender/height/weight (their
+  // intake profile) WITHOUT writing over desk-entered values. The portal
+  // prefers the member column, then this overlay.
+  if (member.app_user_id) {
+    const { rows: intakeRows } = await query(
+      `SELECT ip.date_of_birth, ip.gender, ip.height_cm, ip.weight_kg
+       FROM client_intake_profiles ip
+       JOIN gym_members gm ON gm.app_user_id = ip.client_user_id
+       WHERE gm.id = $1 AND gm.gym_id = $2`,
+      [memberId, gymId]
+    );
+    if (intakeRows.length) {
+      const ip = intakeRows[0];
+      member.app_profile = {
+        date_of_birth: ip.date_of_birth, gender: ip.gender,
+        height_cm: ip.height_cm != null ? Number(ip.height_cm) : null,
+        weight_kg: ip.weight_kg != null ? Number(ip.weight_kg) : null,
+      };
+    }
+  }
+  return member;
 }
 
 async function updateGymMember(gymId, memberId, actor, ip, patch) {
@@ -831,6 +854,37 @@ async function linkMemberToApp(gymId, memberId, actor, ip, { email }) {
        WHERE id = $1 AND gym_id = $2 RETURNING *`,
       [member.id, gymId, user.id]
     );
+    // Mobile M10 — backfill the member's EMPTY profile fields from the
+    // linked user's signup/health profile (DOB, gender → columns;
+    // height/weight → profile JSONB). Desk-entered values are authoritative
+    // and never overwritten.
+    const { rows: intakeRows } = await client.query(
+      `SELECT date_of_birth, gender, height_cm, weight_kg
+       FROM client_intake_profiles WHERE client_user_id = $1`,
+      [user.id]
+    );
+    let backfilled = null;
+    if (intakeRows.length) {
+      const ip = intakeRows[0];
+      const mergedProfile = { ...(member.app_user_id ? {} : {}), ...member.profile };
+      if (ip.height_cm != null && mergedProfile.height_cm == null) mergedProfile.height_cm = Number(ip.height_cm);
+      if (ip.weight_kg != null && mergedProfile.weight_kg == null) mergedProfile.weight_kg = Number(ip.weight_kg);
+      if (ip.height_cm != null || ip.weight_kg != null) mergedProfile.source = mergedProfile.source || 'app_profile';
+      await client.query(
+        `UPDATE gym_members SET
+           date_of_birth = COALESCE(date_of_birth, $3::date),
+           gender = COALESCE(gender, $4),
+           profile = $5,
+           updated_at = now()
+         WHERE id = $1 AND gym_id = $2`,
+        [member.id, gymId, ip.date_of_birth ?? null, ip.gender ?? null,
+         Object.keys(mergedProfile).length ? JSON.stringify(mergedProfile) : '{}']
+      );
+      backfilled = {
+        date_of_birth: ip.date_of_birth, gender: ip.gender,
+        height_cm: ip.height_cm, weight_kg: ip.weight_kg,
+      };
+    }
     // consume any pending invitation — the app account IS the connection
     await client.query(
       `UPDATE gym_member_invites SET status = 'ACCEPTED', accepted_at = now(), updated_at = now()
@@ -841,9 +895,11 @@ async function linkMemberToApp(gymId, memberId, actor, ip, { email }) {
       gymId, actorUserId: actor?.userId ?? null, actorLabel: actor?.label ?? null, ip,
       action: 'member.linked_app', entity: 'gym_member', entityId: member.id,
       before: { app_user_id: member.app_user_id },
-      after: { app_user_id: user.id, user_email: user.email },
+      after: { app_user_id: user.id, user_email: user.email, profile_backfilled: backfilled },
     });
-    return memberToClient(rows[0]);
+    const refreshed = await client.query('SELECT * FROM gym_members WHERE id = $1', [member.id]);
+    return memberToClient({ ...refreshed.rows[0],
+      profile_backfilled: backfilled });
   });
 }
 

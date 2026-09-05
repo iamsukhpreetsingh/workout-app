@@ -39,6 +39,7 @@ import ClientDietPlanDetailScreen from '../screens/ClientDietPlanDetailScreen';
 import MyDishesScreen from '../screens/MyDishesScreen';
 import GymClassesScreen from '../screens/GymClassesScreen';
 import GymDocumentsScreen from '../screens/GymDocumentsScreen';
+import GymPaymentsScreen from '../screens/GymPaymentsScreen';
 import GymDocumentViewScreen from '../screens/GymDocumentViewScreen';
 import GymHomeScreen from '../screens/GymHomeScreen';
 import GymWorkoutsScreen from '../screens/GymWorkoutsScreen';
@@ -96,6 +97,7 @@ import {
   MY_DISHES,
   GYM_CLASSES,
   GYM_DOCUMENTS,
+  GYM_PAYMENTS,
   GYM_DOCUMENT_VIEW,
   GYM_WORKOUT_DETAIL,
   GYM_NUTRITION_DETAIL,
@@ -174,6 +176,7 @@ function renderDetailScreens(onSwitchView) {
       <Stack.Screen name={MY_DISHES} component={MyDishesScreen} options={{ title: 'My Dishes' }} />
       <Stack.Screen name={GYM_CLASSES} component={GymClassesScreen} options={{ title: 'Gym Classes' }} />
       <Stack.Screen name={GYM_DOCUMENTS} component={GymDocumentsScreen} options={{ title: 'My Documents' }} />
+      <Stack.Screen name={GYM_PAYMENTS} component={GymPaymentsScreen} options={{ title: 'Gym Payments' }} />
       {/* M3 — document viewer: PDF (iOS in-app / Android system viewer) + images,
           so members can read a waiver before signing and re-open signed copies */}
       <Stack.Screen name={GYM_DOCUMENT_VIEW} component={GymDocumentViewScreen} options={{ title: 'Document' }} />

@@ -19,8 +19,8 @@ mobile app) and speaks to the `/gym` API.
 | `src/pages/CreateGymWizard.tsx` | 6-step onboarding (Name → Contact → Address → Hours → Branding → Review); `OperatingHoursEditor` inside |
 | `src/pages/Dashboard.tsx` | Landing: profile-completion ring + missing checklist, gym summary, INACTIVE banner with owner reactivation |
 | `src/pages/MembersPage.tsx` | Members list (search + membership-status AND app-connection filters + pagination + create drawer). Exports `MemberFormFields`, `memberFormToPayload`, `AppConnectionTag` reused by the detail page |
-| `src/pages/MemberDetailPage.tsx` | Member shell: Overview (profile + app-connection card + membership card), then real tabs Membership / Payments / Attendance / Trainer / Workouts / Nutrition; placeholders for Documents / Activity |
-| `src/components/MemberMembershipTab.tsx` | Lifecycle UI: Freeze / Resume / Renew / Change Plan / Cancel / Extend + lifecycle timeline |
+| `src/pages/MemberDetailPage.tsx` | Member shell: Overview (profile incl. height/weight with an `app_profile` fallback overlay from the linked app user's signup/health profile, app-connection card, membership card), then real tabs Membership / Payments / Attendance / Trainer / Workouts / Nutrition; placeholders for Documents / Activity |
+| `src/components/MemberMembershipTab.tsx` | Lifecycle UI split by context: **Current membership** (Freeze / Resume / Renew / Change Plan / Cancel / Extend) vs **Scheduled renewal** (Edit Renewal modal with plan/dates/notes, Cancel Renewal with the spec's confirmation copy) + lifecycle timeline. Price on the scheduled card is the LOCKED snapshot |
 | `src/components/MemberPaymentsTab.tsx` | Dues + receipts, Record payment, Refund (owner/admin), printable Receipt modal, Add charge |
 | `src/components/MemberAttendanceTab.tsx` | ✓/− calendar (21-day strip), QR card (rotatable), mark-present/backdate |
 | `src/components/MemberTrainerTab.tsx` / `MemberNutritionTab.tsx` / `MemberWorkoutsTab.tsx` | Assign/change/end assignment UIs per domain |
@@ -241,6 +241,50 @@ see `../GYM_MANAGEMENT_DESIGN.md` §16 for phasing.
   mis-mark when the seat is free again.
 - **`api/classes.ts`** — `GymClass` / `ClassBooking` types and the class,
   booking, waitlist and attendance calls (`/gym/:gymId/classes…`).
+
+## Mobile M9 — member payments, dues & receipts (app side)
+
+- **`../src/screens/GymPaymentsScreen.js`** — pushed from the Payments card
+  on the gym home: Payment Due cards (amount, due date, OVERDUE badge, Pay
+  Online action when the server flags it), the payment history list (date,
+  ₹, method, PAID/PARTIAL/REFUNDED) and the receipt sheet (gym, member,
+  membership, covered period, receipt number, status) with **View** +
+  **Share** (RN Share — the app's existing share surface).
+- **`../src/lib/gymApi.js`** — `fetchMyPayments`, `fetchMyReceipt`,
+  `payChargeOnline` (the online-payment action lives on the backend: today
+  a 501 "pay at the front desk" stub, later a gateway — the app renders the
+  server's answer and never implements gateway logic).
+- Backend endpoints: `GET /gym/my/billing` (dues + recent payments +
+  `online_payment_available` flag per gym), `GET /gym/my/payments?gym_id=`
+  (full history), `GET /gym/my/receipts/:paymentId` (ownership-checked —
+  another member's receipt is a 404), `POST
+  /gym/my/charges/:chargeId/pay-online` (501 stub with ownership check).
+  The member can never alter amount/status/receipt/date: there is no
+  client write path — the ledger is immutable server-side.
+
+## Payment proofs (Phase M11)
+
+Members submit payment proof (screenshot + transaction id) from the app
+against their own outstanding dues; the proof is PENDING_VERIFICATION
+evidence — the ledger only moves on admin approval. Portal surfaces:
+- **Payments page** — "Pending verification" summary card + proofs table
+  (member, amount, method, transaction ID, submitted, status) with a
+  Review modal (authorized screenshot fetch via blob URL, Approve /
+  Reject with reason). OWNER/ADMIN for approve/reject.
+- **Member Payments tab** — the member's proofs with statuses, rejection
+  reasons, and Review/Approve/Reject actions; approved proofs expose
+  their receipt.
+- Backend: `gym_payment_proofs` (057) + `paymentProofStorage.js` (S3 in
+  production via env config, loud failure if missing; local
+  uploads/payment-proofs/ in dev) + `gymPaymentProofs.js` data layer.
+  Duplicate protection is DB-enforced: one PENDING proof per charge and
+  per (gym, transaction id).
+
+- **Attendance integration**: check-in responses carry a
+  `payment_warning` (dues amount, due date, overdue flag, pending-proof
+  flag) derived server-side from the ledger — the app shows it as a
+  warning with [View Payment] / [Continue Check-in]; attendance stays
+  recorded and idempotent (warning + retry never double-counts).
 
 ## Security model
 

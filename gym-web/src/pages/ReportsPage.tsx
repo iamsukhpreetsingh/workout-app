@@ -185,6 +185,7 @@ export default function ReportsPage() {
             rowKey="id"
             dataSource={data.branches}
             pagination={false}
+            scroll={{ x: 700 }}
             columns={[
               { title: 'Branch', key: 'name', render: (_: any, r) => (
                 <>

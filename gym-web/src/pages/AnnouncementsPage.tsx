@@ -262,6 +262,7 @@ export default function AnnouncementsPage({ gymId }: { gymId: string }) {
         dataSource={rows}
         columns={columns as any}
         locale={{ emptyText: 'No announcements yet — create one to reach your members (app inbox for connected members, email for the rest).' }}
+        scroll={{ x: 900 }}
         pagination={{ pageSize: 10, hideOnSinglePage: true }}
       />
 
@@ -351,6 +352,7 @@ export default function AnnouncementsPage({ gymId }: { gymId: string }) {
               size="small"
               dataSource={detail.deliveries}
               pagination={{ pageSize: 15, hideOnSinglePage: true }}
+              scroll={{ x: 700 }}
               columns={[
                 {
                   title: 'Member', key: 'member',

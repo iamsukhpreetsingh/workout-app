@@ -1,0 +1,45 @@
+/* Global responsive rules for the Gym Portal (mobile/tablet).
+   Desktop stays untouched — everything here only tightens AntD surfaces
+   that have fixed widths larger than a phone viewport. */
+
+/* Modals: AntD sets inline width (default 520px, some pages pass more).
+   max-width caps the computed width on small screens without touching
+   desktop, and the body scrolls instead of overflowing. */
+@media (max-width: 640px) {
+  .ant-modal {
+    max-width: calc(100vw - 16px) !important;
+    margin: 8px auto;
+    top: 16px;
+    padding-bottom: 0;
+  }
+  .ant-modal .ant-modal-body {
+    max-height: calc(100vh - 180px);
+    overflow-y: auto;
+  }
+  .ant-modal-confirm {
+    max-width: calc(100vw - 16px);
+  }
+
+  /* Drawers: page-level widths (420–640px) exceed a phone viewport */
+  .ant-drawer-content-wrapper {
+    max-width: calc(100% - 12px) !important; /* % of the fixed full-width .ant-drawer container — scrollbar-safe, unlike 100vw */
+  }
+
+  /* Popconfirm/Select dropdowns pinned near the right edge can overflow */
+  .ant-popover, .ant-select-dropdown {
+    max-width: calc(100vw - 16px);
+  }
+
+  /* keep the pinned table pagination row inside the viewport */
+  .ant-table-pagination.ant-pagination {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+}
+
+/* very narrow phones: give list rows and form grids room to breathe */
+@media (max-width: 400px) {
+  .ant-table-cell {
+    word-break: break-word;
+  }
+}

@@ -179,6 +179,7 @@ export default function BranchesPage() {
           columns={columns as any}
           dataSource={rows}
           rowKey={(b) => b.id}
+          scroll={{ x: 700 }}
           loading={loading}
           pagination={false}
           locale={{ emptyText: 'No branches yet — a gym without branches works exactly as before. Add one when you open a second location.' }}

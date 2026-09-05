@@ -19,7 +19,8 @@ import RestEditorModal from '../../../components/RestEditorModal';
 import PlateSheet from '../../../components/PlateSheet';
 import PRToast from '../../../components/PRToast';
 import { queueSessionForSync } from '../../../lib/syncService';
-import { hasActiveGymMembership, markGymAttendanceFromWorkout } from '../../../lib/gymApi';
+import { hasActiveGymMembership, markGymAttendanceFromWorkout, fetchMyGymBilling } from '../../../lib/gymApi';
+import { paymentWarningForGym, formatMoney } from '../../../lib/gymState';
 import { getSuggestionForExercise } from '../../../lib/progression';
 import { useColors } from '../../../theme';
 import { lightImpact, success as hapticSuccess } from '../../../lib/haptics';
@@ -220,6 +221,25 @@ export default function WorkoutScreen({ navigation }) {
       // silently swallowed.
       hasActiveGymMembership().then((active) => {
         if (!active) return;
+        // M11 — payment warning (WARNING, not a block): dues/overdue come
+        // from the server's billing slice; attendance stays idempotent.
+        fetchMyGymBilling().then((rows) => {
+          const warn = paymentWarningForGym(rows, null, undefined);
+          if (warn) {
+            const amountLine = formatMoney(warn.outstanding_cents, warn.currency)
+              + (warn.overdue ? ` — overdue by ${warn.overdue_days} day${warn.overdue_days === 1 ? '' : 's'}` : ' is due');
+            Alert.alert(
+              warn.overdue ? 'Overdue gym payment' : 'Outstanding gym payment',
+              `You have an outstanding gym payment.\n${amountLine}\n\nYou can still mark today's attendance.`,
+              [
+                { text: 'View Payment', onPress: () => {} },
+                { text: 'Mark Attendance', onPress: submitMark },
+              ]
+            );
+            return;
+          }
+          submitMark();
+        }).catch(() => submitMark());
         const submitMark = () => {
           markGymAttendanceFromWorkout()
             .then((res) => {

@@ -64,7 +64,7 @@ import {
   myBookedClasses,
   billingForGym,
 } from '../lib/gymState';
-import { GYM_WORKOUTS, GYM_NUTRITION, GYM_CLASSES, GYM_ATTENDANCE, GYM_CHECK_IN, GYM_DOCUMENTS } from '../shared/constants/routes';
+import { GYM_WORKOUTS, GYM_NUTRITION, GYM_CLASSES, GYM_ATTENDANCE, GYM_CHECK_IN, GYM_DOCUMENTS, GYM_PAYMENTS } from '../shared/constants/routes';
 
 // "Tue, 1 Sep" — the same UTC-safe class date rendering GymClassesScreen
 // uses (gym-local schedule dates must not shift with the device timezone).
@@ -166,11 +166,16 @@ export default function GymHomeScreen() {
       : section.error && !section.data ? 'error'
         : 'ready';
 
-  const card = (title, section, body) => {
+  const card = (title, section, body, onPress) => {
     const state = sectionState(section);
-    return (
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>{title}</Text>
+    const content = (
+      <>
+        <View style={styles.cardTitleRow}>
+          <Text style={styles.cardTitle}>{title}</Text>
+          {onPress && state === 'ready' ? (
+            <Ionicons name="chevron-forward" size={15} color={colors.textDim} />
+          ) : null}
+        </View>
         {state === 'loading' ? <SectionSkeleton colors={colors} styles={styles} /> : null}
         {state === 'error' ? (
           <View style={styles.sectionError}>
@@ -186,10 +191,16 @@ export default function GymHomeScreen() {
           </View>
         ) : null}
         {state === 'ready' ? body : null}
-      </View>
+      </>
+    );
+    if (!onPress) return <View style={styles.card}>{content}</View>;
+    return (
+      <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.7}
+        accessibilityRole="button" accessibilityLabel={`${title} — open details`}>
+        {content}
+      </TouchableOpacity>
     );
   };
-
   // ── membership card ───────────────────────────────────────────────────────
   // term status is what matters; fall back to the member-record status when
   // no term exists (same rule MyGymCard uses)
@@ -452,7 +463,7 @@ export default function GymHomeScreen() {
       {openCharges.length > 4 ? (
         <Text style={styles.meta}>+{openCharges.length - 4} more open charge{openCharges.length - 4 > 1 ? 's' : ''}</Text>
       ) : null}
-      <Text style={styles.footnote}>Payments are recorded at the front desk.</Text>
+      <Text style={styles.footnote}>Tap for full payment history & receipts.</Text>
     </>
   ) : (
     <View style={styles.settledRow}>
@@ -533,7 +544,7 @@ export default function GymHomeScreen() {
       {card('Attendance', { loading: false, error: null, data: attendance, reload: gym.reload }, attendanceBody)}
       {card('Gym Recommended', content, recommendedBody)}
       {card('Upcoming Classes', classes, classBody)}
-      {card('Payments', billing, paymentsBody)}
+      {card('Payments', billing, paymentsBody, () => navigation.navigate(GYM_PAYMENTS, { gymId }))}
       {card('Announcements', announcements, announcementsBody)}
       {/* Classes & Documents: the permanent entries that used to sit on the
           Profile My Gym card — the detail page is the single gym hub now */}
@@ -609,6 +620,7 @@ const makeStyles = (colors) => StyleSheet.create({
     padding: spacing.lg - 2,
     marginBottom: spacing.md,
   },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.xs },
   cardTitle: { color: colors.text, fontSize: 13, fontWeight: '800', letterSpacing: 0.3, marginBottom: spacing.sm },
   skeletonTitle: { height: 12, borderRadius: 6, width: 110, marginBottom: spacing.sm },
   skeletonBar: { borderRadius: 10 },

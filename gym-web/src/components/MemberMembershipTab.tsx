@@ -10,7 +10,7 @@ import {
 } from 'antd';
 import {
   PlusOutlined, RedoOutlined, StopOutlined, PauseCircleOutlined,
-  PlayCircleOutlined, CalendarOutlined,
+  PlayCircleOutlined, CalendarOutlined, EditOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import StatusBadge from './StatusBadge';
@@ -19,6 +19,7 @@ import { useGymContext, hasPermission } from '../permissions';
 import {
   listMemberMemberships, listPlans, assignMembership, cancelMembership, renewMembership,
   freezeMembership, resumeMembership, extendMembership, listMembershipEvents,
+  updateUpcomingMembership, cancelRenewal,
   formatMoney, MemberMembership, MembershipPlan, MembershipEvent,
 } from '../api';
 
@@ -45,6 +46,10 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
   const [assignOpen, setAssignOpen] = useState(false);
   const [freezeOpen, setFreezeOpen] = useState(false);
   const [extendOpen, setExtendOpen] = useState(false);
+  const [editRenewalOpen, setEditRenewalOpen] = useState(false);
+  const [editRenewalForm] = Form.useForm();
+  const editRenewalPlanId = Form.useWatch('plan_id', editRenewalForm);
+  const memberName = 'This member'; // the modal copy keeps it role-neutral
   const [form] = Form.useForm();
   const [freezeForm] = Form.useForm();
   const [extendForm] = Form.useForm();
@@ -145,6 +150,25 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
     }
   };
 
+  const submitEditRenewal = async () => {
+    if (!upcoming) return;
+    try {
+      const v = await editRenewalForm.validateFields();
+      await updateUpcomingMembership(ctx!.gymId, memberId, upcoming.id, {
+        plan_id: v.plan_id,
+        starts_on: v.starts_on ? v.starts_on.format('YYYY-MM-DD') : undefined,
+        ends_on: v.ends_on ? v.ends_on.format('YYYY-MM-DD') : undefined,
+        notes: v.notes || undefined,
+      });
+      message.success('Scheduled renewal updated — the locked price follows the selected plan');
+      setEditRenewalOpen(false);
+      load();
+    } catch (e: any) {
+      if (e?.errorFields) return;
+      message.error(e.message || 'Could not update the scheduled renewal');
+    }
+  };
+
   const doRenew = (term: MemberMembership) => {
     modal.confirm({
       title: `Renew ${term.plan_name}?`,
@@ -233,9 +257,69 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
         <Card size="small" title="Scheduled renewal" extra={<StatusBadge status={upcoming.status} />}>
           <Descriptions size="small" column={{ xs: 1, md: 2 }}>
             <Descriptions.Item label="Plan">{upcoming.plan_name}</Descriptions.Item>
-            <Descriptions.Item label="Price (current plan price)">{formatMoney(upcoming.price_cents, upcoming.currency)}</Descriptions.Item>
-            <Descriptions.Item label="Starts">{upcoming.starts_on} → {upcoming.ends_on}</Descriptions.Item>
+            <Descriptions.Item label="Price">
+              {formatMoney(upcoming.price_cents, upcoming.currency)}
+              <Typography.Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>
+                (locked when scheduled)
+              </Typography.Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="Starts">{upcoming.starts_on}</Descriptions.Item>
+            <Descriptions.Item label="Ends">{upcoming.ends_on}</Descriptions.Item>
+            {upcoming.notes && (
+              <Descriptions.Item label="Notes" span={2}>{upcoming.notes}</Descriptions.Item>
+            )}
           </Descriptions>
+          {canManage && (
+            <Space style={{ marginTop: 12 }} wrap>
+              <Button
+                icon={<EditOutlined />}
+                onClick={() => {
+                  editRenewalForm.setFieldsValue({
+                    plan_id: upcoming.plan_id,
+                    starts_on: dayjs(upcoming.starts_on),
+                    ends_on: dayjs(upcoming.ends_on),
+                    notes: upcoming.notes || undefined,
+                  });
+                  setEditRenewalOpen(true);
+                }}
+              >
+                Edit Renewal
+              </Button>
+              <Popconfirm
+                title="Cancel scheduled renewal?"
+                description={
+                  <div style={{ maxWidth: 320 }}>
+                    <Typography.Text>
+                      {memberName} is currently scheduled to receive:
+                    </Typography.Text>
+                    <Typography.Text strong style={{ display: 'block', margin: '6px 0' }}>
+                      {upcoming.plan_name} · {formatMoney(upcoming.price_cents, upcoming.currency)}
+                      <br />
+                      {upcoming.starts_on} → {upcoming.ends_on}
+                    </Typography.Text>
+                    <Typography.Text type="secondary">
+                      Cancelling this renewal will remove the future scheduled membership.
+                      The current membership/history will not be changed.
+                    </Typography.Text>
+                  </div>
+                }
+                okText="Cancel Scheduled Renewal"
+                cancelText="Keep Renewal"
+                okButtonProps={{ danger: true }}
+                onConfirm={async () => {
+                  try {
+                    await cancelRenewal(ctx!.gymId, memberId, upcoming.id);
+                    message.success('Scheduled renewal cancelled — the current membership is unchanged');
+                    load();
+                  } catch (e: any) {
+                    message.error(e.message || 'Could not cancel the renewal');
+                  }
+                }}
+              >
+                <Button danger icon={<StopOutlined />}>Cancel Renewal</Button>
+              </Popconfirm>
+            </Space>
+          )}
         </Card>
       )}
 
@@ -265,6 +349,7 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
               size="small"
               pagination={false}
               dataSource={terms}
+            scroll={{ x: 760 }}
               columns={[
                 { title: 'Plan', dataIndex: 'plan_name' },
                 { title: 'Price', width: 120, render: (_: any, m: MemberMembership) => formatMoney(m.price_cents, m.currency) },
@@ -349,6 +434,50 @@ export default function MemberMembershipTab({ memberId }: { memberId: string }) 
         <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
           The term pauses while frozen. When you resume, the expiry moves forward by the exact
           number of frozen days.
+        </Typography.Paragraph>
+      </Modal>
+
+      <Modal
+        title="Edit Scheduled Renewal"
+        open={editRenewalOpen}
+        onOk={submitEditRenewal}
+        onCancel={() => setEditRenewalOpen(false)}
+        okText="Save Changes"
+      >
+        <Form form={editRenewalForm} layout="vertical">
+          <Form.Item name="plan_id" label="Plan" rules={[{ required: true, message: 'Pick a plan' }]}>
+            <Select
+              placeholder="Select a plan"
+              options={plans.map((p) => ({
+                value: p.id,
+                label: `${p.name} — ${formatMoney(p.price_cents, p.currency)}` +
+                  (p.included_pt_sessions > 0 ? ` · ${p.included_pt_sessions} PT` : ''),
+              }))}
+              onChange={() => editRenewalForm.setFieldsValue({ price_preview: undefined })}
+            />
+          </Form.Item>
+          <Form.Item label="Price" extra="New plans use their current price — locked when you save. Date-only edits keep the scheduled price.">
+            <Typography.Text strong>
+              {(() => {
+                const p = plans.find((x) => x.id === editRenewalPlanId);
+                return p ? formatMoney(p.price_cents, p.currency) : '—';
+              })()}
+            </Typography.Text>
+          </Form.Item>
+          <Space wrap>
+            <Form.Item name="starts_on" label="Start date" rules={[{ required: true, message: 'Start date is required' }]}>
+              <DatePicker style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item name="ends_on" label="End date (optional — defaults from the plan)">
+              <DatePicker style={{ width: '100%' }} />
+            </Form.Item>
+          </Space>
+          <Form.Item name="notes" label="Notes (optional)">
+            <Input.TextArea rows={2} placeholder="Start with 3 sessions/week." />
+          </Form.Item>
+        </Form>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+          Editing only changes this future commitment — the current membership and all history stay untouched.
         </Typography.Paragraph>
       </Modal>
 

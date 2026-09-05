@@ -14,7 +14,8 @@ import { ErrorState } from './States';
 import { useGymContext, hasPermission } from '../permissions';
 import {
   getMemberBilling, createCharge, recordPayment, refundPayment, getReceipt,
-  formatMoney, Charge, Payment, Receipt,
+  listGymPaymentProofs, approvePaymentProof, rejectPaymentProof, fetchProofScreenshotUrl,
+  formatMoney, Charge, Payment, Receipt, PaymentProof,
 } from '../api';
 
 const METHODS = ['CASH', 'UPI', 'CARD', 'BANK_TRANSFER', 'OTHER'].map((m) => ({ value: m, label: m }));
@@ -24,6 +25,9 @@ export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
   const { message } = AntApp.useApp();
   const [charges, setCharges] = useState<Charge[] | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [proofs, setProofs] = useState<PaymentProof[] | null>(null);
+  const [reviewing, setReviewing] = useState<PaymentProof | null>(null);
+  const [shotUrl, setShotUrl] = useState<string | null>(null);
   const [error, setError] = useState<any>(null);
   const [payOpen, setPayOpen] = useState(false);
   const [chargeOpen, setChargeOpen] = useState(false);
@@ -39,9 +43,13 @@ export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const b = await getMemberBilling(ctx!.gymId, memberId);
+      const [b, pf] = await Promise.all([
+        getMemberBilling(ctx!.gymId, memberId),
+        listGymPaymentProofs(ctx!.gymId),
+      ]);
       setCharges(b.charges);
       setPayments(b.payments);
+      setProofs(pf.filter((p) => p.member_id === memberId));
     } catch (e: any) {
       setError(e);
     }
@@ -115,6 +123,30 @@ export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
     }
   };
 
+  const doApproveProof = async (p: PaymentProof) => {
+    try {
+      await approvePaymentProof(ctx!.gymId, p.id);
+      message.success('Payment approved — receipt generated');
+      setReviewing(null);
+      setShotUrl(null);
+      load();
+    } catch (e: any) {
+      message.error(e.message || 'Could not approve');
+    }
+  };
+
+  const doRejectProof = async (p: PaymentProof) => {
+    try {
+      await rejectPaymentProof(ctx!.gymId, p.id, 'Could not be verified');
+      message.info('Proof rejected');
+      setReviewing(null);
+      setShotUrl(null);
+      load();
+    } catch (e: any) {
+      message.error(e.message || 'Could not reject');
+    }
+  };
+
   const chargesCard = (
     <Card size="small" title="Dues & charges">
       <Table
@@ -123,6 +155,7 @@ export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
         pagination={false}
         dataSource={charges}
         locale={{ emptyText: 'No charges yet — membership sales and manual dues appear here.' }}
+          scroll={{ x: 800 }}
         columns={[
           { title: 'Description', dataIndex: 'description' },
           { title: 'Amount', width: 110, render: (_: any, c: Charge) => formatMoney(c.amount_cents, c.currency) },
@@ -162,6 +195,58 @@ export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
   );
 
   const paymentsCard = (
+    <>
+    {(proofs || []).length > 0 && (
+      <Card size="small" title="Payment proofs" style={{ marginBottom: 16 }}>
+        <Table
+          rowKey="id"
+          size="small"
+          pagination={false}
+          scroll={{ x: 820 }}
+          dataSource={proofs || []}
+          columns={[
+            { title: 'Amount', dataIndex: 'amount_cents', width: 110, render: (v: number, p: PaymentProof) => formatMoney(v, p.currency) },
+            { title: 'Method', dataIndex: 'method', width: 110 },
+            { title: 'Transaction ID', dataIndex: 'transaction_id' },
+            { title: 'Date', dataIndex: 'paid_on', width: 110 },
+            { title: 'Status', dataIndex: 'status', width: 210, render: (st: string, p: PaymentProof) => {
+              const color = st === 'PENDING_VERIFICATION' ? 'gold'
+                : st === 'APPROVED' ? 'green' : st === 'REJECTED' ? 'red' : 'default';
+              return (
+                <Space size={4} wrap>
+                  <Tag color={color}>{st === 'PENDING_VERIFICATION' ? 'PENDING VERIFICATION' : st}</Tag>
+                  {st === 'REJECTED' && p.rejection_reason && (
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis={{ tooltip: p.rejection_reason }}>
+                      {p.rejection_reason}
+                    </Typography.Text>
+                  )}
+                </Space>
+              );
+            } },
+            { title: '', key: 'go', width: 250, render: (_: any, p: PaymentProof) => (
+              <Space size={4} wrap>
+                {p.payment_id && (
+                  <Button size="small" icon={<FileTextOutlined />} onClick={async () => {
+                    try {
+                      setReceipt(await getReceipt(ctx!.gymId, memberId, p.payment_id as string));
+                    } catch (e: any) { message.error(e.message || 'Could not load receipt'); }
+                  }}>Receipt</Button>
+                )}
+                {canManage && p.status === 'PENDING_VERIFICATION' && (
+                  <>
+                    <Button size="small" onClick={async () => { setReviewing(p); setShotUrl(await fetchProofScreenshotUrl(ctx!.gymId, p.id).catch(() => null)); }}>
+                      Review
+                    </Button>
+                    <Button size="small" type="primary" onClick={() => doApproveProof(p)}>Approve</Button>
+                    <Button size="small" danger onClick={() => doRejectProof(p)}>Reject</Button>
+                  </>
+                )}
+              </Space>
+            ) },
+          ]}
+        />
+      </Card>
+    )}
     <Card size="small" title="Receipts">
       <Table
         rowKey="id"
@@ -169,6 +254,7 @@ export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
         pagination={false}
         dataSource={payments}
         locale={{ emptyText: 'No payments recorded yet.' }}
+          scroll={{ x: 760 }}
         columns={[
           { title: 'Receipt #', dataIndex: 'receipt_number', width: 190 },
           { title: 'Amount', dataIndex: 'amount_cents', width: 110, render: (v: number, p: Payment) =>
@@ -198,6 +284,7 @@ export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
         </Button>
       )}
     </Card>
+    </>
   );
 
   return (

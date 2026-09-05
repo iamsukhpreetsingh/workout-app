@@ -217,6 +217,231 @@ async function getPlan(gymId, planId) {
 
 // ── member memberships ───────────────────────────────────────────────────
 
+// ── scheduled-renewal management (Phase 13) ──────────────────────────────
+// A UPCOMING term is a FUTURE commitment, not the current membership: the
+// allowed operations are edit (plan/dates/notes) and cancel. The current
+// membership and all history are never touched by these.
+//
+// PRICE RULE — LOCKED WHEN SCHEDULED: the term's price_cents snapshot only
+// changes when the admin explicitly edits the renewal, and then it is the
+// NEW plan's current price at edit time. A later plan price change never
+// moves a scheduled price. Editing dates only keeps the stored price.
+//
+// The open (unpaid) billing charge opened when the renewal was scheduled is
+// corrected alongside — it is a future commitment with no money received,
+// so updating it keeps dues consistent; if a payment somehow exists the
+// charge is left alone and the edit still proceeds (audit records it).
+
+async function updateUpcomingMembership(gymId, memberId, membershipId, actor, ip, patch, gymAudit) {
+  const { plan_id, starts_on, ends_on, notes } = patch || {};
+  if (starts_on && !DATE_RE.test(String(starts_on))) {
+    throw new HttpError(400, 'starts_on must be a YYYY-MM-DD date');
+  }
+  if (ends_on && !DATE_RE.test(String(ends_on))) {
+    throw new HttpError(400, 'ends_on must be a YYYY-MM-DD date');
+  }
+  if (notes !== undefined && notes != null && String(notes).length > 500) {
+    throw new HttpError(400, 'notes max 500 characters');
+  }
+  return transaction(async (client) => {
+    await runMembershipMaintenance(client, gymId);
+    const { rows: termRows } = await client.query(
+      `SELECT * FROM member_memberships WHERE id = $1 AND gym_id = $2 AND member_id = $3 FOR UPDATE`,
+      [membershipId, gymId, memberId]
+    );
+    if (!termRows.length) throw new HttpError(404, 'Membership not found');
+    const term = termRows[0];
+    if (term.status !== 'UPCOMING') {
+      throw new HttpError(400,
+        `Only a scheduled (UPCOMING) membership can be edited here — this one is ${term.status}. Use the current-membership operations instead.`);
+    }
+
+    const tzToday = await client.query(
+      `SELECT (now() AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $1))::date AS d`, [gymId]
+    );
+    const today = tzToday.rows[0].d;
+
+    // plan change: must be a valid ACTIVE plan (a future commitment cannot
+    // be locked to an archived plan); price = that plan's current price
+    let plan = { id: term.plan_id, price_cents: term.price_cents,
+                 duration_value: term.plan_duration_value, duration_unit: term.plan_duration_unit,
+                 name: term.plan_name };
+    let planChanged = false;
+    if (plan_id !== undefined && plan_id !== null && plan_id !== term.plan_id) {
+      const { rows: planRows } = await client.query(
+        'SELECT * FROM membership_plans WHERE id = $1 AND gym_id = $2 FOR UPDATE',
+        [plan_id, gymId]
+      );
+      if (!planRows.length) throw new HttpError(404, 'Plan not found');
+      if (planRows[0].status === 'ARCHIVED') {
+        throw new HttpError(409, 'Archived plans cannot be selected for a scheduled renewal');
+      }
+      if (planRows[0].status === 'DRAFT') {
+        throw new HttpError(400, 'Draft plans cannot be selected — publish the plan first');
+      }
+      plan = planRows[0];
+      planChanged = true;
+    }
+
+    // dates: starts_on must stay in the future and not overlap the running
+    // term; ends_on defaults to starts_on + plan duration unless given
+    const startsOn = starts_on !== undefined && starts_on !== null
+      ? String(starts_on).slice(0, 10)
+      : String(term.starts_on).slice(0, 10);
+    if (startsOn <= today) {
+      throw new HttpError(400, 'A scheduled renewal must start in the future — use Activate-style operations on the current membership instead');
+    }
+    const { rows: running } = await client.query(
+      `SELECT ends_on FROM member_memberships
+       WHERE member_id = $1 AND status = 'ACTIVE' AND id != $2`,
+      [memberId, term.id]
+    );
+    if (running.length && startsOn <= String(running[0].ends_on).slice(0, 10)) {
+      throw new HttpError(400,
+        `A scheduled renewal cannot start before the current membership ends (${running[0].ends_on})`);
+    }
+    let endsOn = ends_on !== undefined && ends_on !== null
+      ? String(ends_on).slice(0, 10)
+      : null;
+    if (!endsOn) {
+      if (planChanged) {
+        const calc = await client.query(
+          `SELECT ($1::date + ($2::int || ' ' || $3::text)::interval)::date AS d`,
+          [startsOn, plan.duration_value, plan.duration_unit]
+        );
+        endsOn = calc.rows[0].d;
+      } else {
+        // same plan: slide the end by the same shift the start moved
+        const shift = Math.round(
+          (new Date(`${startsOn}T00:00:00Z`) - new Date(`${String(term.starts_on).slice(0, 10)}T00:00:00Z`)) / 86400000
+        );
+        const x = new Date(`${String(term.ends_on).slice(0, 10)}T00:00:00Z`);
+        x.setUTCDate(x.getUTCDate() + shift);
+        endsOn = x.toISOString().slice(0, 10);
+      }
+    }
+    if (endsOn <= startsOn) {
+      throw new HttpError(400, 'End date must be after the start date');
+    }
+
+    const priceChanged = planChanged && plan.price_cents !== term.price_cents;
+    await client.query(
+      `UPDATE member_memberships SET
+         plan_id = $3, plan_name = $4,
+         plan_duration_value = $5, plan_duration_unit = $6,
+         price_cents = $7, starts_on = $8::date, ends_on = $9::date,
+         notes = COALESCE($10, notes),
+         updated_at = now()
+       WHERE id = $1 AND gym_id = $2`,
+      [term.id, gymId, plan.id, plan.name, plan.duration_value, plan.duration_unit,
+       plan.price_cents, startsOn, endsOn,
+       notes !== undefined ? (notes ?? null) : null]
+    );
+
+    // keep the OPEN dues charge consistent with the future commitment —
+    // only while no money has been received against it
+    const { rows: chargeRows } = await client.query(
+      `SELECT c.id, c.amount_cents,
+              COALESCE((SELECT SUM(amount_cents)::int FROM membership_payments p WHERE p.charge_id = c.id), 0) AS paid
+       FROM membership_charges c
+       WHERE c.membership_id = $1 AND c.gym_id = $2
+       ORDER BY c.created_at DESC LIMIT 1`,
+      [term.id, gymId]
+    );
+    let chargeTouched = null;
+    if (chargeRows.length && chargeRows[0].paid === 0) {
+      await client.query(
+        `UPDATE membership_charges SET
+           amount_cents = $3,
+           description = $4,
+           period_start = $5::date, period_end = $6::date,
+           updated_at = now()
+         WHERE id = $1 AND gym_id = $2`,
+        [chargeRows[0].id, gymId, plan.price_cents,
+         `Membership: ${plan.name} (${startsOn} → ${endsOn})`, startsOn, endsOn]
+      );
+      chargeTouched = chargeRows[0].id;
+    }
+
+    await gymAudit(client, {
+      gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
+      action: 'membership.renewal_edited', entity: 'member_membership', entityId: term.id,
+      before: { plan: term.plan_name, price_cents: term.price_cents,
+                starts_on: term.starts_on, ends_on: term.ends_on },
+      after: { plan: plan.name, price_cents: plan.price_cents, starts_on: startsOn, ends_on: endsOn,
+               plan_changed: planChanged, price_changed: priceChanged, charge_updated: chargeTouched },
+    });
+    await recordEvent(client, gymId, term.id, 'renewal_edited', {
+      details: {
+        plan_from: term.plan_name, plan_to: plan.name,
+        price_from: term.price_cents, price_to: plan.price_cents,
+        starts_on: startsOn, ends_on: endsOn,
+      },
+      actor,
+    });
+
+    const { rows: after } = await client.query(
+      'SELECT * FROM member_memberships WHERE id = $1', [term.id]
+    );
+    return after[0];
+  });
+}
+
+// Cancel a SCHEDULED renewal — deliberately different semantics from
+// cancelling the current membership: the future commitment goes away
+// (including its not-yet-paid dues charge), the current membership and all
+// history are untouched, and the member can be given another renewal later.
+async function cancelUpcomingMembership(gymId, memberId, membershipId, actor, ip, { reason } = {}, gymAudit) {
+  return transaction(async (client) => {
+    await runMembershipMaintenance(client, gymId);
+    const { rows } = await client.query(
+      `SELECT * FROM member_memberships WHERE id = $1 AND gym_id = $2 AND member_id = $3 FOR UPDATE`,
+      [membershipId, gymId, memberId]
+    );
+    if (!rows.length) throw new HttpError(404, 'Membership not found');
+    const term = rows[0];
+    if (term.status !== 'UPCOMING') {
+      throw new HttpError(400,
+        `This is not a scheduled renewal (it is ${term.status}) — use the current-membership Cancel instead`);
+    }
+    await client.query(
+      `UPDATE member_memberships SET status = 'CANCELLED', cancel_reason = $2,
+         cancelled_at = now(), updated_at = now() WHERE id = $1`,
+      [term.id, reason || 'renewal_cancelled']
+    );
+    // the future term's unpaid dues charge is removed with the commitment
+    const { rows: chargeRows } = await client.query(
+      `SELECT c.id,
+              COALESCE((SELECT SUM(amount_cents)::int FROM membership_payments p WHERE p.charge_id = c.id), 0) AS paid
+       FROM membership_charges c
+       WHERE c.membership_id = $1 AND c.gym_id = $2
+       ORDER BY c.created_at DESC LIMIT 1`,
+      [term.id, gymId]
+    );
+    if (chargeRows.length && chargeRows[0].paid === 0) {
+      await client.query('DELETE FROM membership_charges WHERE id = $1', [chargeRows[0].id]);
+      await gymAudit(client, {
+        gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
+        action: 'charge.removed_unpaid', entity: 'membership_charge', entityId: chargeRows[0].id,
+        before: { membership_id: term.id }, after: { reason: 'renewal_cancelled' },
+      });
+    }
+    await gymAudit(client, {
+      gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
+      action: 'membership.renewal_cancelled', entity: 'member_membership', entityId: term.id,
+      before: { status: 'UPCOMING', plan: term.plan_name, price_cents: term.price_cents },
+      after: { status: 'CANCELLED', reason: reason || 'renewal_cancelled' },
+    });
+    await recordEvent(client, gymId, term.id, 'renewal_cancelled', {
+      details: { plan: term.plan_name, price_cents: term.price_cents,
+                 starts_on: term.starts_on, ends_on: term.ends_on,
+                 reason: reason || 'renewal_cancelled' },
+      actor,
+    });
+    return { ok: true };
+  });
+}
+
 async function listMemberMemberships(gymId, memberId) {
   await transaction(async (client) => runMembershipMaintenance(client, gymId));
   const { rows } = await query(
@@ -682,5 +907,6 @@ module.exports = {
   listMemberMemberships, listGymMemberships, getMembership,
   assignMembership, cancelMembership, renewMembership,
   freezeMembership, resumeMembership, extendMembership, listMembershipEvents,
+  updateUpcomingMembership, cancelUpcomingMembership,
   runMembershipMaintenance,
 };

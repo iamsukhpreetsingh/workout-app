@@ -2,23 +2,56 @@
 // payment ledger. Financial reports are deliberately hidden from FRONT_DESK
 // (they record payments from the member page instead).
 import React, { useCallback, useState } from 'react';
-import { Card, Col, Row, Statistic, Button } from 'antd';
+import { Card, Col, Row, Statistic, Button, Typography, Modal, Popconfirm, Image, Space } from 'antd';
 import { useNavigate } from 'react-router-dom';
+import { App as AntApp } from 'antd';
 import PageContainer from '../components/PageContainer';
 import DataTable from '../components/DataTable';
 import FilterBar from '../components/FilterBar';
 import StatusBadge from '../components/StatusBadge';
 import { usePagedList } from '../hooks/usePagedList';
 import { useGymContext } from '../permissions';
-import { listGymPayments, formatMoney, getBillingSummary, Payment } from '../api';
+import {
+  listGymPayments, formatMoney, getBillingSummary, Payment, listGymPaymentProofs,
+  getPendingProofTotals, approvePaymentProof, rejectPaymentProof, PaymentProof,
+} from '../api';
+import ProofReviewModal from '../components/ProofReviewModal';
 
 const METHODS = ['CASH', 'UPI', 'CARD', 'BANK_TRANSFER', 'OTHER'];
 
 export default function PaymentsPage() {
+  const { message } = AntApp.useApp();
   const ctx = useGymContext();
   const navigate = useNavigate();
   const [summary, setSummary] = useState<any>(null);
+  const [pendingTotals, setPendingTotals] = useState<{ total: number; count: number } | null>(null);
+  const [proofs, setProofs] = useState<PaymentProof[] | null>(null);
+  const [reviewing, setReviewing] = useState<PaymentProof | null>(null);
   const [summaryError, setSummaryError] = useState<any>(null);
+
+  const doApprove = async () => {
+    if (!reviewing) return;
+    try {
+      await approvePaymentProof(ctx!.gymId, reviewing.id);
+      message.success('Payment approved — receipt generated');
+      setReviewing(null);
+      loadSummary();
+    } catch (e: any) {
+      message.error(e.message || 'Could not approve');
+    }
+  };
+
+  const doReject = async () => {
+    if (!reviewing) return;
+    try {
+      await rejectPaymentProof(ctx!.gymId, reviewing.id, 'Payment could not be verified');
+      message.info('Proof rejected');
+      setReviewing(null);
+      loadSummary();
+    } catch (e: any) {
+      message.error(e.message || 'Could not reject');
+    }
+  };
 
   const loadSummary = useCallback(async () => {
     setSummaryError(null);
@@ -84,6 +117,14 @@ export default function PaymentsPage() {
         </Col>
         <Col xs={12} md={6}>
           <Card size="small">
+            <Statistic title="Pending verification"
+              value={pendingTotals ? formatMoney(pendingTotals.total, 'INR') : '…'}
+              suffix={pendingTotals ? <Typography.Text type="secondary" style={{ fontSize: 12 }}>({pendingTotals.count})</Typography.Text> : null}
+              valueStyle={{ color: '#5856D6' }} />
+          </Card>
+        </Col>
+        <Col xs={12} md={6}>
+          <Card size="small">
             <Statistic title="Due" value={summary ? formatMoney(summary.due, 'INR') : '…'}
               valueStyle={{ color: '#D97706' }} />
           </Card>
@@ -127,6 +168,14 @@ export default function PaymentsPage() {
             }}
           />
         }
+      />
+
+      <ProofReviewModal
+        gymId={ctx!.gymId}
+        proof={reviewing}
+        onClose={() => setReviewing(null)}
+        onApprove={doApprove}
+        onReject={doReject}
       />
     </PageContainer>
   );

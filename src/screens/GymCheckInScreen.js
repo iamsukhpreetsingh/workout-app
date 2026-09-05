@@ -27,7 +27,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useColors, spacing } from '../theme';
 import { useGym } from '../store/GymContext';
-import { checkInWithGymQr } from '../lib/gymApi';
+import { checkInWithGymQr, fetchMyGymBilling } from '../lib/gymApi';
+import { paymentWarningForGym, formatMoney } from '../lib/gymState';
+import { GYM_PAYMENTS } from '../shared/constants/routes';
 import { ApiError } from '../lib/api';
 import { normalizeCheckInCode } from '../lib/gymState';
 import { GYM_ATTENDANCE } from '../shared/constants/routes';
@@ -57,6 +59,41 @@ export default function GymCheckInScreen() {
       return;
     }
     setCode(trimmed);
+    setSubmitting(true);
+    setResult(null);
+
+    // Mobile M11 — payment WARNING (not a block): if the member has dues or
+    // an overdue charge, show the warning first. [Continue Check-in] then
+    // performs the same idempotent check-in — the record is never duplicated
+    // by warning + retry.
+    try {
+      const rows = await fetchMyGymBilling();
+      const warn = paymentWarningForGym(rows, null, undefined);
+      if (warn) {
+        setSubmitting(false);
+        const amountLine = `${formatMoney(warn.outstanding_cents, warn.currency)}${warn.overdue ? ` — overdue by ${warn.overdue_days} day${warn.overdue_days === 1 ? '' : 's'}` : ' is due'}`;
+        const dueLine = warn.next_due_on ? `\nDue date: ${warn.next_due_on}` : '';
+        Alert.alert(
+          warn.overdue ? 'Overdue gym payment' : 'Outstanding gym payment',
+          `You have an outstanding gym payment.\n${amountLine}${dueLine}\n\nPlease clear your payment to keep your membership up to date.`,
+          [
+            {
+              text: 'View Payment',
+              onPress: () => navigation.navigate(GYM_PAYMENTS),
+            },
+            { text: 'Continue Check-in', onPress: () => performCheckIn(trimmed) },
+          ]
+        );
+        return;
+      }
+    } catch {
+      // billing lookup failed — never block check-in on that
+    }
+
+    performCheckIn(trimmed);
+  };
+
+  const performCheckIn = async (trimmed) => {
     setSubmitting(true);
     setResult(null);
     try {

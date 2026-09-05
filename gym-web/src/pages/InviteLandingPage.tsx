@@ -70,7 +70,7 @@ export default function InviteLandingPage({ token }: { token: string }) {
   if (notFound || !invitation) {
     return (
       <Center>
-        <Card style={{ width: 420 }}>
+        <Card style={{ width: '100%', maxWidth: 420 }}>
           <Result
             icon={<CloseCircleOutlined style={{ color: '#ff4d4f' }} />}
             title="Invitation not found"
@@ -86,7 +86,7 @@ export default function InviteLandingPage({ token }: { token: string }) {
   if (terminal && !accepted) {
     return (
       <Center>
-        <Card style={{ width: 420 }}>
+        <Card style={{ width: '100%', maxWidth: 420 }}>
           <Result icon={terminal.icon} title={terminal.title}
             subTitle={`${invitation.gymName} — ${invitation.memberName} (${invitation.email})`} />
         </Card>
@@ -97,7 +97,7 @@ export default function InviteLandingPage({ token }: { token: string }) {
   if (accepted) {
     return (
       <Center>
-        <Card style={{ width: 440 }}>
+        <Card style={{ width: '100%', maxWidth: 440 }}>
           <Result
             status="success"
             title={invitation.type === 'staff'
@@ -154,7 +154,7 @@ export default function InviteLandingPage({ token }: { token: string }) {
 
   return (
     <Center>
-      <Card style={{ width: 440 }}>
+      <Card style={{ width: '100%', maxWidth: 440 }}>
         <div style={{ textAlign: 'center', marginBottom: 16 }}>
           <Typography.Title level={3} style={{ marginBottom: 4 }}>
             {invitation.type === 'staff' ? `Join the ${invitation.gymName} team` : `Join ${invitation.gymName}`}

@@ -47,6 +47,7 @@ export interface MemberMembership {
   first_name?: string;
   last_name?: string;
   member_code?: string;
+  notes?: string | null;
 }
 
 export const listMemberMemberships = (gymId: string, memberId: string) =>
@@ -59,6 +60,19 @@ export const assignMembership = (
 
 export const cancelMembership = (gymId: string, memberId: string, membershipId: string, reason?: string) =>
   api<MemberMembership>(`/gym/${gymId}/members/${memberId}/memberships/${membershipId}/cancel`,
+    { method: 'POST', body: { reason } });
+
+// Phase 13 — scheduled-renewal management: edit (plan/dates/notes) and
+// cancel-renewal (distinct from cancelling the current membership). The
+// backend enforces LOCKED-WHEN-SCHEDULED pricing and date validation.
+export const updateUpcomingMembership = (
+  gymId: string, memberId: string, membershipId: string,
+  body: { plan_id?: string; starts_on?: string; ends_on?: string; notes?: string }
+) => api<MemberMembership>(`/gym/${gymId}/members/${memberId}/memberships/${membershipId}`,
+  { method: 'PATCH', body });
+
+export const cancelRenewal = (gymId: string, memberId: string, membershipId: string, reason?: string) =>
+  api<{ ok: boolean }>(`/gym/${gymId}/members/${memberId}/memberships/${membershipId}/cancel-renewal`,
     { method: 'POST', body: { reason } });
 
 export const renewMembership = (gymId: string, memberId: string, membershipId: string) =>

@@ -30,7 +30,7 @@ export default function LoginPage({ onLogin }: Props) {
       minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
       padding: 24,
     }}>
-      <Card style={{ width: 400 }}>
+      <Card style={{ width: '100%', maxWidth: 400 }}>
         <Typography.Title level={3} style={{ marginTop: 0 }}>
           Gym Portal
         </Typography.Title>

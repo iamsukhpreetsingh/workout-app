@@ -29,6 +29,7 @@ export interface GymMember {
   primary_branch_id?: string | null;
   allowed_branch_ids?: string[] | null;
   branch?: string | null;
+  app_profile?: { date_of_birth?: string | null; gender?: string | null; height_cm?: number | null; weight_kg?: number | null } | null;
 }
 
 export const listMembers = (

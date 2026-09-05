@@ -361,3 +361,36 @@ export function normalizeCheckInCode(raw) {
     .replace(/^gymcheckin:v1:/i, '');
   return code.length >= 8 && code.length <= 128 ? code.toLowerCase() : null;
 }
+
+/**
+ * ── Mobile M11: attendance payment warning (pure, React-free) ───────────
+ * Derives the warning shown at check-in / workout completion from the
+ * server's /gym/my/billing slice. WARNING ONLY — never a block: attendance
+ * stays recorded and idempotent regardless.
+ *   DUE     → "₹1,499 is due (due date)"
+ *   OVERDUE → "₹1,499 overdue by N days"
+ *   PENDING_VERIFICATION proof → different copy ("being reviewed")
+ * Returns null when there is nothing outstanding or the data doesn't cover
+ * the gym.
+ */
+export function paymentWarningForGym(billingRows, gymId, todayIso) {
+  const b = billingForGym(billingRows, gymId);
+  if (!b) return null;
+  const open = (b.charges || []).filter((c) => c && ['DUE', 'OVERDUE', 'PARTIAL'].includes(c.status));
+  if (!open.length || !b.outstanding_cents) return null;
+  const today = todayIso || new Date().toISOString().slice(0, 10);
+  const overdue = b.overdue_cents > 0;
+  const earliest = open.reduce((acc, c) => (
+    !acc || String(c.due_on) < acc ? String(c.due_on) : acc), null);
+  const overdueDays = overdue && earliest
+    ? Math.max(0, Math.round((new Date(`${today}T00:00:00Z`) - new Date(`${earliest}T00:00:00Z`)) / 86400000))
+    : 0;
+  return {
+    outstanding_cents: b.outstanding_cents,
+    currency: b.currency || 'INR',
+    overdue,
+    overdue_days: overdueDays,
+    next_due_on: b.next_due_on || earliest,
+    pending_proof: false,
+  };
+}

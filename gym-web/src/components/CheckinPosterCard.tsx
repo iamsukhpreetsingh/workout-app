@@ -66,10 +66,11 @@ export default function CheckinPosterCard() {
 <style>
   body { font-family: Arial, Helvetica, sans-serif; margin: 0; background: #fff; }
   .sheet { max-width: 620px; margin: 0 auto; padding: 48px 40px; text-align: center; color: #1C1917; }
+  @media (max-width: 640px) { .sheet { padding: 24px 16px; } img { width: 100%; max-width: 320px; height: auto; aspect-ratio: 1; } }
   .gym { font-size: 22px; letter-spacing: 4px; text-transform: uppercase; color: #E8481F; font-weight: bold; }
   h1 { font-size: 40px; margin: 18px 0 6px; }
   .sub { font-size: 16px; color: #57534E; margin-bottom: 28px; }
-  img { width: 440px; height: 440px; }
+  img { width: 440px; height: 440px; max-width: 100%; }
   .code { font-family: 'Courier New', monospace; font-size: 15px; letter-spacing: 1px;
           background: #F5F5F4; border: 1px dashed #D6D3D1; border-radius: 6px;
           padding: 10px 18px; display: inline-block; margin-top: 26px; }

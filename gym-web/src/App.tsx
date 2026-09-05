@@ -8,13 +8,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import {
-  Layout, Menu, Select, Typography, Spin, Dropdown, Button, Empty,
+  Layout, Menu, Select, Typography, Spin, Dropdown, Button, Empty, Drawer, Grid,
 } from 'antd';
 import {
   DashboardOutlined, TeamOutlined, IdcardOutlined, CreditCardOutlined, ApartmentOutlined,
   CheckSquareOutlined, UserOutlined, ThunderboltOutlined, AppleOutlined,
   CalendarOutlined, SoundOutlined, BarChartOutlined, SettingOutlined,
-  PlusOutlined, LogoutOutlined, CrownOutlined, TagOutlined,
+  PlusOutlined, LogoutOutlined, CrownOutlined, TagOutlined, MenuOutlined,
 } from '@ant-design/icons';
 import {
   UserProfile, GymMembershipEntry, getMyGyms, getGymPermissions, getSelectedGymId,
@@ -74,6 +74,11 @@ export default function App() {
 function Shell() {
   const navigate = useNavigate();
   const location = useLocation();
+  const screens = Grid.useBreakpoint();
+  // below `lg` (992px) the fixed Sider disappears — navigation moves into a
+  // hamburger drawer; above it the desktop sidebar renders as before
+  const isMobile = !screens.lg;
+  const [navOpen, setNavOpen] = useState(false);
   const [user, setUser] = useState<UserProfile | null>(null);
   const [gyms, setGyms] = useState<GymMembershipEntry[] | null>(null);
   const [gymId, setGymId] = useState<string | null>(getSelectedGymId());
@@ -224,46 +229,90 @@ function Shell() {
     </Routes>
   );
 
+  // the nav Menu is shared between the desktop Sider and the mobile drawer
+  const navMenu = (onNav?: () => void) => (
+    <Menu
+      mode="inline"
+      theme="dark"
+      selectedKeys={[selectedKey]}
+      items={visibleNav.map((i) => ({ key: i.path, icon: i.icon, label: i.label }))}
+      onClick={({ key }) => { navigate(key); onNav?.(); }}
+      style={{ height: '100%', borderInlineEnd: 0, paddingTop: 8 }}
+    />
+  );
+
+  const gymSelect = (
+    <Select
+      value={gymId ?? undefined}
+      onChange={switchGym}
+      style={{ flex: isMobile ? 1 : undefined, minWidth: 0, maxWidth: 260 }}
+      placeholder="Select gym"
+      options={mine.map((g) => ({
+        value: g.id,
+        label: `${g.name}${g.gym_status === 'INACTIVE' ? ' (deactivated)' : ''}`,
+      }))}
+    />
+  );
+
+  const accountDropdown = (
+    <Dropdown
+      trigger={['click']}
+      menu={{
+        items: [{ key: 'logout', icon: <LogoutOutlined />, label: 'Log out', onClick: signedOut }],
+      }}
+    >
+      <Typography.Text style={{ color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        {isMobile ? <UserOutlined /> : <>{user?.name || 'Account'} ({ctx?.role || '…'})</>}
+      </Typography.Text>
+    </Dropdown>
+  );
+
   return (
     <GymContext.Provider value={ctx}>
       <Layout style={{ minHeight: '100vh' }}>
-        <Header style={{ display: 'flex', alignItems: 'center', gap: 16, paddingInline: 16 }}>
-          <Typography.Text strong style={{ color: '#fff', whiteSpace: 'nowrap', fontSize: 16, letterSpacing: 1 }}>
-            {(perm?.gymName || 'GYM').toUpperCase()}
-          </Typography.Text>
-          <Select
-            value={gymId ?? undefined}
-            onChange={switchGym}
-            style={{ minWidth: 180 }}
-            placeholder="Select gym"
-            options={mine.map((g) => ({
-              value: g.id,
-              label: `${g.name}${g.gym_status === 'INACTIVE' ? ' (deactivated)' : ''}`,
-            }))}
-          />
-          <div style={{ flex: 1 }} />
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [{ key: 'logout', icon: <LogoutOutlined />, label: 'Log out', onClick: signedOut }],
-            }}
-          >
-            <Typography.Text style={{ color: '#fff', cursor: 'pointer' }}>
-              {user?.name || 'Account'} ({ctx?.role || '…'})
+        <Header style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 16, paddingInline: isMobile ? 12 : 16 }}>
+          {isMobile && (
+            <Button
+              type="text"
+              aria-label="Open navigation"
+              icon={<MenuOutlined style={{ color: '#fff', fontSize: 18 }} />}
+              onClick={() => setNavOpen(true)}
+            />
+          )}
+          {!isMobile && (
+            <Typography.Text strong style={{ color: '#fff', whiteSpace: 'nowrap', fontSize: 16, letterSpacing: 1 }}>
+              {(perm?.gymName || 'GYM').toUpperCase()}
             </Typography.Text>
-          </Dropdown>
+          )}
+          {gymSelect}
+          <div style={{ flex: 1 }} />
+          {accountDropdown}
         </Header>
         <Layout>
-          <Sider width={200} theme="dark" breakpoint="lg" collapsedWidth="0">
-            <Menu
-              mode="inline"
-              theme="dark"
-              selectedKeys={[selectedKey]}
-              items={visibleNav.map((i) => ({ key: i.path, icon: i.icon, label: i.label }))}
-              onClick={({ key }) => navigate(key)}
-              style={{ height: '100%', borderInlineEnd: 0, paddingTop: 8 }}
-            />
-          </Sider>
+          {!isMobile && (
+            <Sider width={200} theme="dark">
+              {navMenu()}
+            </Sider>
+          )}
+          {isMobile && (
+            <Drawer
+              placement="left"
+              open={navOpen}
+              onClose={() => setNavOpen(false)}
+              width={264}
+              styles={{
+                body: { padding: 0, background: '#001529' },
+                header: { background: '#001529', borderBottom: '1px solid rgba(255,255,255,0.12)' },
+              }}
+              title={
+                <Typography.Text strong style={{ color: '#fff', letterSpacing: 1 }}>
+                  {(perm?.gymName || 'GYM').toUpperCase()}
+                </Typography.Text>
+              }
+            >
+              {navMenu(() => setNavOpen(false))}
+            </Drawer>
+          )}
           <Content style={{ background: 'transparent', minWidth: 0 }}>
             {gyms === null ? (
               <div style={{ padding: 24 }}><Spin /></div>

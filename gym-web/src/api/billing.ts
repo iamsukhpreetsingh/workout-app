@@ -118,3 +118,61 @@ export function formatMoney(cents: number, currency: string): string {
   const symbol = symbols[currency] || `${currency} `;
   return `${symbol}${(cents / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
+
+// ── payment proofs (Phase M11) ───────────────────────────────────────────
+
+export interface PaymentProof {
+  id: string;
+  gym_id: string;
+  member_id: string;
+  charge_id: string;
+  membership_id: string | null;
+  amount_cents: number;
+  currency: string;
+  method: 'UPI' | 'CARD' | 'BANK_TRANSFER' | 'OTHER';
+  transaction_id: string;
+  paid_on: string;
+  notes: string | null;
+  status: 'PENDING_VERIFICATION' | 'APPROVED' | 'REJECTED' | 'CANCELLED_BY_MEMBER' | 'SUPERSEDED';
+  status_label: string;
+  rejection_reason: string | null;
+  supersede_reason: string | null;
+  payment_id: string | null;
+  charge_description?: string;
+  charge_status?: string;
+  plan_name?: string | null;
+  period_start?: string | null;
+  period_end?: string | null;
+  first_name?: string;
+  last_name?: string;
+  member_code?: string;
+  submitted_by_name?: string | null;
+  reviewed_by_name?: string | null;
+  created_at: string;
+  reviewed_at?: string | null;
+}
+
+export const listGymPaymentProofs = (gymId: string, status?: string) =>
+  api<PaymentProof[]>(`/gym/${gymId}/payment-proofs${status ? `?status=${encodeURIComponent(status)}` : ''}`);
+
+export const getPendingProofTotals = (gymId: string) =>
+  api<{ total: number; count: number }>(`/gym/${gymId}/payment-proofs/summary`);
+
+// authorized screenshot fetch → blob URL (token-required endpoint)
+export async function fetchProofScreenshotUrl(gymId: string, proofId: string): Promise<string | null> {
+  const { API_BASE, getAccessToken } = await import('./client');
+  const res = await fetch(`${API_BASE}/gym/${gymId}/payment-proofs/${proofId}/screenshot`, {
+    headers: { Authorization: `Bearer ${getAccessToken()}` },
+  });
+  if (!res.ok) return null;
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
+export const approvePaymentProof = (gymId: string, proofId: string) =>
+  api<{ proof: PaymentProof; payment: Payment }>(`/gym/${gymId}/payment-proofs/${proofId}/approve`,
+    { method: 'POST' });
+
+export const rejectPaymentProof = (gymId: string, proofId: string, reason: string) =>
+  api<PaymentProof>(`/gym/${gymId}/payment-proofs/${proofId}/reject`,
+    { method: 'POST', body: { reason } });

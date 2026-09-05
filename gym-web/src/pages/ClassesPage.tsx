@@ -399,6 +399,7 @@ export default function ClassesPage() {
           loading={loading}
           pagination={false}
           locale={{ emptyText: 'No classes on the schedule yet. Create the first one — members see it in the app under Gym → Classes.' }}
+          scroll={{ x: 900 }}
         />
       )}
 
@@ -453,6 +454,7 @@ export default function ClassesPage() {
               pagination={false}
               size="small"
               locale={{ emptyText: 'No bookings yet.' }}
+          scroll={{ x: 620 }}
             />
           </>
         )}

@@ -72,3 +72,7 @@ PATCHES/*
 # backups, not in git). Tracked legacy upload files are unaffected.
 backend/uploads/gym-documents/*
 !backend/uploads/gym-documents/.gitkeep
+# Payment proof screenshots (Phase M11) — member financial evidence,
+# streamed via authorized endpoints only; never commit real uploads.
+backend/uploads/payment-proofs/*
+!backend/uploads/payment-proofs/.gitkeep

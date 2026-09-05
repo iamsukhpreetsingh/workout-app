@@ -135,7 +135,10 @@ async function getCharge(gymId, chargeId) {
 
 // ── payments (receipts) ──────────────────────────────────────────────────
 
-async function recordPayment(gymId, memberId, actor, ip, data, gymAudit) {
+// dbClient: pass the OPEN TRANSACTION client when called from inside another
+// transaction (e.g. payment-proof approval) — nesting transaction() would
+// pull a second pool connection and self-deadlock on the charge row locks.
+async function recordPayment(gymId, memberId, actor, ip, data, gymAudit, dbClient = null) {
   const amount = Number(data.amount_cents);
   if (!Number.isInteger(amount) || amount <= 0) {
     throw new HttpError(400, 'amount_cents must be a positive integer amount');
@@ -146,7 +149,7 @@ async function recordPayment(gymId, memberId, actor, ip, data, gymAudit) {
   if (!data.paid_on || !DATE_RE.test(String(data.paid_on))) {
     throw new HttpError(400, 'paid_on must be a YYYY-MM-DD date');
   }
-  return transaction(async (client) => {
+  const run = async (client) => {
     // the charge MUST belong to this member of THIS gym — "wrong member /
     // wrong membership" is structurally impossible
     const { rows: chargeRows } = await client.query(
@@ -220,7 +223,9 @@ async function recordPayment(gymId, memberId, actor, ip, data, gymAudit) {
                paid_on: data.paid_on, receipt: receiptNumber },
     });
     return getPayment(gymId, payment.id, client);
-  });
+  };
+  if (dbClient) return run(dbClient);
+  return transaction(run);
 }
 
 const PAYMENT_SELECT = `
@@ -488,6 +493,21 @@ async function listMyBilling(userId) {
       bucket.settled.push(c);
     }
   }
+  // the member's receipt history per gym (mobile M9) — newest first, capped
+  const payRows = await query(
+    `${MY_PAYMENT_SELECT}
+     WHERE gm.app_user_id = $1
+     ORDER BY p.paid_on DESC, p.created_at DESC
+     LIMIT 200`,
+    [userId]
+  );
+  const paymentsByGym = new Map();
+  for (const p of payRows.rows.map(paymentStatus)) {
+    let list = paymentsByGym.get(p.gym_id);
+    if (!list) { list = []; paymentsByGym.set(p.gym_id, list); }
+    if (list.length < 50) list.push(p);
+  }
+
   // open dues first (earliest due date wins), then a short recent-settled tail
   const dueAsc = (a, b) => String(a.due_on || a.created_at).localeCompare(String(b.due_on || b.created_at));
   return [...byGym.values()].map((g) => ({
@@ -497,11 +517,103 @@ async function listMyBilling(userId) {
     outstanding_cents: g.outstanding_cents,
     overdue_cents: g.overdue_cents,
     next_due_on: g.next_due_on,
+    // Phase M9 — online payments are exposed THROUGH the backend: the flag
+    // tells the app whether the "Pay Online" action exists. It flips true
+    // here when a gateway is wired up; the app never implements one.
+    online_payment_available: false,
     charges: [
       ...g.charges.sort(dueAsc).slice(0, 10),
       ...(g.settled || []).sort(dueAsc).slice(-5).reverse(),
     ].map(myChargeToClient),
+    payments: paymentsByGym.get(g.gym_id) || [],
   }));
+}
+
+// The member's receipt history for one gym (mobile M9): immutable payment
+// rows newest-first — amount, method, date, derived status and the receipt
+// number. Membership context (plan + covered period) rides along so the
+// history screen renders without a second call.
+async function listMyPayments(userId, gymId) {
+  const { rows } = await query(
+    `${MY_PAYMENT_SELECT}
+     WHERE p.gym_id = $2 AND gm.app_user_id = $1
+     ORDER BY p.paid_on DESC, p.created_at DESC
+     LIMIT 100`,
+    [userId, gymId]
+  );
+  return rows.map(paymentStatus);
+}
+
+// Payment history select for the app-linked member: the payment row plus
+// the membership context its charge covered (plan, period).
+const MY_PAYMENT_SELECT = `
+  SELECT p.id, p.amount_cents, p.currency, p.method, p.paid_on,
+         p.receipt_number, p.note, p.created_at,
+         COALESCE((SELECT SUM(f.amount_cents)::int FROM payment_refunds f WHERE f.payment_id = p.id), 0) AS refund_total,
+         gm.member_code, gm.first_name, gm.last_name, gm.app_user_id,
+         c.description AS charge_description, c.period_start, c.period_end,
+         mm.plan_name, mm.starts_on AS membership_start, mm.ends_on AS membership_end
+  FROM membership_payments p
+  JOIN gym_members gm ON gm.id = p.member_id
+  JOIN membership_charges c ON c.id = p.charge_id
+  LEFT JOIN member_memberships mm ON mm.id = c.membership_id`;
+
+// Ownership-checked member receipt (mobile M9): the payment must belong to
+// a gym_members row of THE CALLER — another member's receipt is a 404 that
+// never confirms existence. Same shape as the desk receipt.
+async function getMyReceipt(userId, paymentId) {
+  const { rows } = await query(
+    `SELECT p.id, p.gym_id
+     FROM membership_payments p
+     JOIN gym_members gm ON gm.id = p.member_id
+     WHERE p.id = $1 AND gm.app_user_id = $2 LIMIT 1`,
+    [paymentId, userId]
+  );
+  if (!rows.length) return null;
+  return getReceipt(rows[0].gym_id, paymentId);
+}
+
+// ── attendance payment warning (M11) ─────────────────────────────────────
+// Derived server-side from the ledger: the member's open dues summary for
+// the check-in flow. WARNING DATA ONLY — the caller decides whether to
+// block (the default is never to block). A PENDING_VERIFICATION proof is
+// NOT a payment and does not clear the warning.
+async function getMemberPaymentWarning(client, gymId, memberId) {
+  const { rows } = await client.query(
+    `SELECT c.amount_cents, c.currency, c.due_on,
+            COALESCE((SELECT SUM(p.amount_cents)::int FROM membership_payments p WHERE p.charge_id = c.id), 0)
+              - COALESCE((SELECT SUM(f.amount_cents)::int FROM payment_refunds f
+                          JOIN membership_payments pay ON pay.id = f.payment_id
+                          WHERE pay.charge_id = c.id), 0) AS net_paid,
+            EXISTS (SELECT 1 FROM gym_payment_proofs pr
+                    WHERE pr.charge_id = c.id AND pr.status = 'PENDING_VERIFICATION') AS has_pending_proof,
+            (now() AT TIME ZONE g.timezone)::date AS today
+     FROM membership_charges c JOIN gyms g ON g.id = c.gym_id
+     WHERE c.gym_id = $1 AND c.member_id = $2`,
+    [gymId, memberId]
+  );
+  let outstanding = 0;
+  let overdue = false;
+  let nextDue = null;
+  let pendingProof = false;
+  let currency = 'INR';
+  for (const c of rows) {
+    const bal = c.amount_cents - c.net_paid;
+    if (bal <= 0) continue;
+    outstanding += bal;
+    currency = c.currency;
+    if (c.has_pending_proof) pendingProof = true;
+    if (!nextDue || c.due_on < nextDue) nextDue = c.due_on;
+    if (c.due_on < c.today) overdue = true;
+  }
+  if (!outstanding) return null;
+  return {
+    outstanding_cents: outstanding,
+    currency,
+    overdue,
+    next_due_on: nextDue,
+    pending_proof: pendingProof,
+  };
 }
 
 module.exports = {
@@ -510,5 +622,5 @@ module.exports = {
   listMemberCharges, getCharge, listChargesForLedger,
   recordPayment, getPayment, listGymPayments, listMemberPayments,
   refundPayment, getReceipt, getBillingSummary,
-  listMyBilling,
+  listMyBilling, listMyPayments, getMyReceipt, getMemberPaymentWarning,
 };

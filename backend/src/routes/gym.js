@@ -21,6 +21,7 @@ const billing = require('../data/gymBilling');
 const attendance = require('../data/gymAttendance');
 const workouts = require('../data/gymWorkouts');
 const nutrition = require('../data/gymNutrition');
+const proofs = require('../data/gymPaymentProofs');
 const contentAssignments = require('../data/gymContentAssignments');
 const storage = require('../data/storageService');
 const smtpProvider = require('../email/smtpProvider');
@@ -428,6 +429,72 @@ registerRoute(router, {
   }
 }, [requireAuth]);
 
+// ── mobile: payments history / receipts / online-payment action (M9) ─────
+// The member can only ever READ their ledger. Amounts, statuses, receipt
+// numbers and dates are computed server-side from the immutable rows —
+// there is no client write path that could alter them. The online-payment
+// ACTION lives here too (exposed through the backend): it is a 501 stub
+// until a gateway is wired up, and the app renders whatever the server
+// says instead of implementing gateway logic itself.
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/payments',
+  description: "The connected member's payment history for one gym (?gym_id=): immutable receipt rows newest-first — amount, method, date, receipt number, derived status (PAID/PARTIAL/REFUNDED) and the membership/period each payment covered. Auth only (member resolved from the JWT).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    if (!req.query.gym_id) return res.status(400).json({ error: 'gym_id is required' });
+    res.json(await billing.listMyPayments(req.user.id, req.query.gym_id));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/receipts/:paymentId',
+  description: "The connected member's own receipt: gym, member, plan, amount, date, method, covered period, receipt number and status — derived from immutable rows. Another member's receipt reads as a 404 that never confirms existence. Auth only.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const receipt = await billing.getMyReceipt(req.user.id, req.params.paymentId);
+    if (!receipt) return res.status(404).json({ error: 'Receipt not found' });
+    res.json(receipt);
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/my/charges/:chargeId/pay-online',
+  description: "The online-payment ACTION for one of the member's own charges, exposed through the backend as the spec requires. No gateway is wired up yet, so this resolves to 501 Not Implemented with a front-desk message — the shape (ownership check included) is final; a gateway later fills this handler without any app change.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT c.id FROM membership_charges c
+       JOIN gym_members gm ON gm.id = c.member_id
+       WHERE c.id = $1 AND gm.app_user_id = $2 LIMIT 1`,
+      [req.params.chargeId, req.user.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Charge not found' });
+    res.status(501).json({
+      error: 'Online payments are not available yet — please pay at the front desk.',
+      online_payment_available: false,
+    });
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
 registerRoute(router, {
   method: 'GET',
   path: '/my/workouts',
@@ -720,6 +787,53 @@ registerRoute(router, {
     }
     if (!done) return res.status(404).json({ error: 'Saved item not found' });
     res.json(done);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+// ── mobile: payment proofs (auth only — member resolved by JWT) ──────────
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/payment-proofs',
+  description: "The connected member's submitted payment proofs (all statuses) — optionally ?gym_id=. Requires authentication only.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.json(await proofs.listMyProofs(req.user.id, req.query.gym_id));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/my/payment-proofs',
+  description: "Submits a payment proof (screenshot + transaction id) against one of the member's OWN outstanding charges. The backend derives ownership from the JWT, validates the amount against the outstanding balance (partial allowed, overpayment rejected), enforces one pending proof per charge and per transaction id, magic-byte-validates the <=5MB screenshot and stores it privately (S3 in production, local in dev). Status: PENDING_VERIFICATION — the due remains unpaid until an admin approves. Requires authentication only.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.status(201).json(await proofs.submitProof(req.user.id, req.ip, req.body || {}, gyms.gymAudit));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/my/payment-proofs/:proofId/cancel',
+  description: "The member cancels their own PENDING_VERIFICATION proof — the due remains unpaid, no receipt is created, history is untouched. Already-processed proofs are 409. Requires authentication only.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.json(await proofs.cancelMyProof(req.user.id, req.params.proofId, req.ip, gyms.gymAudit));
   } catch (e) {
     httpError(res, e, 400);
   }
@@ -1348,6 +1462,42 @@ registerRoute(router, {
     res.json(await plans.extendMembership(
       req.gymContext.gymId, req.params.memberId, req.params.membershipId,
       { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')]);
+
+registerRoute(router, {
+  method: 'PATCH',
+  path: '/:gymId/members/:memberId/memberships/:membershipId',
+  description: "Edits a SCHEDULED (UPCOMING) membership: change plan (ACTIVE plans only — price becomes that plan's current price at edit time, per the LOCKED-WHEN-SCHEDULED rule), change start/end dates (must start after the current membership ends and in the future), attach notes. The open dues charge is corrected while unpaid. The current membership and history are untouched. Requires permission: memberships.manage (OWNER, ADMIN).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')], async (req, res) => {
+  try {
+    res.json(await plans.updateUpcomingMembership(
+      req.gymContext.gymId, req.params.memberId, req.params.membershipId,
+      { userId: req.user.id }, req.ip, req.body || {}, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/memberships/:membershipId/cancel-renewal',
+  description: "Cancels a SCHEDULED (UPCOMING) renewal — deliberately different from cancelling the current membership: the future commitment and its unpaid dues charge are removed, the current membership and history are untouched, and another renewal can be scheduled later. Requires permission: memberships.manage (OWNER, ADMIN).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('memberships.manage')], async (req, res) => {
+  try {
+    res.json(await plans.cancelUpcomingMembership(
+      req.gymContext.gymId, req.params.memberId, req.params.membershipId,
+      { userId: req.user.id }, req.ip, { reason: req.body?.reason }, gyms.gymAudit
     ));
   } catch (e) {
     httpError(res, e, 400);
@@ -2193,6 +2343,95 @@ registerRoute(router, {
     httpError(res, e, 400);
   }
 }, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+// ── payment proof verification (staff side) ──────────────────────────────
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/payment-proofs',
+  description: "Payment proofs for the gym (status filter — PENDING_VERIFICATION first for the dashboard). Requires permission: payments.record (front desk sees; approval is payments.manage).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.record')], async (req, res) => {
+  try {
+    res.json(await proofs.listGymProofs(req.gymContext.gymId, { status: req.query.status }));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.record')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/payment-proofs/summary',
+  description: "Pending-verification totals for the Payments dashboard card. Requires permission: payments.manage (OWNER, ADMIN).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')], async (req, res) => {
+  try {
+    res.json(await proofs.getPendingTotals(req.gymContext.gymId));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/payment-proofs/:proofId/screenshot',
+  description: "Streams the submitted payment screenshot — gym-context authorized end to end; another gym's proof is a 404 that never confirms existence. Requires permission: payments.record.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.record')], async (req, res) => {
+  try {
+    const out = await proofs.getProofStream(req.gymContext.gymId, req.params.proofId);
+    if (!out || out.notFound) return res.status(404).json({ error: 'Payment proof not found' });
+    if (out.gone) return res.status(404).json({ error: 'Screenshot no longer available' });
+    res.setHeader('Content-Type', out.mime);
+    res.setHeader('Cache-Control', 'private, no-store');
+    out.stream.pipe(res);
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.record')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/payment-proofs/:proofId/approve',
+  description: "Approves a PENDING_VERIFICATION proof atomically: transactional lock + status check (double approval -> 409 'already been processed'), SUPERSEDED when the charge was settled separately, then the authoritative ledger payment via the existing recordPayment (receipt generated, idempotent) and a member notification. Requires permission: payments.manage (OWNER, ADMIN — front desk has no approval privileges).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')], async (req, res) => {
+  try {
+    const actor = { userId: req.user.id, gymContext: req.gymContext };
+    const result = await proofs.approveProof(req.gymContext.gymId, req.params.proofId, actor, req.ip, gyms.gymAudit);
+    if (result && result.superseded) return res.status(409).json({ error: result.error });
+    res.json(result);
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/payment-proofs/:proofId/reject',
+  description: "Rejects a PENDING_VERIFICATION proof with a required reason — the due remains DUE/OVERDUE, no payment/receipt is created, and the member is notified with the reason. Requires permission: payments.manage (OWNER, ADMIN).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')], async (req, res) => {
+  try {
+    const actor = { userId: req.user.id, gymContext: req.gymContext };
+    res.json(await proofs.rejectProof(
+      req.gymContext.gymId, req.params.proofId, actor, req.ip,
+      { reason: req.body ? req.body.reason : undefined }, gyms.gymAudit
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('payments.manage')]);
 
 // ── audit log ────────────────────────────────────────────────────────────
 

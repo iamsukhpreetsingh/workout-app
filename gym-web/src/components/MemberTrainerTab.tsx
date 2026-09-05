@@ -109,6 +109,7 @@ export default function MemberTrainerTab({ memberId }: { memberId: string }) {
         ) : (
           <Table
             rowKey="id"
+          scroll={{ x: 760 }}
             size="small"
             pagination={false}
             dataSource={assignments}

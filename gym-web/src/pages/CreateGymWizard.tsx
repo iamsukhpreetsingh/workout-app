@@ -124,19 +124,21 @@ export default function CreateGymWizard({ onCreated }: Props) {
   const branding = v.branding || {};
 
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto', padding: 24 }}>
+    <div style={{ maxWidth: 720, margin: '0 auto', padding: '24px 16px' }}>
       <Typography.Title level={3}>Create your gym</Typography.Title>
       <Typography.Paragraph type="secondary">
         You become this gym's OWNER. Your role is scoped to this gym only — your personal
         workouts, diet and progress in the mobile app are not touched.
       </Typography.Paragraph>
 
+      <div style={{ overflowX: 'auto' }}>
       <Steps
         current={step}
         items={['Name', 'Contact', 'Address', 'Hours', 'Branding', 'Review'].map((t) => ({ title: t }))}
         style={{ marginBottom: 24 }}
         size="small"
       />
+      </div>
 
       <Card>
         <Form form={form} layout="vertical" initialValues={{ timezone: 'Asia/Kolkata', currency: 'INR' }}>

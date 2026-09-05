@@ -37,8 +37,8 @@ export default function OperatingHoursEditor({ value, onChange }: Props) {
         const closed = !hours[day] || hours[day].closed;
         const range = toRange(hours[day]);
         return (
-          <div key={day} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ width: 90 }}>{label}</span>
+          <div key={day} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ width: 90, flexShrink: 0 }}>{label}</span>
             <Switch
               checked={!closed}
               checkedChildren="Open"

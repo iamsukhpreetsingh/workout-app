@@ -22,6 +22,7 @@
 const crypto = require('crypto');
 const { query, transaction } = require('../db/pool');
 const plans = require('./membershipPlans');
+const billing = require('./gymBilling');
 const branches = require('./gymBranches');
 
 class HttpError extends Error {
@@ -221,7 +222,12 @@ async function recordCheckIn(gymId, memberId, source, actor, ip, { when, note, b
   let claimedTime = null;
   let timeCorrected = false;
   return transaction(async (client) => {
-    const { member, warning } = await eligibility(client, gymId, memberId, source);
+    const eligibilityResult = await eligibility(client, gymId, memberId, source);
+    const { member, warning } = eligibilityResult;
+    // M11 — payment WARNING data (dues/overdue/pending proof). Informational:
+    // the caller decides; attendance is never blocked by an outstanding
+    // amount unless the gym configures enforcement.
+    const payment_warning = await billing.getMemberPaymentWarning(client, gymId, memberId);
     const visitBranchId = await branches.resolveVisitBranch(client, gymId, memberId, branch_id, staff_branch_ids);
 
     // resolve the instant: server time unless an offline sync claims a time
@@ -267,7 +273,7 @@ async function recordCheckIn(gymId, memberId, source, actor, ip, { when, note, b
       ).rows[0].d;
       if (prev.prev_local_date === localDateOfCheckIn || (hoursSince >= 0 && hoursSince < VISIT_WINDOW_HOURS)) {
         return {
-          attendance: prev, duplicate: true, warning,
+          attendance: prev, duplicate: true, warning, payment_warning: eligibilityResult.payment_warning,
           member: { id: memberId, name: `${member.first_name} ${member.last_name || ''}`.trim(), member_code: member.member_code },
         };
       }
@@ -289,6 +295,7 @@ async function recordCheckIn(gymId, memberId, source, actor, ip, { when, note, b
     });
     return {
       attendance: rows[0], duplicate: false, warning,
+      payment_warning: eligibilityResult.payment_warning,
       member: { id: memberId, name: `${member.first_name} ${member.last_name || ''}`.trim(), member_code: member.member_code },
     };
   });

@@ -154,6 +154,51 @@ export async function fetchMyGymBilling() {
   return api('/gym/my/billing');
 }
 
+// ── Mobile M9 — payments history, receipts, online-payment action ────────
+// Everything here is a READ of the immutable ledger: the member can never
+// alter an amount, status, receipt number or payment date, because no
+// client write path exists. The only "write" is the online-payment action,
+// which lives on the backend (a 501 stub until a gateway is wired up) —
+// the app renders the server's answer instead of implementing a gateway.
+
+// Full receipt history for one gym (newest first) — the /my/billing payload
+// carries a recent tail; this returns the complete list.
+export async function fetchMyPayments(gymId) {
+  return api(`/gym/my/payments?gym_id=${encodeURIComponent(gymId)}`);
+}
+
+// The member's own receipt (ownership checked server-side — another
+// member's receipt reads as a 404). Null-safe: callers handle the error.
+export async function fetchMyReceipt(paymentId) {
+  return api(`/gym/my/receipts/${encodeURIComponent(paymentId)}`);
+}
+
+// The online-payment action for one of the member's charges, EXPOSED
+// THROUGH THE BACKEND as the spec requires. Surfaces the server's error
+// (today a 501 "pay at the front desk", later a gateway checkout payload)
+// — the app never implements gateway logic.
+// ── Mobile M11 — payment proofs (submit / view / cancel) ─────────────────
+// A proof is EVIDENCE for admin verification, never a payment: the due
+// stays unpaid until the gym approves. Screenshots upload through the
+// backend as base64 (no storage credentials in the app).
+
+export async function fetchMyPaymentProofs(gymId) {
+  const qs = gymId ? `?gym_id=${encodeURIComponent(gymId)}` : '';
+  return api(`/gym/my/payment-proofs${qs}`);
+}
+
+export async function submitPaymentProof(payload) {
+  return api('/gym/my/payment-proofs', { method: 'POST', body: payload });
+}
+
+export async function cancelMyPaymentProof(proofId) {
+  return api(`/gym/my/payment-proofs/${encodeURIComponent(proofId)}/cancel`, { method: 'POST' });
+}
+
+export async function payChargeOnline(chargeId) {
+  return api(`/gym/my/charges/${encodeURIComponent(chargeId)}/pay-online`, { method: 'POST' });
+}
+
 // SENT announcements the member was in the audience for, newest first
 // (one row per announcement with its richest delivery status).
 export async function fetchMyGymAnnouncements({ limit = 20 } = {}) {

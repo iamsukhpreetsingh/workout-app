@@ -50,6 +50,8 @@ export const GYM_NUTRITION_DETAIL = 'GymNutritionDetail';
 export const GYM_WORKOUTS = 'GymWorkouts';
 export const GYM_NUTRITION = 'GymNutrition';
 // M6 — attendance experience (pool): month-by-month ✓/− history and the
+// M9 — member-facing payments: dues, history, receipts
+export const GYM_PAYMENTS = 'GymPayments';
 // member QR check-in (scan the gym's posted poster code)
 export const GYM_ATTENDANCE = 'GymAttendance';
 export const GYM_CHECK_IN = 'GymCheckIn';

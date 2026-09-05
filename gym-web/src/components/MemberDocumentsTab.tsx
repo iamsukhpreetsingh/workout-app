@@ -232,6 +232,7 @@ export default function MemberDocumentsTab({ memberId }: { memberId: string }) {
         rowKey="id" size="small" columns={columns} dataSource={documents}
         pagination={documents.length > 10 ? { pageSize: 10 } : false}
         locale={{ emptyText: 'No documents on file yet.' }}
+        scroll={{ x: 700 }}
       />
 
       <Modal

@@ -3,6 +3,8 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const users = require('../data/users');
+const intakeProfiles = require('../data/intakeProfiles');
+const { query, pool } = require('../db/pool');
 const tags = require('../data/tags');
 const { registerRoute } = require('../admin/registry');
 const { requireAuth, requireRole } = require('../middleware/auth');
@@ -74,6 +76,23 @@ registerRoute(
     }
     const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
     const user = await users.createUser({ email, passwordHash, name: name.trim(), role });
+
+    // Mobile M10 — signup collects DOB / gender / weight / height for users
+    // and seeds their INTAKE PROFILE (the canonical home these fields live
+    // in), so the health-profile form pre-populates and gyms can read them
+    // for linked members. Optional fields, validated in the data layer.
+    // Compensating delete keeps signup atomic: if the seed fails the user
+    // row is removed and the client sees the error.
+    const profilePayload = (req.body || {}).profile;
+    if (role === 'user' && profilePayload && typeof profilePayload === 'object') {
+      try {
+        await intakeProfiles.seedSignupProfile(user.id, profilePayload);
+      } catch (seedErr) {
+        await users.deleteUser?.(user.id).catch(() => {});
+        await pool.query('DELETE FROM users WHERE id = $1', [user.id]).catch(() => {});
+        return res.status(seedErr.status || 400).json({ error: seedErr.message || 'Invalid profile data' });
+      }
+    }
 
     // Seed default tags for trainers on signup
     if (role === 'trainer') {
@@ -218,7 +237,6 @@ registerRoute(
 // require a verification flow and is deliberately NOT supported here), and
 // body metrics live in the client intake profile. The users row is the
 // authoritative profile source — no separate profile copy.
-const { query } = require('../db/pool');
 registerRoute(
   router,
   {

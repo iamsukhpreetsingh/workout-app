@@ -191,6 +191,18 @@ export default function MemberDetailPage() {
           <Descriptions.Item label="Email">{member.email || '—'}</Descriptions.Item>
           <Descriptions.Item label="Date of birth">{member.date_of_birth || '—'}</Descriptions.Item>
           <Descriptions.Item label="Gender">{member.gender || '—'}</Descriptions.Item>
+          <Descriptions.Item label="Height">
+            {(() => {
+              const v = member.profile?.height_cm ?? member.app_profile?.height_cm;
+              return v ? `${v} cm` : '—';
+            })()}
+          </Descriptions.Item>
+          <Descriptions.Item label="Weight">
+            {(() => {
+              const v = member.profile?.weight_kg ?? member.app_profile?.weight_kg;
+              return v ? `${v} kg` : '—';
+            })()}
+          </Descriptions.Item>
           <Descriptions.Item label="Joined">{member.joined_at}</Descriptions.Item>
           <Descriptions.Item label="Emergency contact">
             {member.emergency_contact_name

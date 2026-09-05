@@ -9,6 +9,81 @@
 const { query } = require('../db/pool');
 const calc = require('./nutritionTargetsCalc');
 
+// ── signup seeding (Mobile M10) ──────────────────────────────────────────
+// Signup (user role) collects DOB / gender / weight / height and seeds this
+// row so the health-profile form pre-populates — the member never enters
+// the same facts twice. Deliberately NOT stamping completed_at: a seeded
+// profile is not a completed health profile (allergen warnings and the
+// trainer completion gate stay off until the real intake save). Existing
+// profile values are never overwritten (NULL-only fill), so a re-seed is
+// always safe.
+const SIGNUP_DOB_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function validateSignupProfile(p = {}) {
+  const out = {};
+  if (p.date_of_birth != null && p.date_of_birth !== '') {
+    if (!SIGNUP_DOB_RE.test(String(p.date_of_birth))) {
+      throw err(400, 'date_of_birth must be a YYYY-MM-DD date');
+    }
+    const dob = new Date(`${String(p.date_of_birth).slice(0, 10)}T00:00:00Z`);
+    if (Number.isNaN(dob.getTime()) || dob > new Date()) {
+      throw err(400, 'date_of_birth must be a real date in the past');
+    }
+    const age = Math.floor((Date.now() - dob.getTime()) / (365.25 * 86400000));
+    if (age < 10 || age > 100) throw err(400, 'Age from date of birth must be between 10 and 100');
+    out.date_of_birth = String(p.date_of_birth).slice(0, 10);
+    out.age = age;
+  }
+  if (p.gender != null && p.gender !== '') {
+    if (!['male', 'female', 'other', 'prefer_not_to_say'].includes(p.gender)) {
+      throw err(400, 'invalid gender');
+    }
+    out.gender = p.gender;
+  }
+  for (const [key, lo, hi, unit] of [
+    ['height_cm', 30, 300, 'cm'],
+    ['weight_kg', 1, 500, 'kg'],
+  ]) {
+    const v = p[key];
+    if (v != null && v !== '') {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < lo || n > hi) throw err(400, `${key} must be ${lo}-${hi} ${unit}`);
+      out[key] = n;
+    }
+  }
+  return out;
+}
+
+function err(status, message) {
+  const e = new Error(message);
+  e.status = status;
+  return e;
+}
+
+// NULL-only fill of the intake profile from signup fields. Called by the
+// signup route (role 'user'); standalone users get the same pre-populated
+// health profile as gym members later do.
+async function seedSignupProfile(clientId, p = {}) {
+  const fields = validateSignupProfile(p);
+  if (!Object.keys(fields).length) return null;
+  const { rows } = await query(
+    `INSERT INTO client_intake_profiles
+       (client_user_id, date_of_birth, gender, age, height_cm, weight_kg)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (client_user_id) DO UPDATE SET
+       date_of_birth = COALESCE(client_intake_profiles.date_of_birth, EXCLUDED.date_of_birth),
+       gender        = COALESCE(client_intake_profiles.gender, EXCLUDED.gender),
+       age           = COALESCE(client_intake_profiles.age, EXCLUDED.age),
+       height_cm     = COALESCE(client_intake_profiles.height_cm, EXCLUDED.height_cm),
+       weight_kg     = COALESCE(client_intake_profiles.weight_kg, EXCLUDED.weight_kg),
+       updated_at    = now()
+     RETURNING client_user_id, date_of_birth, gender, age, height_cm, weight_kg, completed_at`,
+    [clientId, fields.date_of_birth ?? null, fields.gender ?? null,
+     fields.age ?? null, fields.height_cm ?? null, fields.weight_kg ?? null]
+  );
+  return rows[0] || null;
+}
+
 // Fetch the client's profile row, or null when none exists. Used by both
 // the client (own profile) and trainer (read-only) routes — access control
 // lives in the routes (requireRole + association checks).
@@ -107,4 +182,5 @@ async function upsertProfile(clientId, p = {}) {
   return rows[0];
 }
 
-module.exports = { getProfileForClient, upsertProfile };
+module.exports = {
+  seedSignupProfile, validateSignupProfile, getProfileForClient, upsertProfile };

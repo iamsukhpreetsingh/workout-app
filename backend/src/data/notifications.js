@@ -19,7 +19,7 @@ const NOTIFICATION_TYPES = [
   'admin_broadcast',    // admin dashboard broadcasts (Phase 10)
   'sync_retry_nudge',   // admin retry-failed-sync nudge (Phase 11)
   'gym_announcement',   // gym announcements → member inbox (Phase 14)
-  'gym_announcement',   // gym announcements → member inbox (Phase 14)
+  'gym_payment_proof',  // payment proof lifecycle (Phase M11)
 ];
 
 // Create a notification and attempt push delivery
@@ -100,7 +100,7 @@ async function sendPushNotification(notification) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(msg),
-      });
+      }, { signal: AbortSignal.timeout(10000) });
     } catch (err) {
       console.error('Failed to send push to token:', token.slice(0, 20) + '...', err.message);
     }

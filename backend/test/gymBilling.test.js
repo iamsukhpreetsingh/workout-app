@@ -35,6 +35,8 @@ const PEOPLE = {
   admin: { email: `bl_admin_${suffix}@test.local`, name: 'Billing Admin' },
   desk: { email: `bl_desk_${suffix}@test.local`, name: 'Billing Desk' },
   owner2: { email: `bl_owner2_${suffix}@test.local`, name: 'Other Owner' },
+  appUser: { email: `bl_app_${suffix}@test.local`, name: 'App Person' },
+  appUser2: { email: `bl_app2_${suffix}@test.local`, name: 'Second App Person' },
 };
 const tokens = {};
 let gymA, gymB, plan;
@@ -125,6 +127,18 @@ test.before(async () => {
 
   priya = await (await api(tokens[PEOPLE.owner.email], 'POST', `/gym/${gymA.id}/members`,
     { first_name: 'Priya' })).json();
+  // app-linked member for the /my/* mobile surfaces (M9)
+  await api(tokens[PEOPLE.owner.email], 'POST',
+    `/gym/${gymA.id}/members/${priya.id}/link-app`, { email: PEOPLE.appUser.email });
+  const planM = await (await api(tokens[PEOPLE.owner.email], 'POST', `/gym/${gymA.id}/plans`,
+    { name: 'Mobile Monthly', price_cents: 250000, duration_value: 1, duration_unit: 'month', status: 'ACTIVE' })).json();
+  const mTerm = await (await api(tokens[PEOPLE.owner.email], 'POST',
+    `/gym/${gymA.id}/members/${priya.id}/memberships`, { plan_id: planM.id })).json();
+  globalThis.__mobileCharge = mTerm.price_cents !== undefined ? undefined : undefined;
+  const mCharges = await (await api(tokens[PEOPLE.owner.email], 'GET',
+    `/gym/${gymA.id}/members/${priya.id}/payments`)).json();
+  globalThis.__mobileCharge = mCharges.charges.find((c) => c.membership_id === mTerm.id);
+  assert.ok(globalThis.__mobileCharge, 'mobile fixture charge created');
 });
 
 test.after(async () => {
@@ -364,4 +378,73 @@ test('audit trail records the financial lifecycle', async () => {
   for (const expected of ['charge.created', 'payment.recorded', 'payment.refunded']) {
     assert.ok(actions.includes(expected), `audit missing ${expected}`);
   }
+});
+
+
+// ── mobile M9: member-facing payments / receipts / pay-online action ─────
+
+test('/my/billing: payments history + online_payment flag ride along per gym', async () => {
+  const mine = await (await api(tokens[PEOPLE.appUser.email], 'GET', '/gym/my/billing')).json();
+  const gym = mine.find((g) => g.gym_id === gymA.id);
+  assert.ok(gym, 'app-linked member sees their gym');
+  assert.strictEqual(gym.online_payment_available, false, 'no gateway wired up yet');
+  assert.ok(Array.isArray(gym.payments), 'payments history included');
+  assert.ok(Array.isArray(gym.charges), 'dues charges included');
+  const mobileCharge = gym.charges.find((c) => c.id === globalThis.__mobileCharge.id);
+  assert.ok(mobileCharge, 'the membership charge is in the dues list');
+  assert.strictEqual(mobileCharge.status, 'DUE');
+});
+
+test('/my/payments: full receipt history for one gym, newest first', async () => {
+  // pay the mobile charge first
+  const pay = await api(tokens[PEOPLE.owner.email], 'POST',
+    `/gym/${gymA.id}/members/${priya.id}/payments`,
+    { charge_id: globalThis.__mobileCharge.id, amount_cents: 250000, method: 'UPI', paid_on: TODAY });
+  assert.strictEqual(pay.status, 201);
+  const payment = await pay.json();
+
+  const history = await (await api(tokens[PEOPLE.appUser.email], 'GET',
+    `/gym/my/payments?gym_id=${gymA.id}`)).json();
+  assert.ok(Array.isArray(history) && history.length >= 1);
+  const row = history.find((p) => p.id === payment.id);
+  assert.ok(row, 'the new payment is in the member history');
+  assert.strictEqual(row.amount_cents, 250000);
+  assert.strictEqual(row.method, 'UPI');
+  assert.strictEqual(row.status, 'PAID');
+  assert.ok(row.receipt_number.startsWith('RCPT-'));
+  assert.strictEqual(row.plan_name, 'Mobile Monthly');
+  assert.ok(row.period_start && row.period_end, 'covered period included');
+  globalThis.__mobilePayment = payment;
+});
+
+test('/my/receipts/:id: member reads their own receipt; other members cannot', async () => {
+  const receipt = await (await api(tokens[PEOPLE.appUser.email], 'GET',
+    `/gym/my/receipts/${globalThis.__mobilePayment.id}`)).json();
+  assert.strictEqual(receipt.receipt_number, globalThis.__mobilePayment.receipt_number);
+  assert.strictEqual(receipt.member.app_connected, true);
+  assert.strictEqual(receipt.plan, 'Mobile Monthly');
+  assert.strictEqual(receipt.method, 'UPI');
+
+  // second app member (no membership at this gym) → 404, no existence leak
+  createdUserIds.push((await (await api(null, 'POST', '/auth/signup',
+    { name: 'Outsider', email: `bl_out_${suffix}@test.local`, password: PASSWORD, role: 'user' })).json()).user.id);
+  await auth({ email: `bl_out_${suffix}@test.local` });
+  const foreign = await api(tokens[`bl_out_${suffix}@test.local`], 'GET',
+    `/gym/my/receipts/${globalThis.__mobilePayment.id}`);
+  assert.strictEqual(foreign.status, 404, 'another member cannot read this receipt');
+});
+
+test('pay-online action: exposed through the backend, resolves to 501 with a desk message', async () => {
+  const res = await api(tokens[PEOPLE.appUser.email], 'POST',
+    `/gym/my/charges/${globalThis.__mobileCharge.id}/pay-online`);
+  const stubBody = await res.json();
+  assert.strictEqual(res.status, 501, `stub: ${JSON.stringify(stubBody)}`);
+  assert.strictEqual(stubBody.online_payment_available, false);
+  // wrong member's charge → 404 before the stub answer
+  createdUserIds.push((await (await api(null, 'POST', '/auth/signup',
+    { name: 'Outsider 2', email: `bl_out2_${suffix}@test.local`, password: PASSWORD, role: 'user' })).json()).user.id);
+  await auth({ email: `bl_out2_${suffix}@test.local` });
+  const foreign = await api(tokens[`bl_out2_${suffix}@test.local`], 'POST',
+    `/gym/my/charges/${globalThis.__mobileCharge.id}/pay-online`);
+  assert.strictEqual(foreign.status, 404, 'cannot start a payment on another member charge');
 });
