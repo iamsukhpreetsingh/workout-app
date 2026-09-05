@@ -1123,16 +1123,27 @@ async function findInvitationForAccept(client, code) {
 
 // public, token-keyed view of an invitation (portal landing page data).
 // Dispatches by type: staff invitations (gym_role) vs member invitations.
+// Mobile M4: member previews now carry the membership term (plan name) so
+// the invitation card can show "Role / Membership" like the portal — the
+// same LATERAL shape listGymMembershipsForUser uses (ACTIVE first).
 async function getInvitationByToken(code) {
   const staffInvite = await getStaffInvitationByToken(code);
   if (staffInvite) return staffInvite;
   const invite = await query(
     `SELECT i.id, i.email, i.status, i.expires_at, i.created_at, i.accepted_at,
             g.name AS gym_name, g.status AS gym_status,
-            m.first_name, m.last_name, m.status AS member_status
+            m.first_name, m.last_name, m.status AS member_status,
+            t.plan_name AS membership_plan, t.status AS membership_status
      FROM gym_member_invites i
      JOIN gyms g ON g.id = i.gym_id
      JOIN gym_members m ON m.id = i.member_id
+     LEFT JOIN LATERAL (
+       SELECT plan_name, status
+       FROM member_memberships mt
+       WHERE mt.member_id = m.id AND mt.status IN ('ACTIVE','FROZEN','UPCOMING')
+       ORDER BY (mt.status = 'ACTIVE') DESC, mt.starts_on DESC
+       LIMIT 1
+     ) t ON true
      WHERE i.code_hash = $1
      ORDER BY i.created_at DESC LIMIT 1`,
     [hashInviteCode(code)]
@@ -1145,8 +1156,11 @@ async function getInvitationByToken(code) {
     type: 'member',
     gymName: row.gym_name,
     gymStatus: row.gym_status,
+    role: 'MEMBER',
     memberName: [row.first_name, row.last_name].filter(Boolean).join(' '),
     memberStatus: row.member_status,
+    membershipPlan: row.membership_plan ?? undefined,
+    membershipStatus: row.membership_status ?? undefined,
     email: row.email,
     status,
     invitedAt: row.created_at,

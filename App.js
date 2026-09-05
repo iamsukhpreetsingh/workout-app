@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StatusBar, View, Text, ActivityIndicator, AppState, Alert, TouchableOpacity } from 'react-native';
-import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
+import { NavigationContainer, DefaultTheme, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { WorkoutProvider } from './src/store/WorkoutContext';
 import { AppProvider, useApp } from './src/store/AppContext';
 import { AuthProvider, useAuth } from './src/store/AuthContext';
 import { NotificationProvider } from './src/store/NotificationContext';
 import { GymProvider } from './src/store/GymContext';
+import { InvitationProvider, useInvitation } from './src/store/InvitationContext';
+import GymInvitationScreen from './src/screens/GymInvitationScreen';
 import { setHapticsEnabled } from './src/lib/haptics';
 import { syncPendingSessions, syncPendingMeasurements } from './src/lib/syncService';
 import { getViewChoice, setViewChoice, clearViewChoice } from './src/lib/viewMode';
@@ -19,7 +21,11 @@ import {
   TrainerStack,
   ActiveWorkoutMiniBar,
 } from './src/navigation/navigators';
-import { RESET_PASSWORD } from './src/shared/constants/routes';
+import { RESET_PASSWORD, GYM_HOME } from './src/shared/constants/routes';
+
+// Module-scope nav ref so non-navigator UI (the invitation gate) can push
+// pool routes like GymMain after linking succeeds.
+const navigationRef = createNavigationContainerRef();
 
 // Deep linking — password-reset emails open the app directly on the Reset
 // Password screen via workouttracker://reset-password?token=...
@@ -97,6 +103,7 @@ async function ackTrainer(id) {
 function AppContent() {
   const { colors, isDark, hapticsEnabled, loaded } = useApp();
   const { authStatus, user } = useAuth();
+  const { active: invitationActive } = useInvitation();
 
   // trainerView: null while reading the persisted choice; 'user'|'trainer'
   // once resolved; 'unset' → show the choice screen.
@@ -273,7 +280,7 @@ function AppContent() {
   const showTrainerNav = authStatus === 'authenticated' && isTrainer && trainerView === 'trainer';
 
   return (
-    <NavigationContainer theme={navTheme} linking={linking}>
+    <NavigationContainer theme={navTheme} linking={linking} ref={navigationRef}>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       {/* Hard auth gate: no unauthenticated path into the main app */}
       {authStatus === 'checking' && <Splash />}
@@ -287,6 +294,19 @@ function AppContent() {
           <MainStack onSwitchView={isTrainer ? chooseView : undefined} />
           <ActiveWorkoutMiniBar />
         </>
+      )}
+      {/* Gym invitation gate (Mobile M4): full-screen Modal overlay above
+          whichever navigator tree is mounted — same flow logged-in (accept/
+          decline), logged-out (login/register), cold-start or resumed. The
+          token lives in InvitationContext (deep links + manual entry +
+          SecureStore resume); once linked, the Gym context reloads and
+          "Go to My Gym" pushes the pool screen via the nav ref. */}
+      {invitationActive && authStatus !== 'checking' && (
+        <GymInvitationScreen
+          onGoToGym={() => {
+            if (navigationRef.isReady()) navigationRef.navigate(GYM_HOME);
+          }}
+        />
       )}
       {/* intake-profile gate / gentle-prompt review — rendered above nav */}
       {(intakeGate === 'gate' || intakeGate === 'edit') && (
@@ -332,11 +352,15 @@ export default function App() {
             notification unread count; sits above AppProvider so the Gym
             tab and MyGymCard share one server-authoritative snapshot. */}
         <GymProvider>
-          <AppProvider>
-            <WorkoutProvider>
-              <AppContent />
-            </WorkoutProvider>
-          </AppProvider>
+          {/* Invitations (Mobile M4): owns the pending-token session + deep
+              links; the gate consumes auth + gym context to link accounts. */}
+          <InvitationProvider>
+            <AppProvider>
+              <WorkoutProvider>
+                <AppContent />
+              </WorkoutProvider>
+            </AppProvider>
+          </InvitationProvider>
         </GymProvider>
       </NotificationProvider>
     </AuthProvider>

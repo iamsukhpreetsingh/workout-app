@@ -150,6 +150,39 @@ test('existing user: invite → preview → accept links the EXISTING User (no d
   assert.ok(linked.rows[0].app_user_id, 'GymMember.appUserId is set');
 });
 
+// Mobile M4 — the invitation card shows Role / Membership like the portal,
+// so the member preview must carry the membership term (ACTIVE first) and a
+// stable role label. Absent term → field stays undefined (card renders "—").
+test('member preview exposes role and membership plan for the mobile card', async () => {
+  const withPlan = await createMember(PEOPLE.owner.email, gymA.id, 'WithPlan', `withplan_${suffix}@example.test`);
+  const noPlan = await createMember(PEOPLE.owner.email, gymA.id, 'NoPlan', `noplan_${suffix}@example.test`);
+
+  const plan = await query(
+    `INSERT INTO membership_plans (gym_id, name, duration_value, duration_unit, price_cents, currency)
+     VALUES ($1, 'Premium', 3, 'month', 4999, 'INR') RETURNING id`,
+    [gymA.id]
+  );
+  await query(
+    `INSERT INTO member_memberships (gym_id, member_id, plan_id, plan_name, plan_duration_value,
+       plan_duration_unit, price_cents, currency, status, starts_on, ends_on)
+     VALUES ($1, $2, $3, 'Premium', 3, 'month', 4999, 'INR', 'ACTIVE', CURRENT_DATE - 5, CURRENT_DATE + 85)`,
+    [gymA.id, withPlan.id, plan.rows[0].id]
+  );
+
+  const codeWith = await inviteMember(gymA.id, withPlan.id);
+  const pWith = await (await api(null, 'GET', `/gym/invite/${codeWith}`)).json();
+  assert.strictEqual(pWith.status, 'PENDING');
+  assert.strictEqual(pWith.role, 'MEMBER');
+  assert.strictEqual(pWith.membershipPlan, 'Premium');
+  assert.strictEqual(pWith.membershipStatus, 'ACTIVE');
+
+  const codeNo = await inviteMember(gymA.id, noPlan.id);
+  const pNo = await (await api(null, 'GET', `/gym/invite/${codeNo}`)).json();
+  assert.strictEqual(pNo.role, 'MEMBER');
+  assert.strictEqual(pNo.membershipPlan, undefined);
+  assert.strictEqual(pNo.membershipStatus, undefined);
+});
+
 test('arbitrary linking is rejected: another account cannot accept a foreign invitation', async () => {
   const code = await inviteMember(gymA.id, memberAman.id, `aman_${suffix}@example.test`);
   // the attacker (logged in with their own account) tries to claim it
