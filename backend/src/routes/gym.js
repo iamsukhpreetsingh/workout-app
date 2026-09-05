@@ -73,26 +73,6 @@ registerRoute(router, {
   }
 }, [requireAuth]);
 
-// ── mobile: my announcements (auth only; member resolved by JWT) ─────────
-// Registered BEFORE the /:gymId routes so "/my/announcements" is never
-// captured by "GET /:gymId/announcements" (route-ordering convention).
-registerRoute(router, {
-  method: 'GET',
-  path: '/my/announcements',
-  description: "The connected member's announcements across their ACTIVE gym memberships — every SENT announcement they were in the audience for, with per-channel delivery status. Auth only (member resolved from the JWT).",
-  requiresAuth: true,
-  allowedRoles: ['user', 'trainer', 'gym_staff'],
-  category: 'Gym',
-}, [requireAuth], async (req, res) => {
-  try {
-    res.json(await communications.listForMember(req.user.id, {
-      limit: req.query.limit, offset: req.query.offset,
-    }));
-  } catch (e) {
-    httpError(res, e, 400);
-  }
-}, [requireAuth]);
-
 // ── mobile: my classes (auth only; member resolved by JWT) ───────────────
 // Registered BEFORE the /:gymId routes so "/my/classes" is never captured
 // by "GET /:gymId/classes" (route-ordering convention).
