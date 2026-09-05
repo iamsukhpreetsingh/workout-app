@@ -67,12 +67,21 @@ export async function checkInWithGymQr(code) {
 
 // The resolved ACTIVE trainer (server-side trainerResolution):
 //   GYM-assigned (portal) > USER-connected (invite code) > null.
-// ONE endpoint consumed by BOTH the Profile trainer card and the My Gym
-// trainer section — the two surfaces can never contradict each other. The
-// resolution is recomputed per request, so gym-portal assignments/removals
-// propagate on the next focus fetch.
+// ONE endpoint consumed by every surface that shows "the trainer" (the
+// Profile card and the Settings disconnect) — they can never contradict
+// each other. The resolution is recomputed per request, so gym-portal
+// assignments/removals propagate on the next fetch.
 export async function fetchMyActiveTrainer() {
   return api('/client/trainer/active');
+}
+
+// Member-initiated disconnect from the GYM-assigned trainer (Settings).
+// The server ends the caller's resolved ACTIVE assignment (kept as ENDED
+// history, reason 'member_disconnect' — the desk can reassign any time) and
+// returns the FRESH resolution, so the UI falls back to the preserved
+// invite-connected trainer (or none) from this one response.
+export async function disconnectGymTrainer() {
+  return api('/client/trainer/gym-unlink', { method: 'POST' });
 }
 
 // ── Gym Classes (Phase 17) ──────────────────────────────────────────────────

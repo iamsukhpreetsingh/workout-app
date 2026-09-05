@@ -2,11 +2,12 @@
 //
 // One screen answers "what is my gym life right now": membership term
 // (ACTIVE / FROZEN / EXPIRED — exactly as the server says it), attendance
-// this month, the assigned trainer, the gym's recommended programs, the
-// next upcoming class, outstanding payments and the latest announcements.
-// It stays a dashboard: the program LISTS moved to their own pool screens
-// (GymWorkouts / GymNutrition), reachable from the "Gym Recommended" card,
-// the way Classes and Documents already live on their own screens.
+// this month, the gym's recommended programs, the member's next BOOKED
+// class, outstanding payments and the latest announcements. The trainer
+// lives on Profile (+ Settings disconnect) only — one trainer surface, not
+// two. It stays a dashboard: the program LISTS moved to their own pool
+// screens (GymWorkouts / GymNutrition), reachable from the "Gym Recommended"
+// card, the way Classes and Documents already live on their own screens.
 //
 // Server-authoritative, like every gym surface:
 //   - membership status/expiry come from /gym/my/memberships (GymContext);
@@ -54,16 +55,14 @@ import {
   fetchMyGymContent,
   fetchMyGymClasses,
   fetchMyGymAnnouncements,
-  fetchMyActiveTrainer,
   fetchMyGymBilling,
 } from '../lib/gymApi';
 import {
   statusColor,
   formatMoney,
   formatDayMonthYear,
-  pickNextClass,
+  pickMyNextBookedClass,
   billingForGym,
-  activeTrainerSourceLine,
 } from '../lib/gymState';
 import { GYM_WORKOUTS, GYM_NUTRITION, GYM_CLASSES, GYM_ATTENDANCE, GYM_CHECK_IN, GYM_DOCUMENTS } from '../shared/constants/routes';
 
@@ -103,10 +102,6 @@ export default function GymHomeScreen() {
   const content = useAsyncData(() => fetchMyGymContent(), [], { immediate: false });
   const classes = useAsyncData(() => fetchMyGymClasses(), [], { immediate: false });
   const announcements = useAsyncData(() => fetchMyGymAnnouncements({ limit: 20 }), [], { immediate: false });
-  // THE resolved trainer (gym-assigned > invite-connected > none) — the same
-  // endpoint the Profile trainer card consumes, so the two surfaces always
-  // agree regardless of where the relationship came from.
-  const activeTrainer = useAsyncData(() => fetchMyActiveTrainer(), [], { immediate: false });
   const billing = useAsyncData(() => fetchMyGymBilling(), [], { immediate: false });
 
   // refresh everything whenever the dashboard becomes visible again
@@ -117,10 +112,9 @@ export default function GymHomeScreen() {
       content.reload();
       classes.reload();
       announcements.reload();
-      activeTrainer.reload();
       billing.reload();
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [gym.reload, content.reload, classes.reload, announcements.reload, activeTrainer.reload, billing.reload])
+    }, [gym.reload, content.reload, classes.reload, announcements.reload, billing.reload])
   );
 
   const styles = makeStyles(colors);
@@ -131,7 +125,14 @@ export default function GymHomeScreen() {
     const rows = Array.isArray(content.data) ? content.data : [];
     return rows.find((g) => g && g.gym_id === gymId) || null;
   }, [content.data, gymId]);
-  const nextClass = useMemo(() => pickNextClass(classes.data, gymId), [classes.data, gymId]);
+  // MY next booked class — enrolled-only (a waitlist spot is not a seat; the
+  // full schedule lives on the Classes screen). The waitlist count keeps the
+  // empty state honest instead of silently hiding a pending spot.
+  const nextClass = useMemo(() => pickMyNextBookedClass(classes.data, gymId), [classes.data, gymId]);
+  const waitlistedCount = useMemo(() =>
+    (Array.isArray(classes.data) ? classes.data : [])
+      .filter((c) => c && c.my_status === 'WAITLISTED' && (!gymId || c.gym_id === gymId)).length,
+    [classes.data, gymId]);
   const myBilling = useMemo(() => billingForGym(billing.data, gymId), [billing.data, gymId]);
   const myAnnouncements = useMemo(() => {
     const rows = Array.isArray(announcements.data) ? announcements.data : [];
@@ -339,37 +340,6 @@ export default function GymHomeScreen() {
     <Text style={styles.meta}>No attendance recorded yet.</Text>
   );
 
-  // ── trainer card (the RESOLVED trainer — same source as Profile) ────────
-  const trainerBody = activeTrainer.data?.trainer ? (
-    <View style={styles.gymHeader}>
-      <View style={[styles.gymBadgeWrap, { backgroundColor: `${colors.blue}18` }]}>
-        <Ionicons name="person-outline" size={17} color={colors.blue} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.planName} numberOfLines={1}>
-          {activeTrainer.data.trainer.name || 'Your trainer'}
-        </Text>
-        <Text style={styles.meta}>
-          {activeTrainerSourceLine(activeTrainer.data)}
-          {activeTrainer.data.source === 'GYM' && activeTrainer.data.assigned_since
-            ? ` · since ${formatDayMonthYear(activeTrainer.data.assigned_since) || String(activeTrainer.data.assigned_since).slice(0, 10)}`
-            : ''}
-        </Text>
-        {activeTrainer.data.user_trainer ? (
-          <Text style={styles.meta}>
-            Invite-connected {activeTrainer.data.user_trainer.name} becomes your trainer
-            if the gym ends this assignment.
-          </Text>
-        ) : null}
-      </View>
-    </View>
-  ) : (
-    <Text style={styles.meta}>
-      No trainer yet — your gym can assign one at the desk, or connect one with an
-      invite code from Profile → Trainer.
-    </Text>
-  );
-
   // ── gym recommended card (entry points — lists live on their own screens) ─
   const workoutCount =
     (activeContent?.workouts?.assigned?.length || 0) +
@@ -436,7 +406,11 @@ export default function GymHomeScreen() {
       <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
     </TouchableOpacity>
   ) : (
-    <Text style={styles.meta}>No upcoming classes — new ones will show up here.</Text>
+    <Text style={styles.meta}>
+      {waitlistedCount
+        ? `No booked classes — you're on the waitlist for ${waitlistedCount} upcoming class${waitlistedCount > 1 ? 'es' : ''}. See Classes & Documents below.`
+        : 'No booked classes yet — book one under Classes & Documents below.'}
+    </Text>
   );
 
   // ── payments card (amounts straight from the server's ledger) ─────────────
@@ -559,7 +533,6 @@ export default function GymHomeScreen() {
 
       {card('Membership', { loading: false, error: null, data: membership !== undefined ? membership : null, reload: gym.reload }, membershipBody)}
       {card('Attendance', { loading: false, error: null, data: attendance, reload: gym.reload }, attendanceBody)}
-      {card('Trainer', activeTrainer, trainerBody)}
       {card('Gym Recommended', content, recommendedBody)}
       {card('Upcoming Class', classes, classBody)}
       {card('Payments', billing, paymentsBody)}

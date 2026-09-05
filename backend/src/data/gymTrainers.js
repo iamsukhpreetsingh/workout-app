@@ -128,6 +128,47 @@ async function endTrainerAssignment(gymId, memberId, assignmentId, actor, ip, { 
   });
 }
 
+// MEMBER-initiated disconnect (mobile Settings → "Disconnect from Trainer"
+// when the active trainer came from the gym): the app user ends their own
+// ACTIVE assignment. The assignment id is resolved server-side from the
+// caller (trainerResolution.findGymAssignedTrainer — no ids from the
+// client), and the WHERE clause re-proves ownership (gym_members.app_user_id
+// = caller) inside the transaction, so nobody can ever end someone else's
+// assignment. The desk keeps the ENDED history (end_reason
+// 'member_disconnect') and can reassign at any time.
+async function endMyAssignmentAsMember(userId, assignmentId, ip, gymAudit) {
+  if (!assignmentId) throw new HttpError(404, 'No gym-assigned trainer to disconnect from');
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT a.* FROM gym_trainer_assignments a
+       JOIN gym_members gm ON gm.id = a.member_id
+       WHERE a.id = $1 AND gm.app_user_id = $2
+       FOR UPDATE OF a`,
+      [assignmentId, userId]
+    );
+    if (!rows.length) throw new HttpError(404, 'No gym-assigned trainer to disconnect from');
+    if (rows[0].status !== 'ACTIVE') {
+      throw new HttpError(400, 'This assignment has already ended');
+    }
+    const updated = await client.query(
+      `UPDATE gym_trainer_assignments SET status = 'ENDED',
+         ended_on = (now() AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $2))::date,
+         end_reason = 'member_disconnect', updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [assignmentId, rows[0].gym_id]
+    );
+    if (gymAudit) {
+      await gymAudit(client, {
+        gymId: rows[0].gym_id, actorUserId: userId, actorLabel: 'member (app)', ip,
+        action: 'trainer.unassigned', entity: 'gym_trainer_assignment', entityId: assignmentId,
+        before: { status: 'ACTIVE' },
+        after: { status: 'ENDED', reason: 'member_disconnect' },
+      });
+    }
+    return updated.rows[0];
+  });
+}
+
 // A member's assignment history (with trainer names).
 async function listMemberTrainerAssignments(gymId, memberId) {
   const { rows } = await query(
@@ -216,7 +257,7 @@ async function listMyTrainers(userId) {
 
 module.exports = {
   countActiveAssignments, listAssignableTrainers,
-  assignTrainer, endTrainerAssignment,
+  assignTrainer, endTrainerAssignment, endMyAssignmentAsMember,
   listMemberTrainerAssignments, listGymTrainerAssignments, listAssignedMembersForTrainer,
   listMyTrainers,
 };

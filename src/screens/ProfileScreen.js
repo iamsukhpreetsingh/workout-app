@@ -302,7 +302,8 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer, logout, inTr
         ) : null}
         {active?.source === 'GYM' && (
           <Text style={styles.trainerNote}>
-            Your gym manages this assignment — ask the front desk to change trainers.
+            Your gym manages this assignment — disconnect from it in Settings, or
+            ask the front desk to change trainers.
           </Text>
         )}
         {active?.user_trainer ? (

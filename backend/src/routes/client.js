@@ -1,6 +1,8 @@
 const express = require('express');
 const trainerClients = require('../data/trainerClients');
 const trainerResolution = require('../data/trainerResolution');
+const trainers = require('../data/gymTrainers');
+const gyms = require('../data/gyms');
 const assignedPlans = require('../data/assignedPlans');
 const sessionSummaries = require('../data/sessionSummaries');
 const measurements = require('../data/measurements');
@@ -116,6 +118,37 @@ registerRoute(router, {
       console.error('[ProgressPhotos] share reset on unlink failed:', err.message);
     }
     res.json(rows[0]);
+  } catch (e) {
+    httpError(res, e);
+  }
+});
+
+// POST /client/trainer/gym-unlink — member-initiated disconnect from the
+// GYM-assigned trainer (mobile Settings). The assignment resolved by
+// trainerResolution (server-derived — no ids from the client) is ended with
+// end_reason 'member_disconnect'; the response carries the FRESH resolution
+// so the UI falls back to the preserved invite-connected trainer (or none)
+// with no second round-trip. The desk keeps the ENDED history and can
+// reassign at any time.
+registerRoute(router, {
+  method: 'POST',
+  path: '/trainer/gym-unlink',
+  description: "Member disconnects from the gym-assigned trainer: ends the caller's resolved ACTIVE gym assignment (kept as ENDED history, reason 'member_disconnect'; the desk can reassign any time). Returns the fresh active-trainer resolution.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer'],
+  category: 'Relationships',
+}, [requireAuth, requireRole(['user', 'trainer'])], async (req, res) => {
+  try {
+    const gymRow = await trainerResolution.findGymAssignedTrainer(req.user.id);
+    if (!gymRow || !gymRow.assignment_id) {
+      return res.status(404).json({ error: 'No gym-assigned trainer to disconnect from' });
+    }
+    await trainers.endMyAssignmentAsMember(req.user.id, gymRow.assignment_id, req.ip, gyms.gymAudit);
+    res.json({
+      ok: true,
+      ended_assignment_id: gymRow.assignment_id,
+      active: await trainerResolution.resolveActiveTrainer(req.user.id),
+    });
   } catch (e) {
     httpError(res, e);
   }

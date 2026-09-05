@@ -39,6 +39,10 @@ async function findGymAssignedTrainer(userId) {
     trainer_name: row.trainer_name,
     trainer_email: row.trainer_email,
     starts_on: row.starts_on || null,
+    // the ACTIVE assignment row — lets the member-end their own assignment
+    // (Settings → Disconnect) without a second lookup. listMyTrainers
+    // already selects it; resolveActiveTrainer does NOT surface it.
+    assignment_id: row.assignment_id || null,
   };
 }
 

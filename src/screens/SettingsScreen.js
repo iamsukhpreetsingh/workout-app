@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Switch, ScrollView, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -12,13 +12,14 @@ import { getSyncSettings } from '../lib/sync';
 import { getCachedProgressionSetting, fetchAndCacheProgressionSetting } from '../lib/progression';
 import { getFormula } from '../progressionFormulas';
 import ProgressionStrategyEditor from '../components/ProgressionStrategyEditor';
+import { fetchMyActiveTrainer, disconnectGymTrainer } from '../lib/gymApi';
 import { SYNC_SETTINGS } from '../shared/constants/routes';
 
 export default function SettingsScreen({ onSwitchView }) {
   const { themeMode, setThemeMode } = useApp();
   const { user } = useAuth();
   const navigation = useNavigation();
-  const [trainer, setTrainer] = useState(null); // active association state
+  const [active, setActive] = useState(undefined); // resolved active trainer (undefined = loading)
 
   const [isLocalOnly, setIsLocalOnly] = useState(false);
   const [progression, setProgression] = useState(null); // resolved setting
@@ -45,14 +46,20 @@ export default function SettingsScreen({ onSwitchView }) {
 
 
 
-  useEffect(() => {
-    api('/client/trainer')
-      .then((assoc) => {
-        if (assoc?.status === 'active') setTrainer(assoc);
-        else setTrainer(null);
-      })
-      .catch(() => setTrainer(null));
+  // THE resolved trainer (server-side: gym-assigned > invite-connected >
+  // none) — the same endpoint the Profile trainer card consumes, so Settings
+  // can offer the right disconnect for BOTH relationship kinds. A failed
+  // load keeps the last known value: an API error never erases a real
+  // trainer from Settings. undefined just means "not loaded yet" — the card
+  // stays hidden instead of flashing.
+  const loadActive = useCallback(async () => {
+    try {
+      setActive(await fetchMyActiveTrainer());
+    } catch {
+      // keep the previous value; a failed first load simply shows no card
+    }
   }, []);
+  useEffect(() => { loadActive(); }, [loadActive]);
 
 
     const progDraftChanged = () => {
@@ -92,7 +99,7 @@ export default function SettingsScreen({ onSwitchView }) {
   const disconnect = () =>
     Alert.alert(
       'Disconnect from trainer',
-      `You'll lose access to workouts, diet plans, and supplement plans assigned by ${trainer?.trainer_name || 'your trainer'}. Your own workout history stays exactly as it is.`,
+      `You'll lose access to workouts, diet plans, and supplement plans assigned by ${active?.trainer?.name || 'your trainer'}. Your own workout history stays exactly as it is.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -101,8 +108,35 @@ export default function SettingsScreen({ onSwitchView }) {
           onPress: async () => {
             try {
               await api('/client/trainer/unlink', { method: 'POST' });
-              setTrainer(null);
+              setActive(null); // card leaves immediately
+              loadActive(); // and the server's word is the final truth
               Alert.alert('Disconnected', "Your trainer's assigned content has been removed from your app.");
+            } catch (e) {
+              Alert.alert('Could not disconnect', e.message || 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
+
+  // Gym-assigned trainer: the member ends the gym's assignment for
+  // themselves. The server ends the resolved ACTIVE assignment (kept as
+  // ENDED history, reason 'member_disconnect') and returns the FRESH
+  // resolution — an invite-connected trainer surfaces again right away.
+  const disconnectGym = () =>
+    Alert.alert(
+      'Disconnect from trainer',
+      `${active?.trainer?.name || 'Your trainer'} was assigned to you by ${active?.gym?.name || 'your gym'}. They will no longer appear as your trainer in the app, and your gym can assign a trainer again at any time.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Disconnect',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const res = await disconnectGymTrainer();
+              setActive(res?.active ?? null); // fresh resolution — invite trainer may surface
+              Alert.alert('Disconnected', 'Your gym can assign a trainer again at any time.');
             } catch (e) {
               Alert.alert('Could not disconnect', e.message || 'Please try again.');
             }
@@ -370,15 +404,30 @@ export default function SettingsScreen({ onSwitchView }) {
         </View>
       )}
 
-      {trainer ? (
+      {active?.source === 'USER' && active.status === 'active' ? (
         <View style={[styles.card, { backgroundColor: colors.card }]}>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Trainer</Text>
           <Text style={[styles.hint, { color: colors.textDim }]}>
-            Connected to {trainer.trainer_name || 'your trainer'}
+            Connected to {active.trainer?.name || 'your trainer'}
           </Text>
           <TouchableOpacity
             style={[styles.saveBtn, { borderColor: colors.red, borderWidth: 1, backgroundColor: 'transparent', marginTop: 14 }]}
             onPress={disconnect}
+          >
+            <Text style={[styles.saveBtnText, { color: colors.red }]}>Disconnect from Trainer</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {active?.source === 'GYM' && active.trainer ? (
+        <View style={[styles.card, { backgroundColor: colors.card }]}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Trainer</Text>
+          <Text style={[styles.hint, { color: colors.textDim }]}>
+            {active.trainer.name || 'Your trainer'} — assigned to you by {active.gym?.name || 'your gym'}
+          </Text>
+          <TouchableOpacity
+            style={[styles.saveBtn, { borderColor: colors.red, borderWidth: 1, backgroundColor: 'transparent', marginTop: 14 }]}
+            onPress={disconnectGym}
           >
             <Text style={[styles.saveBtnText, { color: colors.red }]}>Disconnect from Trainer</Text>
           </TouchableOpacity>

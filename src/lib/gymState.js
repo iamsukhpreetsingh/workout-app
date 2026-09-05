@@ -145,6 +145,17 @@ export function pickNextClass(classes, gymId) {
 }
 
 /**
+ * The next class the member actually holds a BOOKED seat in (the Upcoming
+ * Class card). Enrolled-only by design: the full schedule lives on the
+ * Classes screen — a waitlisted spot is not a seat and never surfaces here.
+ * Same server-ordered head rule as pickNextClass, one gym at a time.
+ */
+export function pickMyNextBookedClass(classes, gymId) {
+  const rows = Array.isArray(classes) ? classes : [];
+  return rows.find((c) => c && c.my_status === 'BOOKED' && (!gymId || c.gym_id === gymId)) || null;
+}
+
+/**
  * One gym's billing slice (the Payments card). Null when that gym has no
  * charges at all — the card renders "all settled".
  */

@@ -351,3 +351,86 @@ test('gym-trainer guard does not lock out gym-trainer-free members (matrix 8: jo
   assert.strictEqual(body.source, 'USER');
   assert.strictEqual(body.status, 'pending');
 });
+
+// ── member-initiated gym disconnect (mobile Settings → Disconnect) ──────────
+// Fixture state on entry: the member holds a PENDING USER relationship (the
+// reactivation above) and NO ACTIVE gym assignment anywhere.
+let memberEndedAssignmentId = null;
+
+test('gym-unlink with no gym assignment → 404, resolution untouched', async () => {
+  const res = await api(tokens[PEOPLE.member.email], 'POST', '/client/trainer/gym-unlink', {});
+  assert.strictEqual(res.status, 404);
+  assert.match((await res.json()).error, /No gym-assigned trainer/);
+  const body = await getActive();
+  assert.strictEqual(body.source, 'USER', 'the pending invite relationship survives a no-op disconnect');
+  assert.strictEqual(body.status, 'pending');
+});
+
+test('auth gate: /client/trainer/gym-unlink requires a token', async () => {
+  const res = await api(null, 'POST', '/client/trainer/gym-unlink', {});
+  assert.strictEqual(res.status, 401);
+});
+
+test('member disconnects the gym-assigned trainer → falls back to the preserved USER relationship', async () => {
+  const res = await api(tokens[PEOPLE.owner.email], 'POST',
+    `/gym/${gym.id}/members/${memberId}/trainer`, { trainer_staff_id: trainer1StaffId });
+  assert.strictEqual(res.status, 201);
+  let body = await getActive();
+  assert.strictEqual(body.source, 'GYM');
+  assert.strictEqual(body.user_trainer.status, 'pending', 'invite relationship rides underneath');
+
+  const out = await api(tokens[PEOPLE.member.email], 'POST', '/client/trainer/gym-unlink', {});
+  assert.strictEqual(out.status, 200);
+  const payload = await out.json();
+  assert.strictEqual(payload.ok, true);
+  assert.ok(payload.ended_assignment_id, 'the response names the ended assignment');
+  memberEndedAssignmentId = payload.ended_assignment_id;
+  // the FRESH resolution rides in the response: the preserved invite
+  // relationship surfaces immediately — no second round-trip needed
+  assert.strictEqual(payload.active.source, 'USER');
+  assert.strictEqual(payload.active.status, 'pending');
+  assert.strictEqual(payload.active.trainer.name, PEOPLE.platformTrainer.name);
+
+  // and a plain re-read agrees — no cache split between response and fetch
+  body = await getActive();
+  assert.strictEqual(body.source, 'USER');
+  assert.strictEqual(body.status, 'pending');
+});
+
+test('member disconnect is auditable: ENDED + end_reason member_disconnect, actor = member (app)', async () => {
+  const row = await query(
+    'SELECT status, end_reason FROM gym_trainer_assignments WHERE id = $1',
+    [memberEndedAssignmentId]);
+  assert.strictEqual(row.rows[0].status, 'ENDED');
+  assert.strictEqual(row.rows[0].end_reason, 'member_disconnect');
+  const audit = await query(
+    `SELECT actor_user_id, actor_label, action FROM audit_logs
+     WHERE entity = 'gym_trainer_assignment' AND entity_id = $1 AND action = 'trainer.unassigned'`,
+    [String(memberEndedAssignmentId)]);
+  assert.ok(audit.rows.length, 'the member-initiated end left an audit trail');
+  assert.strictEqual(audit.rows[0].actor_user_id, memberUserId);
+  assert.strictEqual(audit.rows[0].actor_label, 'member (app)');
+});
+
+test('double disconnect → 404 (nothing left to end)', async () => {
+  const res = await api(tokens[PEOPLE.member.email], 'POST', '/client/trainer/gym-unlink', {});
+  assert.strictEqual(res.status, 404);
+});
+
+test('the gym can reassign after a member disconnect → GYM active again', async () => {
+  const res = await api(tokens[PEOPLE.owner.email], 'POST',
+    `/gym/${gym.id}/members/${memberId}/trainer`, { trainer_staff_id: trainer2StaffId });
+  assert.strictEqual(res.status, 201);
+  const body = await getActive();
+  assert.strictEqual(body.source, 'GYM');
+  assert.strictEqual(body.trainer.name, PEOPLE.gymTrainer2.name);
+
+  // leave no ACTIVE assignment behind — keep the shared fixtures clean
+  const history = await (await api(tokens[PEOPLE.owner.email], 'GET',
+    `/gym/${gym.id}/members/${memberId}/trainer`)).json();
+  for (const a of (Array.isArray(history) ? history : []).filter((x) => x.status === 'ACTIVE')) {
+    const end = await api(tokens[PEOPLE.owner.email], 'POST',
+      `/gym/${gym.id}/members/${memberId}/trainer/${a.id}/end`, { reason: 'cleanup' });
+    assert.strictEqual(end.status, 200);
+  }
+});

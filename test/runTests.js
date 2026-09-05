@@ -16,6 +16,7 @@ import {
   formatDayMonthYear,
   formatMoney,
   pickNextClass,
+  pickMyNextBookedClass,
   billingForGym,
   trainerForGym,
   attendanceSourceLabel,
@@ -887,6 +888,22 @@ test('pickNextClass takes the head of the server-ordered list for one gym', () =
   assert.strictEqual(pickNextClass(null, 'g-a'), null);
 });
 
+test('pickMyNextBookedClass: only BOOKED seats surface — waitlist/unbooked never do', () => {
+  const rows = [
+    { id: 'c0', gym_id: 'g-a', my_status: null },
+    { id: 'c1', gym_id: 'g-a', my_status: 'WAITLISTED' },
+    { id: 'c2', gym_id: 'g-a', my_status: 'BOOKED' },
+    { id: 'c3', gym_id: 'g-b', my_status: 'BOOKED' },
+  ];
+  // head of the server-ordered list, but ONLY rows the member is booked in
+  assert.strictEqual(pickMyNextBookedClass(rows, 'g-a').id, 'c2');
+  assert.strictEqual(pickMyNextBookedClass(rows, 'g-b').id, 'c3');
+  // a waitlist spot is not a seat — with no booking the card is empty
+  assert.strictEqual(pickMyNextBookedClass(rows.filter((r) => r.id !== 'c2'), 'g-a'), null);
+  assert.strictEqual(pickMyNextBookedClass([], 'g-a'), null);
+  assert.strictEqual(pickMyNextBookedClass(null, 'g-a'), null);
+});
+
 test('billingForGym picks one gym\u2019s dues slice; trainerForGym the trainer row', () => {
   const billing = [
     { gym_id: 'g-a', outstanding_cents: 250000, charges: [{ id: 'x' }] },
@@ -1106,6 +1123,36 @@ test('source line: honest nulls for no-trainer and missing optional fields', () 
     activeTrainerSourceLine({ source: 'GYM', status: 'active', trainer: { name: 'John' }, gym: null }),
     'Assigned by your gym'
   );
+});
+
+// ---- Wiring: ONE trainer surface, and the gym-home class card is enrolled-only ----
+// M8 regression guards: the trainer card moved OUT of the My Gym dashboard
+// (it lives on Profile + Settings disconnect only), and the "Upcoming Class"
+// card shows the member's BOOKED classes — not the whole schedule.
+test('the trainer card lives on Profile (+Settings) — the My Gym dashboard has none', () => {
+  const gymHome = readFileSync(repo('../src/screens/GymHomeScreen.js'), 'utf8');
+  assert.ok(
+    !/fetchMyActiveTrainer|activeTrainerSourceLine|card\('Trainer'/.test(gymHome),
+    'My Gym must not surface the trainer — Profile is the single trainer surface'
+  );
+  const profile = readFileSync(repo('../src/screens/ProfileScreen.js'), 'utf8');
+  assert.ok(profile.includes('fetchMyActiveTrainer'), 'Profile consumes the one resolution');
+  assert.ok(profile.includes('activeTrainerSourceLine'), 'Profile explains where the trainer came from');
+  const settings = readFileSync(repo('../src/screens/SettingsScreen.js'), 'utf8');
+  assert.ok(settings.includes('fetchMyActiveTrainer'), 'Settings consumes the same resolution');
+  assert.ok(settings.includes("source === 'GYM'"), 'Settings disconnects the gym-assigned trainer too');
+  assert.ok(settings.includes('disconnectGymTrainer'), 'Settings calls the member gym-unlink');
+  assert.ok(settings.includes("source === 'USER'"), 'invite-connected disconnect is untouched');
+  const gymApi = readFileSync(repo('../src/lib/gymApi.js'), 'utf8');
+  assert.ok(gymApi.includes("api('/client/trainer/gym-unlink'"), 'gymApi hits the member gym-unlink endpoint');
+});
+
+test('the Upcoming Class card is enrolled-only (BOOKED seats, never the whole schedule)', () => {
+  const gymHome = readFileSync(repo('../src/screens/GymHomeScreen.js'), 'utf8');
+  assert.ok(gymHome.includes('pickMyNextBookedClass'), 'the dashboard uses the booked-only picker');
+  assert.ok(!/pickNextClass\(/.test(gymHome), 'the raw schedule picker is gone from the dashboard');
+  const gymState = readFileSync(repo('../src/lib/gymState.js'), 'utf8');
+  assert.ok(gymState.includes("my_status === 'BOOKED'"), 'the picker filters on the server booking status');
 });
 
 console.log(`\n${passed} tests passed`);
