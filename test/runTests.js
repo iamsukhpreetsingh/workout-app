@@ -12,6 +12,11 @@ import {
   resolveActiveMembershipRow,
   summarizeAttendance,
   statusColor,
+  formatDayMonthYear,
+  formatMoney,
+  pickNextClass,
+  billingForGym,
+  trainerForGym,
 } from '../src/lib/gymState.js';
 
 let passed = 0;
@@ -801,4 +806,100 @@ test('attendance: all-absent calendar still reports zero visits', () => {
   assert.strictEqual(s.visits7, 0);
   assert.strictEqual(s.visits30, 0);
   assert.strictEqual(s.lastVisit, null);
+});
+
+// ---- Gym member home (Mobile M5) helpers ----
+
+test('attendance: visitsThisMonth counts only the reference calendar month', () => {
+  // Mar 1st + Mar 9th are in March; Feb 20 is not — even though it's
+  // within the 30-day window
+  const history = [
+    { date: '2026-03-10', present: false, source: null },
+    { date: '2026-03-09', present: true, source: 'QR_CHECK_IN' },
+    { date: '2026-03-01', present: true, source: 'FRONT_DESK' },
+    { date: '2026-02-20', present: true, source: 'QR_CHECK_IN' },
+    { date: '2026-02-02', present: true, source: 'QR_CHECK_IN' },
+  ];
+  const s = summarizeAttendance(history, '2026-03-10');
+  assert.strictEqual(s.visitsThisMonth, 2);
+  assert.strictEqual(s.visits30, 3); // unchanged 30-day rule
+  assert.strictEqual(s.visits7, 1);
+});
+
+test('attendance: a visit on the 1st counts, future days never do', () => {
+  const s = summarizeAttendance(
+    [
+      { date: '2026-03-10', present: false, source: null },
+      { date: '2026-04-09', present: true, source: 'QR_CHECK_IN' }, // future — ignored
+      { date: '2026-03-01', present: true, source: 'QR_CHECK_IN' }, // month boundary
+    ],
+    '2026-03-10'
+  );
+  assert.strictEqual(s.visitsThisMonth, 1);
+  assert.strictEqual(s.lastVisit, '2026-03-01');
+});
+
+test('attendance: all-absent month reports zero visits this month', () => {
+  const s = summarizeAttendance([{ date: '2026-03-10', present: false, source: null }], '2026-03-10');
+  assert.strictEqual(s.visitsThisMonth, 0);
+});
+
+test('formatDayMonthYear renders "31 Dec 2026" and null-safes bad input', () => {
+  assert.strictEqual(formatDayMonthYear('2026-12-31'), '31 Dec 2026');
+  assert.strictEqual(formatDayMonthYear('2026-12-31T18:00:00Z'), '31 Dec 2026'); // timestamptz slice
+  assert.strictEqual(formatDayMonthYear(null), null);
+  assert.strictEqual(formatDayMonthYear(''), null);
+  assert.strictEqual(formatDayMonthYear('not-a-date'), null);
+  assert.strictEqual(formatDayMonthYear('2026-13-01'), null); // month 13 is not a thing
+});
+
+test('formatMoney renders server cents with Indian grouping and paise rule', () => {
+  assert.strictEqual(formatMoney(250000, 'INR'), '₹2,500');        // the spec example
+  assert.strictEqual(formatMoney(250050, 'INR'), '₹2,500.50');     // paise shown only when non-zero
+  assert.strictEqual(formatMoney(0, 'INR'), '₹0');
+  assert.strictEqual(formatMoney(250000), '₹2,500');               // INR default
+  assert.strictEqual(formatMoney(123456789, 'INR'), '₹12,34,567.89');   // paise path
+  assert.strictEqual(formatMoney(12345678900, 'INR'), '₹12,34,56,789'); // 2-2-3 Indian grouping
+  assert.strictEqual(formatMoney(1999, 'USD'), '$19.99');
+  assert.strictEqual(formatMoney(5000, 'AUD'), 'AUD 50');          // unknown code → prefix
+  assert.strictEqual(formatMoney(-25000, 'INR'), '-₹250');         // refunds never crash it
+  assert.strictEqual(formatMoney(null, 'INR'), '₹0');              // null-safe
+});
+
+test('pickNextClass takes the head of the server-ordered list for one gym', () => {
+  const rows = [
+    { id: 'c1', gym_id: 'g-a', class_date: '2026-09-01', start_time: '06:00' },
+    { id: 'c2', gym_id: 'g-a', class_date: '2026-09-02', start_time: '07:00' },
+    { id: 'c3', gym_id: 'g-b', class_date: '2026-09-01', start_time: '05:00' },
+  ];
+  // server orders by class_date + start_time; the client only filters
+  assert.strictEqual(pickNextClass(rows, 'g-a').id, 'c1');
+  assert.strictEqual(pickNextClass(rows, 'g-b').id, 'c3');
+  assert.strictEqual(pickNextClass(rows, 'g-none'), null);
+  assert.strictEqual(pickNextClass([], 'g-a'), null);
+  assert.strictEqual(pickNextClass(null, 'g-a'), null);
+});
+
+test('billingForGym picks one gym\u2019s dues slice; trainerForGym the trainer row', () => {
+  const billing = [
+    { gym_id: 'g-a', outstanding_cents: 250000, charges: [{ id: 'x' }] },
+    { gym_id: 'g-b', outstanding_cents: 0, charges: [] },
+  ];
+  assert.strictEqual(billingForGym(billing, 'g-a').outstanding_cents, 250000);
+  assert.strictEqual(billingForGym(billing, 'g-b').outstanding_cents, 0);
+  assert.strictEqual(billingForGym(billing, 'g-none'), null);
+  assert.strictEqual(billingForGym(null, 'g-a'), null);
+
+  const trainers = [{ gym_id: 'g-a', trainer_name: 'Rohit Sharma' }, { gym_id: 'g-b', trainer_name: null }];
+  assert.strictEqual(trainerForGym(trainers, 'g-a').trainer_name, 'Rohit Sharma');
+  assert.strictEqual(trainerForGym(trainers, 'g-b').trainer_name, null); // row exists, no trainer
+  assert.strictEqual(trainerForGym([], 'g-a'), null);
+  assert.strictEqual(trainerForGym(undefined, 'g-a'), null);
+});
+
+test('formatMoney and pickNextClass agree with the frozen/expired dashboard rules', () => {
+  // the dashboard shows dues even when the term is FROZEN/EXPIRED — the
+  // amount itself must render identically whatever the term status
+  assert.strictEqual(formatMoney(80000, 'INR'), '₹800');
+  assert.strictEqual(formatDayMonthYear('2026-08-31'), '31 Aug 2026'); // "Expired on: 31 Aug 2026"
 });

@@ -45,6 +45,10 @@ export const GYM_DOCUMENT_VIEW = 'GymDocumentView';
 // M2 — gym program content detail screens (pool)
 export const GYM_WORKOUT_DETAIL = 'GymWorkoutDetail';
 export const GYM_NUTRITION_DETAIL = 'GymNutritionDetail';
+// M5 — gym member home dashboard entry points (pool): full lists for the
+// "Gym Recommended" card on the gym home
+export const GYM_WORKOUTS = 'GymWorkouts';
+export const GYM_NUTRITION = 'GymNutrition';
 export const SUPPLEMENT_PLAN_BUILDER = 'SupplementPlanBuilder';
 export const COACHING_PLAN_BUILDER = 'CoachingPlanBuilder';
 export const COACHING_PLAN_DETAIL = 'CoachingPlanDetail';

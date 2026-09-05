@@ -186,8 +186,37 @@ async function listAssignedMembersForTrainer(gymId, trainerStaffId) {
   return rows;
 }
 
+// ── member-facing (mobile M5): the caller's ACTIVE trainer per gym ─────────
+// One row per app-linked member row (gym), trainer fields NULL when no
+// trainer is currently assigned. The member rows are resolved from the JWT
+// caller — no gym id from the client, nobody else's trainer is reachable.
+async function listMyTrainers(userId) {
+  const { rows } = await query(
+    `SELECT gm.id AS member_id, gm.member_code, gm.status AS member_status,
+            g.id AS gym_id, g.name AS gym_name,
+            t.assignment_id, t.trainer_name, t.trainer_email, t.starts_on
+     FROM gym_members gm
+     JOIN gyms g ON g.id = gm.gym_id AND g.status = 'ACTIVE'
+     LEFT JOIN LATERAL (
+       SELECT a.id AS assignment_id, a.starts_on,
+              u.name AS trainer_name, u.email AS trainer_email
+       FROM gym_trainer_assignments a
+       JOIN gym_staff s ON s.id = a.trainer_staff_id
+       JOIN users u ON u.id = s.user_id
+       WHERE a.member_id = gm.id AND a.status = 'ACTIVE'
+       ORDER BY a.starts_on DESC
+       LIMIT 1
+     ) t ON true
+     WHERE gm.app_user_id = $1 AND gm.status IN ('ACTIVE','PENDING','FROZEN')
+     ORDER BY g.name`,
+    [userId]
+  );
+  return rows;
+}
+
 module.exports = {
   countActiveAssignments, listAssignableTrainers,
   assignTrainer, endTrainerAssignment,
   listMemberTrainerAssignments, listGymTrainerAssignments, listAssignedMembersForTrainer,
+  listMyTrainers,
 };

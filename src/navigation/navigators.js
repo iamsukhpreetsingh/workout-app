@@ -41,6 +41,8 @@ import GymClassesScreen from '../screens/GymClassesScreen';
 import GymDocumentsScreen from '../screens/GymDocumentsScreen';
 import GymDocumentViewScreen from '../screens/GymDocumentViewScreen';
 import GymHomeScreen from '../screens/GymHomeScreen';
+import GymWorkoutsScreen from '../screens/GymWorkoutsScreen';
+import GymNutritionScreen from '../screens/GymNutritionScreen';
 import GymWorkoutDetailScreen from '../screens/GymWorkoutDetailScreen';
 import GymNutritionDetailScreen from '../screens/GymNutritionDetailScreen';
 import MealCatalogScreen from '../screens/MealCatalogScreen';
@@ -95,6 +97,8 @@ import {
   GYM_DOCUMENT_VIEW,
   GYM_WORKOUT_DETAIL,
   GYM_NUTRITION_DETAIL,
+  GYM_WORKOUTS,
+  GYM_NUTRITION,
   SUPPLEMENT_PLAN_BUILDER,
   COACHING_PLAN_BUILDER,
   COACHING_PLAN_DETAIL,
@@ -180,6 +184,10 @@ function renderDetailScreens(onSwitchView) {
       {/* M2 — gym program content, reusable from the gym home and the diet strip */}
       <Stack.Screen name={GYM_WORKOUT_DETAIL} component={GymWorkoutDetailScreen} options={{ title: 'Gym Workout' }} />
       <Stack.Screen name={GYM_NUTRITION_DETAIL} component={GymNutritionDetailScreen} options={{ title: 'Gym Nutrition' }} />
+      {/* M5 — member home "Gym Recommended" entry points: full lists for the
+          ACTIVE gym (the dashboard card only shows counts + these links) */}
+      <Stack.Screen name={GYM_WORKOUTS} component={GymWorkoutsScreen} options={{ title: 'Gym Workouts' }} />
+      <Stack.Screen name={GYM_NUTRITION} component={GymNutritionScreen} options={{ title: 'Gym Nutrition' }} />
       <Stack.Screen
         name={SUPPLEMENT_PLAN_BUILDER}
         component={CoachingPlanBuilderScreen}

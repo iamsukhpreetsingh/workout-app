@@ -195,7 +195,9 @@ export default function MyGymCard() {
               </Text>
               {m.ends_on ? (
                 <Text style={styles.gymMeta}>
-                  {frozen ? 'Frozen — valid until' : 'Valid until'} {String(m.ends_on).slice(0, 10)}
+                  {status === 'EXPIRED'
+                    ? `Expired on: ${String(m.ends_on).slice(0, 10)}`
+                    : `${frozen ? 'Frozen — valid until' : 'Valid until'} ${String(m.ends_on).slice(0, 10)}`}
                 </Text>
               ) : null}
               {contentCounts[m.gym_id]?.workouts ? (

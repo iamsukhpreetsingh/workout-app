@@ -381,6 +381,43 @@ registerRoute(router, {
   }
 }, [requireAuth]);
 
+// ── mobile: my trainer (auth only; member resolved by JWT) ───────────────
+// Mobile M5 member-home: the caller's ACTIVE trainer per app-linked gym,
+// one row per gym with trainer fields NULL when none is assigned.
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/trainer',
+  description: "The connected member's currently ACTIVE trainer per gym (name, email, assigned-since) across their app-linked memberships; trainer fields are null when the gym has not assigned one. Auth only (member resolved from the JWT).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.json(await trainers.listMyTrainers(req.user.id));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
+// ── mobile: my billing (auth only; member resolved by JWT) ───────────────
+// Mobile M5 member-home: the caller's own dues. Status/outstanding amounts
+// are derived server-side (same rule as the desk ledger) — the app renders
+// them, it never computes what is due or overdue.
+registerRoute(router, {
+  method: 'GET',
+  path: '/my/billing',
+  description: "The connected member's charges and dues per gym: outstanding/overdue totals, next due date and the charge rows (open dues first, then recent settled). Derived server-side from the immutable ledger; dues stay visible for frozen/expired terms. Auth only (member resolved from the JWT).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth], async (req, res) => {
+  try {
+    res.json(await billing.listMyBilling(req.user.id));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth]);
+
 registerRoute(router, {
   method: 'GET',
   path: '/my/workouts',

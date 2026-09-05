@@ -93,3 +93,24 @@ export async function signGymDocument(documentId, signatureName) {
 export async function fetchMyGymAttendanceHistory() {
   return api('/gym/my/attendance/history');
 }
+
+// ── Gym Member Home dashboard (Mobile M5) ───────────────────────────────────
+// All surfaces below are per-gym arrays keyed by gym_id — the home screen
+// slices them to the ACTIVE gym (same shape as fetchMyGymContent; classes
+// come from the Phase 17 wrapper above). Everything authoritative stays
+// server-side: dues/outstanding are derived from the immutable ledger,
+// trainer assignments are the LIVE rows.
+export async function fetchMyGymTrainers() {
+  return api('/gym/my/trainer');
+}
+
+export async function fetchMyGymBilling() {
+  return api('/gym/my/billing');
+}
+
+// SENT announcements the member was in the audience for, newest first
+// (one row per announcement with its richest delivery status).
+export async function fetchMyGymAnnouncements({ limit = 20 } = {}) {
+  const qs = limit ? `?limit=${encodeURIComponent(String(limit))}` : '';
+  return api(`/gym/my/announcements${qs}`);
+}

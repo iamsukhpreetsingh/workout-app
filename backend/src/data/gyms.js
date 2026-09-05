@@ -873,19 +873,41 @@ async function unlinkMemberFromApp(gymId, memberId, actor, ip) {
 // Gym-member view (app-linked): the gyms/memberships this user belongs to,
 // enriched with the CURRENT plan term (Phase 7 — the mobile "My Gym" card:
 // plan name, status, valid-until). Members without a term simply have nulls.
+//
+// Mobile M5 (member home dashboard): the term picker now also surfaces an
+// EXPIRED term (ACTIVE > FROZEN > UPCOMING > most-recent EXPIRED) so an
+// expired member still sees WHICH plan expired and WHEN — server-
+// authoritative expiry, the client never derives it. The open freeze row
+// (starts_on + reason) rides along for the FROZEN display, and the gym's
+// public contact columns (phone/email/address) feed the expired state's
+// "Contact Gym" action. Nothing here leaks other members: the rows are
+// still keyed by app_user_id = caller.
 async function listGymMembershipsForUser(userId) {
   const { rows } = await query(
     `SELECT m.id, m.member_code, m.status, m.joined_at,
             g.id AS gym_id, g.name AS gym_name, g.slug AS gym_slug,
-            mm.plan_name, mm.status AS membership_status, mm.starts_on, mm.ends_on
+            g.phone AS gym_phone, g.email AS gym_email,
+            g.address_line1 AS gym_address_line1, g.city AS gym_city,
+            mm.membership_id, mm.plan_name, mm.status AS membership_status,
+            mm.starts_on, mm.ends_on,
+            fz.freeze_starts_on, fz.freeze_reason
      FROM gym_members m JOIN gyms g ON g.id = m.gym_id
      LEFT JOIN LATERAL (
-       SELECT plan_name, status, starts_on, ends_on
+       SELECT t.id AS membership_id, t.plan_name, t.status, t.starts_on, t.ends_on
        FROM member_memberships t
-       WHERE t.member_id = m.id AND t.status IN ('ACTIVE','FROZEN','UPCOMING')
-       ORDER BY (t.status = 'ACTIVE') DESC, t.starts_on DESC
+       WHERE t.member_id = m.id
+         AND t.status IN ('ACTIVE','FROZEN','UPCOMING','EXPIRED')
+       ORDER BY (t.status = 'ACTIVE') DESC, (t.status = 'FROZEN') DESC,
+                (t.status = 'UPCOMING') DESC, t.starts_on DESC
        LIMIT 1
      ) mm ON true
+     LEFT JOIN LATERAL (
+       SELECT f.starts_on AS freeze_starts_on, f.reason AS freeze_reason
+       FROM membership_freezes f
+       WHERE f.membership_id = mm.membership_id AND f.status = 'ACTIVE'
+       ORDER BY f.starts_on DESC
+       LIMIT 1
+     ) fz ON true
      WHERE m.app_user_id = $1 AND m.status IN ('ACTIVE','PENDING','FROZEN')
      ORDER BY g.name`,
     [userId]

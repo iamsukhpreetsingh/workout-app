@@ -406,10 +406,109 @@ async function listChargesForLedger(gymId, { status, q, limit = 50, offset = 0 }
   return status ? mapped.filter((r) => r.status === status) : mapped;
 }
 
+// ── member-facing (mobile M5): the caller's own dues, per gym ────────────
+// The charges of every app-linked member row the JWT caller owns (gym
+// ACTIVE, member row ACTIVE/PENDING/FROZEN — dues survive an expired or
+// frozen term; historical money is never hidden). Status and outstanding
+// amounts are DERIVED here (same chargeStatus rule as the desk ledger):
+// the client only renders what is due, it never decides. No member PII
+// and no other member's charge can appear — rows key on gm.app_user_id.
+const MY_BILLING_SELECT = `
+  SELECT c.id, c.gym_id, c.description, c.amount_cents, c.currency,
+         c.period_start, c.period_end, c.due_on, c.created_at,
+         COALESCE(p.paid_total, 0) AS paid_total,
+         COALESCE(r.refund_total, 0) AS refund_total,
+         COALESCE(p.paid_total, 0) - COALESCE(r.refund_total, 0) AS net_paid,
+         (SELECT (now() AT TIME ZONE g.timezone)::date FROM gyms g WHERE g.id = c.gym_id) AS today,
+         g.name AS gym_name, g.currency AS gym_currency
+  FROM membership_charges c
+  JOIN gyms g ON g.id = c.gym_id
+  JOIN gym_members gm ON gm.id = c.member_id
+  LEFT JOIN (
+    SELECT charge_id, SUM(amount_cents)::int AS paid_total
+    FROM membership_payments GROUP BY charge_id
+  ) p ON p.charge_id = c.id
+  LEFT JOIN (
+    SELECT pay.charge_id, SUM(f.amount_cents)::int AS refund_total
+    FROM payment_refunds f JOIN membership_payments pay ON pay.id = f.payment_id
+    GROUP BY pay.charge_id
+  ) r ON r.charge_id = c.id`;
+
+function myChargeToClient(c) {
+  return {
+    id: c.id,
+    description: c.description,
+    amount_cents: c.amount_cents,
+    currency: c.currency,
+    status: c.status,
+    outstanding_cents: c.outstanding_cents,
+    due_on: c.due_on,
+    period_start: c.period_start,
+    period_end: c.period_end,
+    created_at: c.created_at,
+  };
+}
+
+const OPEN_STATUSES = ['DUE', 'OVERDUE', 'PARTIAL'];
+
+async function listMyBilling(userId) {
+  const { rows } = await query(
+    `${MY_BILLING_SELECT}
+     WHERE gm.app_user_id = $1
+       AND gm.status IN ('ACTIVE','PENDING','FROZEN')
+       AND g.status = 'ACTIVE'
+     ORDER BY c.created_at DESC`,
+    [userId]
+  );
+  const byGym = new Map();
+  for (const raw of rows) {
+    const c = chargeStatus(raw);
+    let bucket = byGym.get(c.gym_id);
+    if (!bucket) {
+      bucket = {
+        gym_id: c.gym_id,
+        gym_name: c.gym_name,
+        currency: c.gym_currency || c.currency,
+        outstanding_cents: 0,
+        overdue_cents: 0,
+        next_due_on: null,
+        charges: [],
+      };
+      byGym.set(c.gym_id, bucket);
+    }
+    if (OPEN_STATUSES.includes(c.status)) {
+      bucket.outstanding_cents += c.outstanding_cents;
+      if (c.status === 'OVERDUE') bucket.overdue_cents += c.outstanding_cents;
+      if (c.due_on && (!bucket.next_due_on || c.due_on < bucket.next_due_on)) {
+        bucket.next_due_on = c.due_on;
+      }
+      bucket.charges.push(c);
+    } else {
+      bucket.settled = bucket.settled || [];
+      bucket.settled.push(c);
+    }
+  }
+  // open dues first (earliest due date wins), then a short recent-settled tail
+  const dueAsc = (a, b) => String(a.due_on || a.created_at).localeCompare(String(b.due_on || b.created_at));
+  return [...byGym.values()].map((g) => ({
+    gym_id: g.gym_id,
+    gym_name: g.gym_name,
+    currency: g.currency,
+    outstanding_cents: g.outstanding_cents,
+    overdue_cents: g.overdue_cents,
+    next_due_on: g.next_due_on,
+    charges: [
+      ...g.charges.sort(dueAsc).slice(0, 10),
+      ...(g.settled || []).sort(dueAsc).slice(-5).reverse(),
+    ].map(myChargeToClient),
+  }));
+}
+
 module.exports = {
   METHODS,
   createChargeForMembership, createManualCharge,
   listMemberCharges, getCharge, listChargesForLedger,
   recordPayment, getPayment, listGymPayments, listMemberPayments,
   refundPayment, getReceipt, getBillingSummary,
+  listMyBilling,
 };

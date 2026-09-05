@@ -149,6 +149,12 @@ export function GymProvider({ children }) {
             status: activeRow.membership_status,
             starts_on: activeRow.starts_on,
             ends_on: activeRow.ends_on,
+            // M5 member home — server-provided context for the FROZEN and
+            // EXPIRED displays (open freeze row + which term row is shown).
+            // The status itself stays server-decided; nothing is derived here.
+            membership_id: activeRow.membership_id,
+            freeze_starts_on: activeRow.freeze_starts_on,
+            freeze_reason: activeRow.freeze_reason,
           }
         : null,
       attendance,

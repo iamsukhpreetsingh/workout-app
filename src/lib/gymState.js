@@ -52,7 +52,7 @@ export function resolveActiveMembershipRow(rows, preferredGymId) {
  * @param {Array|null} history  [{ date: 'YYYY-MM-DD', present, source }, …]
  *                              newest-first (server builds it that way)
  * @param {string|null} [todayIso]  reference day; defaults to history[0].date
- * @returns {{visits7: number, visits30: number, lastVisit: string|null}|null}
+ * @returns {{visits7: number, visits30: number, visitsThisMonth: number, lastVisit: string|null}|null}
  *          null when there is no calendar (no gym selected / fetch pending)
  */
 export function summarizeAttendance(history, todayIso) {
@@ -66,14 +66,98 @@ export function summarizeAttendance(history, todayIso) {
 
   let visits7 = 0;
   let visits30 = 0;
+  let visitsThisMonth = 0;
   let lastVisit = null;
+  const month = String(today).slice(0, 7); // 'YYYY-MM' of the gym-local day
   for (const entry of history) {
     if (!entry || !entry.present) continue;
     const back = daysAgo(entry.date);
     if (Number.isNaN(back) || back < 0) continue; // ignore malformed/future rows
     if (lastVisit === null) lastVisit = entry.date;
+    // M5 member home: "18 visits this month" — a count of the ✓ days the
+    // SERVER recorded in the current calendar month. Pure display
+    // aggregation of server facts; eligibility is still decided server-side.
+    if (String(entry.date).slice(0, 7) === month) visitsThisMonth += 1;
     if (back < 30) visits30 += 1;
     if (back < 7) visits7 += 1;
   }
-  return { visits7, visits30, lastVisit };
+  return { visits7, visits30, visitsThisMonth, lastVisit };
+}
+
+// ── M5 member-home display helpers (pure, React-free) ─────────────────────
+
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * "31 Dec 2026" from a gym-local 'YYYY-MM-DD' string (membership expiry,
+ * freeze start, class date…). Returns null for absent/invalid values so
+ * callers can fall back instead of printing "Invalid Date" or "undefined".
+ * Parsed as UTC fields, never via Date string parsing — gym-local dates
+ * must not shift with the device timezone.
+ */
+export function formatDayMonthYear(iso) {
+  const [y, m, d] = String(iso || '').slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d || m < 1 || m > 12) return null;
+  return `${d} ${MONTHS_SHORT[m - 1]} ${y}`;
+}
+
+// Currency symbols for the money formatter; anything else renders as a
+// code prefix ("AUD 25").
+const CURRENCY_SYMBOLS = { INR: '₹', USD: '$', EUR: '€', GBP: '£' };
+
+// Indian-locale digit grouping WITHOUT relying on Intl (Hermes parity):
+// 2500 → '2,500', 250000 → '2,50,000' (last 3, then pairs).
+function groupIndian(n) {
+  const s = String(n);
+  if (s.length <= 3) return s;
+  return `${s.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${s.slice(-3)}`;
+}
+
+/**
+ * Render a server-authoritative amount (integer cents) as display money.
+ * Paise are shown only when non-zero (₹2,500 vs ₹2,500.50), matching how
+ * the desk ledger quotes membership prices. Never derives anything — the
+ * cents and currency both come from the backend.
+ */
+export function formatMoney(amountCents, currency = 'INR') {
+  const cents = Math.round(Number(amountCents) || 0);
+  const sign = cents < 0 ? '-' : '';
+  const abs = Math.abs(cents);
+  const whole = Math.floor(abs / 100);
+  const frac = abs % 100;
+  const symbol = CURRENCY_SYMBOLS[currency] || `${currency} `;
+  const body = frac
+    ? `${groupIndian(whole)}.${String(frac).padStart(2, '0')}`
+    : groupIndian(whole);
+  return `${sign}${symbol}${body}`;
+}
+
+/**
+ * The member's next upcoming class at ONE gym (the Upcoming Class card).
+ * The server already orders /gym/my/classes by class_date + start_time
+ * (soonest first), so this is a filter, not a sort — the client never
+ * decides eligibility or scheduling, it just picks the head of the list.
+ */
+export function pickNextClass(classes, gymId) {
+  const rows = Array.isArray(classes) ? classes : [];
+  return rows.find((c) => c && (!gymId || c.gym_id === gymId)) || null;
+}
+
+/**
+ * One gym's billing slice (the Payments card). Null when that gym has no
+ * charges at all — the card renders "all settled".
+ */
+export function billingForGym(rows, gymId) {
+  const list = Array.isArray(rows) ? rows : [];
+  return list.find((r) => r && r.gym_id === gymId) || null;
+}
+
+/**
+ * One gym's trainer slice (the Trainer card). Null when no row — same
+ * "not assigned" rendering as an explicit null trainer_name.
+ */
+export function trainerForGym(rows, gymId) {
+  const list = Array.isArray(rows) ? rows : [];
+  return list.find((r) => r && r.gym_id === gymId) || null;
 }

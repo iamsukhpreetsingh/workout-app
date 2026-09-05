@@ -1,31 +1,39 @@
-// Gym home — the member's gym hub (Mobile M1 foundation, revised M1.1/M2).
+// Gym member home — the member-facing DASHBOARD (Mobile M5).
 //
-// A calm, read-only home for the member's gym life: who the gym is, an
-// attendance summary, and the gym's own program content — workouts and
-// nutrition the gym assigned or recommended to THIS member. Tapping a
-// workout opens its full detail (start it or add it to your routines);
-// tapping a nutrition item opens its detail (log it to a meal or save it
-// to My Dishes) — both ride the existing workout/diet infrastructure.
+// One screen answers "what is my gym life right now": membership term
+// (ACTIVE / FROZEN / EXPIRED — exactly as the server says it), attendance
+// this month, the assigned trainer, the gym's recommended programs, the
+// next upcoming class, outstanding payments and the latest announcements.
+// It stays a dashboard: the program LISTS moved to their own pool screens
+// (GymWorkouts / GymNutrition), reachable from the "Gym Recommended" card,
+// the way Classes and Documents already live on their own screens.
 //
-// M2 de-duplication: the Membership card was removed (MyGymCard on the
-// Profile tab, right above this screen's entry point, already shows plan/
-// status/validity), and the Classes / Documents / Notifications rows were
-// removed — Classes and Documents stay reachable from MyGymCard, and
-// notifications have their own section (the header bell). Underlying
-// functionality is untouched; only the duplicate entry points are gone.
+// Server-authoritative, like every gym surface:
+//   - membership status/expiry come from /gym/my/memberships (GymContext);
+//     the client never derives whether a term is active, frozen or expired
+//   - payment dues come from /gym/my/billing, derived server-side from the
+//     immutable ledger (the same chargeStatus rule the desk ledger uses);
+//     the app renders the amount, it never computes it
+//   - attendance eligibility is enforced server-side (booking/check-in);
+//     the home only displays the ✓-days the server recorded
+//   - every per-gym slice keys on the ACTIVE gym from GymContext — no gym
+//     id is ever sent from the client
 //
-// M1.1: this screen is a shared-pool screen (registered in every tab stack
-// like GymClasses/GymDocuments) pushed from MyGymCard on the Profile tab.
-// The pool's default headerRight provides the standard bell + gear pair.
+// States: first-load skeleton (GymContext), per-section skeletons while a
+// section loads, per-section inline error + Retry (one failing section
+// never kills the dashboard), empty states everywhere, and a graceful
+// not-connected state (defensive — standalone users can't reach this
+// screen; a mid-session cancellation can).
 //
-// Membership/attendance state comes from GymContext (one server-
-// authoritative snapshot shared with MyGymCard); program content comes
-// from GET /gym/my/content, sliced to the active gym. Nothing here passes
-// a gym id anywhere: authorization is server-side, resolved from the JWT.
+// EXPIRED membership: the page still loads and history stays visible —
+// the membership card shows "Expired on …" plus a Contact Gym action
+// (call/email via the gym's own contact columns, address as fallback).
+// FROZEN: shows the open freeze's start date and reason, straight from
+// the server's membership_freezes row.
 //
-// Standalone users cannot reach this screen (the only entry is MyGymCard,
-// which renders nothing without a gym), but it still handles the empty
-// state gracefully for safety — e.g. a membership cancelled mid-flight.
+// M1.1: this screen is a shared-pool screen (registered in every tab
+// stack), pushed from MyGymCard on the Profile tab. Same section, same
+// entry point — only the content of the screen grows up.
 import React, { useCallback, useMemo } from 'react';
 import {
   View,
@@ -33,7 +41,8 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
+  Linking,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -41,85 +50,426 @@ import { useColors, spacing } from '../theme';
 import LoadError from '../shared/components/LoadError';
 import useAsyncData from '../shared/hooks/useAsyncData';
 import { useGym } from '../store/GymContext';
-import { statusColor } from '../lib/gymState';
-import { fetchMyGymContent } from '../lib/gymApi';
-import { workoutMetaLine, GYM_NUTRITION_KIND_LABELS } from '../lib/gymContent';
-import { GYM_WORKOUT_DETAIL, GYM_NUTRITION_DETAIL } from '../shared/constants/routes';
+import {
+  fetchMyGymContent,
+  fetchMyGymClasses,
+  fetchMyGymAnnouncements,
+  fetchMyGymTrainers,
+  fetchMyGymBilling,
+} from '../lib/gymApi';
+import {
+  statusColor,
+  formatMoney,
+  formatDayMonthYear,
+  pickNextClass,
+  billingForGym,
+  trainerForGym,
+} from '../lib/gymState';
+import { GYM_WORKOUTS, GYM_NUTRITION, GYM_CLASSES } from '../shared/constants/routes';
+
+// "Tue, 1 Sep" — the same UTC-safe class date rendering GymClassesScreen
+// uses (gym-local schedule dates must not shift with the device timezone).
+function classDayLabel(iso) {
+  const [y, m, d] = String(iso).split('-').map(Number);
+  if (!y || !m || !d) return String(iso);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
+const OPEN_CHARGE_STATUSES = ['DUE', 'OVERDUE', 'PARTIAL'];
+
+// booking/charge badge palettes — same hues the Classes screen and the
+// membership badge use, so status colors stay consistent across the app
+const CLASS_STATUS_COLORS = {
+  BOOKED: '#16A34A',
+  ATTENDED: '#5856D6',
+  WAITLISTED: '#D97706',
+};
+const CHARGE_STATUS_COLORS = {
+  DUE: '#5856D6',
+  OVERDUE: '#DC2626',
+  PARTIAL: '#D97706',
+};
 
 export default function GymHomeScreen() {
   const colors = useColors();
   const navigation = useNavigation();
-  const {
-    loading,
-    error,
-    reload,
-    hasGym,
-    memberships,
-    gym,
-    gymMember,
-    membership,
-    attendance,
-    activeGymId,
-    setActiveGymId,
-  } = useGym();
-  // program content — one call covers every gym; sliced to the active one
-  const content = useAsyncData(() => fetchMyGymContent(), []);
+  const gym = useGym();
 
-  // refresh whenever this screen becomes visible again (terms/attendance move)
+  // one async surface per dashboard section — each loads, fails and retries
+  // INDEPENDENTLY so a dead section never blinds the whole dashboard.
+  // immediate:false → the useFocusEffect below drives the first fetch
+  // (single fetch per focus instead of mount + focus double-fire).
+  const content = useAsyncData(() => fetchMyGymContent(), [], { immediate: false });
+  const classes = useAsyncData(() => fetchMyGymClasses(), [], { immediate: false });
+  const announcements = useAsyncData(() => fetchMyGymAnnouncements({ limit: 20 }), [], { immediate: false });
+  const trainers = useAsyncData(() => fetchMyGymTrainers(), [], { immediate: false });
+  const billing = useAsyncData(() => fetchMyGymBilling(), [], { immediate: false });
+
+  // refresh everything whenever the dashboard becomes visible again
+  // (terms move, dues get paid at the desk, classes get booked, gyms post)
   useFocusEffect(
     useCallback(() => {
-      reload();
+      gym.reload();
       content.reload();
+      classes.reload();
+      announcements.reload();
+      trainers.reload();
+      billing.reload();
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [reload])
+    }, [gym.reload, content.reload, classes.reload, announcements.reload, trainers.reload, billing.reload])
   );
 
   const styles = makeStyles(colors);
 
+  // ── per-gym slices (pure selection — the server already ordered/sized) ──
+  const gymId = (gym.gym || {}).gym_id || null;
   const activeContent = useMemo(() => {
     const rows = Array.isArray(content.data) ? content.data : [];
-    return rows.find((g) => g && g.gym_id === (gym || {}).gym_id) || null;
-  }, [content.data, gym]);
+    return rows.find((g) => g && g.gym_id === gymId) || null;
+  }, [content.data, gymId]);
+  const nextClass = useMemo(() => pickNextClass(classes.data, gymId), [classes.data, gymId]);
+  const myTrainer = useMemo(() => trainerForGym(trainers.data, gymId), [trainers.data, gymId]);
+  const myBilling = useMemo(() => billingForGym(billing.data, gymId), [billing.data, gymId]);
+  const myAnnouncements = useMemo(() => {
+    const rows = Array.isArray(announcements.data) ? announcements.data : [];
+    return rows.filter((a) => a && a.gym_id === gymId).slice(0, 2);
+  }, [announcements.data, gymId]);
 
-  if (loading) {
-    return (
-      <View style={[styles.center, { backgroundColor: colors.bg }]}>
-        <ActivityIndicator color={colors.primary} />
-      </View>
-    );
+  // ── early states (after every hook) ─────────────────────────────────────
+  if (gym.loading) {
+    return <DashboardSkeleton colors={colors} styles={styles} />;
   }
-  if (error) {
-    return <LoadError message="Couldn't load your gym." onRetry={reload} />;
+  if (gym.error) {
+    return <LoadError message="Couldn't load your gym." onRetry={gym.reload} />;
   }
-  if (!hasGym || !gym) {
+  if (!gym.hasGym || !gym.gym) {
     // Defensive: standalone users cannot get here (MyGymCard renders
     // nothing for them); if we still land here (membership cancelled
-    // mid-session), show the graceful state.
+    // mid-session), show the graceful state — never fake gym data.
     return (
       <View style={[styles.center, { backgroundColor: colors.bg }]}>
         <Ionicons name="business-outline" size={40} color={colors.textDim} />
         <Text style={styles.emptyTitle}>You&apos;re not connected to a gym yet.</Text>
         <Text style={styles.emptyBody}>
-          When your gym links your membership to this account, it will show up here.
+          When your gym links your membership to this account, your dashboard will show up here.
         </Text>
       </View>
     );
   }
 
-  // membership-term status is what matters to the member; fall back to the
-  // membership-record status when no term exists (same rule as MyGymCard)
-  const status = membership?.status || gym.status;
-  const badgeColor = statusColor(status, colors.textDim);
-  const multiGym = memberships.length > 1;
+  const { gym: gymRow, gymMember, membership, attendance } = gym;
 
-  const workouts = [
-    ...(activeContent?.workouts?.assigned || []).map((w) => ({ w, tag: 'Assigned' })),
-    ...(activeContent?.workouts?.recommended || []).map((w) => ({ w, tag: 'Recommended' })),
-  ];
-  const nutrition = [
-    ...(activeContent?.nutrition?.assigned || []).map((n) => ({ n, tag: 'Assigned' })),
-    ...(activeContent?.nutrition?.recommended || []).map((n) => ({ n, tag: 'Recommended' })),
-  ];
+  // section shell: loading → skeleton, error → inline retry, ready → body
+  const sectionState = (section) =>
+    section.loading && !section.data ? 'loading'
+      : section.error && !section.data ? 'error'
+        : 'ready';
+
+  const card = (title, section, body) => {
+    const state = sectionState(section);
+    return (
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>{title}</Text>
+        {state === 'loading' ? <SectionSkeleton colors={colors} styles={styles} /> : null}
+        {state === 'error' ? (
+          <View style={styles.sectionError}>
+            <Ionicons name="cloud-offline-outline" size={15} color={colors.textDim} />
+            <Text style={styles.sectionErrorText}>Couldn&apos;t load this section.</Text>
+            <TouchableOpacity
+              onPress={section.reload}
+              accessibilityRole="button"
+              accessibilityLabel={`Retry loading ${title}`}
+            >
+              <Text style={[styles.retryText, { color: colors.primary }]}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+        {state === 'ready' ? body : null}
+      </View>
+    );
+  };
+
+  // ── membership card ───────────────────────────────────────────────────────
+  // term status is what matters; fall back to the member-record status when
+  // no term exists (same rule MyGymCard uses)
+  const termStatus = membership?.status || gymRow.status;
+  const badgeColor = statusColor(termStatus, colors.textDim);
+  const contactRows = [
+    gymRow.gym_phone ? { icon: 'call-outline', label: gymRow.gym_phone, url: `tel:${gymRow.gym_phone}` } : null,
+    gymRow.gym_email ? { icon: 'mail-outline', label: gymRow.gym_email, url: `mailto:${gymRow.gym_email}` } : null,
+  ].filter(Boolean);
+
+  const openContact = (url) => {
+    Linking.openURL(url).catch(() =>
+      Alert.alert('Could not open', 'Nothing on this device can handle that action.')
+    );
+  };
+
+  const membershipBody = (
+    <>
+      <View style={styles.gymHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.planName} numberOfLines={1}>
+            {membership?.plan_name || 'No membership plan yet'}
+          </Text>
+          {membership?.starts_on && termStatus === 'UPCOMING' ? (
+            <Text style={styles.meta}>Starts {formatDayMonthYear(membership.starts_on) || String(membership.starts_on).slice(0, 10)}</Text>
+          ) : null}
+          {membership?.status === 'ACTIVE' && membership?.ends_on ? (
+            <Text style={styles.meta}>
+              Expires {formatDayMonthYear(membership.ends_on) || String(membership.ends_on).slice(0, 10)}
+            </Text>
+          ) : null}
+          {membership?.status === 'FROZEN' ? (
+            <>
+              {membership.freeze_starts_on ? (
+                <Text style={styles.meta}>
+                  Frozen since {formatDayMonthYear(membership.freeze_starts_on) || String(membership.freeze_starts_on).slice(0, 10)}
+                </Text>
+              ) : null}
+              {membership.freeze_reason ? (
+                <Text style={styles.meta} numberOfLines={2}>Reason: {membership.freeze_reason}</Text>
+              ) : null}
+              {membership.ends_on ? (
+                <Text style={styles.meta}>
+                  Valid until {formatDayMonthYear(membership.ends_on) || String(membership.ends_on).slice(0, 10)}
+                </Text>
+              ) : null}
+            </>
+          ) : null}
+          {membership?.status === 'EXPIRED' && membership?.ends_on ? (
+            <Text style={styles.meta}>
+              Expired on: {formatDayMonthYear(membership.ends_on) || String(membership.ends_on).slice(0, 10)}
+            </Text>
+          ) : null}
+          {!membership?.plan_name ? (
+            <Text style={styles.meta}>
+              Your gym hasn&apos;t added a plan for you yet — ask at the front desk.
+            </Text>
+          ) : null}
+        </View>
+        <View style={[styles.badge, { backgroundColor: `${badgeColor}22` }]}>
+          <Text style={[styles.badgeText, { color: badgeColor }]}>{termStatus}</Text>
+        </View>
+      </View>
+      {membership?.status === 'EXPIRED' ? (
+        <View style={styles.contactWrap}>
+          <Text style={styles.contactHint}>
+            Your membership has ended — reach out to your gym to renew.
+          </Text>
+          <View style={styles.contactRow}>
+            {contactRows.map((c) => (
+              <TouchableOpacity
+                key={c.url}
+                style={styles.contactBtn}
+                onPress={() => openContact(c.url)}
+                accessibilityRole="button"
+                accessibilityLabel={`Contact gym: ${c.label}`}
+              >
+                <Ionicons name={c.icon} size={14} color={colors.primary} />
+                <Text style={[styles.contactText, { color: colors.primary }]} numberOfLines={1}>
+                  {c.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {contactRows.length === 0 ? (
+            <Text style={styles.meta}>
+              {[gymRow.gym_address_line1, gymRow.gym_city].filter(Boolean).join(', ') ||
+                'Ask at the front desk on your next visit.'}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+    </>
+  );
+
+  // ── attendance card ───────────────────────────────────────────────────────
+  const attendanceBody = attendance ? (
+    <>
+      <View style={styles.statRow}>
+        <View style={styles.stat}>
+          <Text style={styles.statValue}>{attendance.visitsThisMonth}</Text>
+          <Text style={styles.statLabel}>visits this month</Text>
+        </View>
+        <View style={styles.stat}>
+          <Text style={[styles.statValue, { fontSize: 15, paddingTop: 6 }]}>
+            {attendance.lastVisit
+              ? formatDayMonthYear(attendance.lastVisit) || String(attendance.lastVisit).slice(0, 10)
+              : '—'}
+          </Text>
+          <Text style={styles.statLabel}>last visit</Text>
+        </View>
+      </View>
+      {!attendance.lastVisit ? (
+        <Text style={styles.meta}>No visits in the last 90 days.</Text>
+      ) : null}
+    </>
+  ) : (
+    <Text style={styles.meta}>No attendance recorded yet.</Text>
+  );
+
+  // ── trainer card ──────────────────────────────────────────────────────────
+  const trainerBody = myTrainer?.trainer_name ? (
+    <View style={styles.gymHeader}>
+      <View style={[styles.gymBadgeWrap, { backgroundColor: `${colors.blue}18` }]}>
+        <Ionicons name="person-outline" size={17} color={colors.blue} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.planName} numberOfLines={1}>{myTrainer.trainer_name}</Text>
+        <Text style={styles.meta}>
+          Your trainer
+          {myTrainer.starts_on
+            ? ` · since ${formatDayMonthYear(myTrainer.starts_on) || String(myTrainer.starts_on).slice(0, 10)}`
+            : ''}
+        </Text>
+      </View>
+    </View>
+  ) : (
+    <Text style={styles.meta}>No trainer assigned yet — your gym can assign one at the desk.</Text>
+  );
+
+  // ── gym recommended card (entry points — lists live on their own screens) ─
+  const workoutCount =
+    (activeContent?.workouts?.assigned?.length || 0) +
+    (activeContent?.workouts?.recommended?.length || 0);
+  const nutritionCount =
+    (activeContent?.nutrition?.assigned?.length || 0) +
+    (activeContent?.nutrition?.recommended?.length || 0);
+
+  const entryRow = (icon, label, hint, route, accessLabel) => (
+    <TouchableOpacity
+      style={styles.entryRow}
+      onPress={() => navigation.navigate(route)}
+      accessibilityRole="button"
+      accessibilityLabel={accessLabel}
+    >
+      <Ionicons name={icon} size={16} color={colors.primary} />
+      <Text style={styles.entryText}>{label}</Text>
+      <Text style={styles.entryHint}>{hint}</Text>
+      <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
+    </TouchableOpacity>
+  );
+
+  const recommendedBody = (
+    <>
+      {entryRow(
+        'barbell-outline', 'View Workouts',
+        workoutCount ? `${workoutCount} available` : 'Nothing yet',
+        GYM_WORKOUTS, 'View gym workouts'
+      )}
+      {entryRow(
+        'restaurant-outline', 'View Nutrition',
+        nutritionCount ? `${nutritionCount} available` : 'Nothing yet',
+        GYM_NUTRITION, 'View gym nutrition'
+      )}
+    </>
+  );
+
+  // ── upcoming class card ───────────────────────────────────────────────────
+  const classBody = nextClass ? (
+    <TouchableOpacity
+      style={styles.classRow}
+      onPress={() => navigation.navigate(GYM_CLASSES)}
+      accessibilityRole="button"
+      accessibilityLabel="Open the class schedule"
+    >
+      <View style={{ flex: 1 }}>
+        <Text style={styles.planName} numberOfLines={1}>{nextClass.class_type}</Text>
+        <Text style={styles.meta}>
+          {classDayLabel(nextClass.class_date)} · {String(nextClass.start_time).slice(0, 5)}–{String(nextClass.end_time).slice(0, 5)}
+        </Text>
+        {nextClass.trainer_name || nextClass.branch_name || nextClass.room ? (
+          <Text style={styles.meta} numberOfLines={1}>
+            {[nextClass.trainer_name, nextClass.branch_name, nextClass.room].filter(Boolean).join(' · ')}
+          </Text>
+        ) : null}
+      </View>
+      {nextClass.my_status ? (
+        <View style={[styles.badge, { backgroundColor: `${CLASS_STATUS_COLORS[nextClass.my_status] || colors.textDim}22` }]}>
+          <Text style={[styles.badgeText, { color: CLASS_STATUS_COLORS[nextClass.my_status] || colors.textDim }]}>
+            {nextClass.my_status === 'WAITLISTED' ? 'WAITLIST' : nextClass.my_status}
+          </Text>
+        </View>
+      ) : null}
+      <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
+    </TouchableOpacity>
+  ) : (
+    <Text style={styles.meta}>No upcoming classes — new ones will show up here.</Text>
+  );
+
+  // ── payments card (amounts straight from the server's ledger) ─────────────
+  const openCharges = (myBilling?.charges || []).filter((c) => OPEN_CHARGE_STATUSES.includes(c.status));
+  const hasDues = !!myBilling && myBilling.outstanding_cents > 0;
+  const dueColor = myBilling?.overdue_cents > 0 ? colors.red : colors.text;
+
+  const paymentsBody = hasDues ? (
+    <>
+      <View style={styles.duesRow}>
+        <Text style={[styles.duesAmount, { color: dueColor }]}>
+          {formatMoney(myBilling.outstanding_cents, myBilling.currency)}
+        </Text>
+        <Text style={styles.duesLabel}>due</Text>
+      </View>
+      {myBilling.overdue_cents > 0 ? (
+        <Text style={[styles.overdueNote, { color: colors.red }]}>
+          {formatMoney(myBilling.overdue_cents, myBilling.currency)} is overdue
+        </Text>
+      ) : null}
+      {openCharges.slice(0, 4).map((c) => {
+        const cColor = CHARGE_STATUS_COLORS[c.status] || colors.textDim;
+        return (
+          <View key={c.id} style={styles.chargeRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.chargeDesc} numberOfLines={1}>{c.description}</Text>
+              <Text style={styles.meta}>
+                {c.status === 'OVERDUE' ? 'Overdue · was due ' : 'Due '}
+                {formatDayMonthYear(c.due_on) || String(c.due_on || '').slice(0, 10)}
+              </Text>
+            </View>
+            <View style={[styles.badge, { backgroundColor: `${cColor}22` }]}>
+              <Text style={[styles.badgeText, { color: cColor }]}>{c.status}</Text>
+            </View>
+            <Text style={styles.chargeAmount}>
+              {formatMoney(c.outstanding_cents, c.currency)}
+            </Text>
+          </View>
+        );
+      })}
+      {openCharges.length > 4 ? (
+        <Text style={styles.meta}>+{openCharges.length - 4} more open charge{openCharges.length - 4 > 1 ? 's' : ''}</Text>
+      ) : null}
+      <Text style={styles.footnote}>Payments are recorded at the front desk.</Text>
+    </>
+  ) : (
+    <View style={styles.settledRow}>
+      <Ionicons name="checkmark-circle" size={18} color={colors.green} />
+      <View style={{ flex: 1 }}>
+        <Text style={styles.settledText}>All settled</Text>
+        <Text style={styles.meta}>No dues right now.</Text>
+      </View>
+    </View>
+  );
+
+  // ── announcements card ────────────────────────────────────────────────────
+  const announcementsBody = myAnnouncements.length === 0 ? (
+    <Text style={styles.meta}>No announcements right now.</Text>
+  ) : (
+    myAnnouncements.map((a, i) => (
+      <View key={a.id} style={[styles.annRow, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+        <View style={styles.annHead}>
+          <Text style={styles.annTitle} numberOfLines={1}>{a.title}</Text>
+          <Text style={styles.annDate}>
+            {formatDayMonthYear(a.published_at) || String(a.published_at || '').slice(0, 10)}
+          </Text>
+        </View>
+        {a.body ? <Text style={styles.annBody} numberOfLines={3}>{a.body}</Text> : null}
+      </View>
+    ))
+  );
+
+  const multiGym = gym.memberships.length > 1;
 
   return (
     <ScrollView
@@ -129,13 +479,13 @@ export default function GymHomeScreen() {
     >
       {multiGym && (
         <View style={styles.switcher}>
-          {memberships.map((m) => {
-            const active = m.gym_id === activeGymId;
+          {gym.memberships.map((m) => {
+            const active = m.gym_id === gym.activeGymId;
             return (
               <TouchableOpacity
                 key={`${m.gym_id}-${m.member_code}`}
                 style={[styles.chip, active && { borderColor: colors.primary, backgroundColor: `${colors.primary}14` }]}
-                onPress={() => setActiveGymId(m.gym_id)}
+                onPress={() => gym.setActiveGymId(m.gym_id)}
                 accessibilityRole="button"
                 accessibilityLabel={`Show gym ${m.gym_name}`}
               >
@@ -158,130 +508,54 @@ export default function GymHomeScreen() {
             <Ionicons name="barbell" size={18} color={colors.primary} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.gymName} numberOfLines={1}>{gym.gym_name}</Text>
+            <Text style={styles.gymName} numberOfLines={1}>{gymRow.gym_name}</Text>
             <Text style={styles.meta}>
               Member {gymMember?.member_code}
-              {gym.joined_at ? ` · since ${String(gym.joined_at).slice(0, 10)}` : ''}
+              {gymRow.joined_at ? ` · since ${String(gymRow.joined_at).slice(0, 10)}` : ''}
             </Text>
           </View>
-          <View style={[styles.badge, { backgroundColor: `${badgeColor}22` }]}>
-            <Text style={[styles.badgeText, { color: badgeColor }]}>{status}</Text>
-          </View>
         </View>
       </View>
 
-      {/* attendance summary — read-only by design in the foundation phase */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Attendance</Text>
-        {attendance ? (
-          <View style={styles.statRow}>
-            <View style={styles.stat}>
-              <Text style={styles.statValue}>{attendance.visits7}</Text>
-              <Text style={styles.statLabel}>last 7 days</Text>
-            </View>
-            <View style={styles.stat}>
-              <Text style={styles.statValue}>{attendance.visits30}</Text>
-              <Text style={styles.statLabel}>last 30 days</Text>
-            </View>
-            <View style={styles.stat}>
-              <Text style={[styles.statValue, { fontSize: 13, paddingTop: 6 }]}>
-                {attendance.lastVisit ? String(attendance.lastVisit).slice(0, 10) : '—'}
-              </Text>
-              <Text style={styles.statLabel}>last visit</Text>
-            </View>
-          </View>
-        ) : (
-          <Text style={styles.meta}>No attendance in the last 90 days.</Text>
-        )}
-      </View>
-
-      {/* program content — shared loader state for both sections; keep the
-          lists on screen while a background refetch runs */}
-      {content.loading && !content.data ? (
-        <View style={styles.contentLoading}>
-          <ActivityIndicator color={colors.primary} />
-        </View>
-      ) : content.error && !content.data ? (
-        <LoadError message="Couldn't load your gym's programs." onRetry={content.reload} />
-      ) : (
-        <>
-          {/* gym workouts */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Gym Workouts</Text>
-            {workouts.length === 0 ? (
-              <Text style={styles.emptyHint}>
-                Nothing right now — programs your gym assigns or recommends will appear here.
-              </Text>
-            ) : (
-              workouts.map(({ w, tag }, i) => (
-                <TouchableOpacity
-                  key={`${tag}-${w.id}`}
-                  style={[styles.row, i === workouts.length - 1 && { borderBottomWidth: 0 }]}
-                  onPress={() => navigation.navigate(GYM_WORKOUT_DETAIL, {
-                    workout: w,
-                    gymName: gym.gym_name,
-                    tag,
-                  })}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Open gym workout ${w.title}`}
-                >
-                  <Ionicons name="barbell-outline" size={16} color={colors.primary} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.rowText} numberOfLines={1}>{w.title}</Text>
-                    <Text style={styles.rowHint} numberOfLines={1}>
-                      {workoutMetaLine(w) || 'Gym program'}
-                    </Text>
-                  </View>
-                  <Text style={[styles.rowTag, { color: tag === 'Assigned' ? colors.primary : colors.textDim }]}>
-                    {tag}
-                  </Text>
-                  <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
-                </TouchableOpacity>
-              ))
-            )}
-          </View>
-
-          {/* gym nutrition */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Gym Nutrition</Text>
-            {nutrition.length === 0 ? (
-              <Text style={styles.emptyHint}>
-                Nothing right now — recipes and diet guides from your gym will appear here.
-              </Text>
-            ) : (
-              nutrition.map(({ n, tag }, i) => (
-                <TouchableOpacity
-                  key={`${tag}-${n.id}`}
-                  style={[styles.row, i === nutrition.length - 1 && { borderBottomWidth: 0 }]}
-                  onPress={() => navigation.navigate(GYM_NUTRITION_DETAIL, {
-                    item: n,
-                    gymName: gym.gym_name,
-                    tag,
-                  })}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Open gym nutrition ${n.title}`}
-                >
-                  <Ionicons name="restaurant-outline" size={16} color={colors.primary} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.rowText} numberOfLines={1}>{n.title}</Text>
-                    <Text style={styles.rowHint} numberOfLines={1}>
-                      {[
-                        GYM_NUTRITION_KIND_LABELS[n.kind] || n.kind,
-                        n.targets?.calories != null ? `${n.targets.calories} kcal` : null,
-                      ].filter(Boolean).join(' · ')}
-                    </Text>
-                  </View>
-                  <Text style={[styles.rowTag, { color: tag === 'Assigned' ? colors.primary : colors.textDim }]}>
-                    {tag}
-                  </Text>
-                  <Ionicons name="chevron-forward" size={14} color={colors.textDim} />
-                </TouchableOpacity>
-              ))
-            )}
-          </View>
-        </>
-      )}
+      {card('Membership', { loading: false, error: null, data: membership !== undefined ? membership : null, reload: gym.reload }, membershipBody)}
+      {card('Attendance', { loading: false, error: null, data: attendance, reload: gym.reload }, attendanceBody)}
+      {card('Trainer', trainers, trainerBody)}
+      {card('Gym Recommended', content, recommendedBody)}
+      {card('Upcoming Class', classes, classBody)}
+      {card('Payments', billing, paymentsBody)}
+      {card('Announcements', announcements, announcementsBody)}
     </ScrollView>
+  );
+}
+
+// ── static skeletons (the shape of what's coming) ───────────────────────────
+function DashboardSkeleton({ colors, styles }) {
+  return (
+    <ScrollView
+      style={[styles.screen, { backgroundColor: colors.bg }]}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
+      {[0, 1, 2, 3].map((i) => (
+        <View key={i} style={styles.card}>
+          <View style={[styles.skeletonTitle, { backgroundColor: colors.cardLight }]} />
+          <SectionSkeleton colors={colors} styles={styles} />
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
+function SectionSkeleton({ colors, styles }) {
+  return (
+    <View style={{ gap: spacing.sm }}>
+      {[44, 30].map((h, i) => (
+        <View
+          key={i}
+          style={[styles.skeletonBar, { backgroundColor: colors.cardLight, height: h }]}
+        />
+      ))}
+    </View>
   );
 }
 
@@ -311,6 +585,13 @@ const makeStyles = (colors) => StyleSheet.create({
     marginBottom: spacing.md,
   },
   cardTitle: { color: colors.text, fontSize: 13, fontWeight: '800', letterSpacing: 0.3, marginBottom: spacing.sm },
+  skeletonTitle: { height: 12, borderRadius: 6, width: 110, marginBottom: spacing.sm },
+  skeletonBar: { borderRadius: 10 },
+  sectionError: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm,
+  },
+  sectionErrorText: { color: colors.textDim, fontSize: 12, flex: 1 },
+  retryText: { fontSize: 13, fontWeight: '800' },
   gymHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   gymBadgeWrap: {
     width: 40,
@@ -320,24 +601,50 @@ const makeStyles = (colors) => StyleSheet.create({
     justifyContent: 'center',
   },
   gymName: { color: colors.text, fontSize: 17, fontWeight: '800' },
+  planName: { color: colors.text, fontSize: 15, fontWeight: '800' },
   meta: { color: colors.textDim, fontSize: 12, marginTop: 3 },
   badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
   badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
+  contactWrap: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  contactHint: { color: colors.textDim, fontSize: 12, lineHeight: 17 },
+  contactRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
+  contactBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    borderWidth: 1, borderColor: colors.primary, borderRadius: 9,
+    paddingHorizontal: 11, paddingVertical: 7,
+    maxWidth: '100%',
+  },
+  contactText: { fontWeight: '800', fontSize: 12.5 },
   statRow: { flexDirection: 'row' },
   stat: { flex: 1, alignItems: 'flex-start' },
   statValue: { color: colors.text, fontSize: 22, fontWeight: '800', fontVariant: ['tabular-nums'] },
   statLabel: { color: colors.textDim, fontSize: 11, marginTop: 2 },
-  contentLoading: { padding: spacing.xl, alignItems: 'center' },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
+  entryRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
     paddingVertical: 11,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  rowText: { color: colors.text, fontSize: 13, fontWeight: '700' },
-  rowHint: { color: colors.textDim, fontSize: 11, marginTop: 1, textTransform: 'capitalize' },
-  rowTag: { fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
-  emptyHint: { color: colors.textDim, fontSize: 12, lineHeight: 17 },
+  entryText: { color: colors.text, fontSize: 13, fontWeight: '700', flex: 1 },
+  entryHint: { color: colors.textDim, fontSize: 11 },
+  classRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  duesRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm },
+  duesAmount: { fontSize: 24, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  duesLabel: { color: colors.textDim, fontSize: 13, fontWeight: '700' },
+  overdueNote: { fontSize: 12, fontWeight: '700', marginTop: 2 },
+  chargeRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    paddingTop: spacing.sm, marginTop: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border,
+  },
+  chargeDesc: { color: colors.text, fontSize: 12.5, fontWeight: '700' },
+  chargeAmount: { color: colors.text, fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  footnote: { color: colors.textDim, fontSize: 11, marginTop: spacing.sm },
+  settledRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  settledText: { color: colors.text, fontSize: 14, fontWeight: '800' },
+  annRow: { paddingTop: i0 => i0, paddingBottom: spacing.sm },
+  annHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  annTitle: { color: colors.text, fontSize: 13, fontWeight: '700', flex: 1 },
+  annDate: { color: colors.textDim, fontSize: 11 },
+  annBody: { color: colors.textDim, fontSize: 12, lineHeight: 17, marginTop: 3 },
 });
