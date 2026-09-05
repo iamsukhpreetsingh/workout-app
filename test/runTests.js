@@ -1037,3 +1037,46 @@ test('normalizeCheckInCode accepts poster payloads and typed codes, refuses junk
   assert.strictEqual(normalizeCheckInCode(''), null);
   assert.strictEqual(normalizeCheckInCode(null), null);
 });
+
+// ---- Wiring: the ROUTED WorkoutScreen carries the attendance prompt ----
+// Regression for the M6 patch miss: the prompt landed in an orphan copy of
+// WorkoutScreen (src/screens/WorkoutScreen.js) that no navigator imports,
+// so real users never saw "Mark today's gym attendance?". These checks pin
+// the wiring itself, not just the logic.
+import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const repo = (p) => fileURLToPath(new URL(p, import.meta.url));
+
+test('navigators import WorkoutScreen from the features tree and nowhere else', () => {
+  const nav = readFileSync(repo('../src/navigation/navigators.js'), 'utf8');
+  assert.ok(
+    nav.includes("from '../features/workouts/screens/WorkoutScreen'"),
+    'the routed WorkoutScreen is the features-tree copy'
+  );
+  assert.ok(
+    !nav.includes("from '../screens/WorkoutScreen'"),
+    'no import of the deleted orphan copy'
+  );
+});
+
+test('the ROUTED WorkoutScreen asks "Mark today\'s gym attendance?" with explicit confirm + retry', () => {
+  const screen = readFileSync(repo('../src/features/workouts/screens/WorkoutScreen.js'), 'utf8');
+  assert.ok(screen.includes("from '../../../lib/gymApi'"), 'gymApi import present');
+  assert.ok(screen.includes('hasActiveGymMembership'), 'gates the ask on a server fact');
+  assert.ok(screen.includes('markGymAttendanceFromWorkout'), 'calls the single-flight mark');
+  assert.ok(screen.includes("Mark today's gym attendance?"), 'explicit confirmation prompt');
+  assert.ok(screen.includes("'Mark Attendance'"), 'confirm button');
+  assert.ok(screen.includes("'Not Now'"), 'decline button — no auto-mark path');
+  assert.ok(screen.includes("'Retry'"), 'offline/rejection retry');
+});
+
+test('no orphan duplicate WorkoutScreen exists outside the features tree', () => {
+  assert.strictEqual(
+    existsSync(repo('../src/screens/WorkoutScreen.js')),
+    false,
+    'src/screens/WorkoutScreen.js must stay deleted — its existence is what swallowed the M6 prompt'
+  );
+});
+
+console.log(`\n${passed} tests passed`);
