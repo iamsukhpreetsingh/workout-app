@@ -40,6 +40,7 @@
 //   A member who leaves (status CANCELLED) keeps every document for
 //   retention, but can no longer receive new paperwork or sign.
 const { pool, query, transaction } = require('../db/pool');
+const staffNotifications = require('./gymStaffNotifications');
 const crypto = require('crypto');
 const storage = require('./storageService');
 const branches = require('./gymBranches');
@@ -437,6 +438,15 @@ async function authorizeMemberDocument(gymId, memberId, documentId, { actor, ip 
       action: 'document.authorized', entity: 'gym_member_document', entityId: documentId,
       before: { status: 'PENDING' },
       after: { status: 'AUTHORIZED', signature_name: signature, by: 'DESK' },
+    });
+    staffNotifications.notifyStaff({
+      gymId, type: 'DOCUMENT_SIGNED',
+      title: 'Document authorized',
+      message: `A member document was authorized/signed${signature ? ` by ${signature}` : ''} (document contents are not included in notifications).`,
+      entityType: 'DOCUMENT', entityId: String(documentId),
+      memberId: updated[0].member_id || null,
+      actorUserId: actor.userId ?? null,
+      dedupeKey: `document_signed:${documentId}:${updated[0].updated_at.toISOString()}`,
     });
     return toClient(updated[0]);
   });

@@ -621,6 +621,73 @@ with `left_reason` distinguishing the two.
   visit branch, trainers by who can operate there; `branches` always returns
   the full split (selector + table data in one payload).
 
+#### 3.5.1.1 Staff Notification Center (gym-web phase) — in detail
+
+**What it is.** The SECOND, separate notification stream — business events
+inside a gym surfaced to AUTHORIZED STAFF in the gym-web portal. Deliberately
+independent of the member-facing `notifications` table (which keeps working
+untouched). Storage: `gym_staff_notifications` (migration 059) — gym_id AND
+recipient_user_id are mandatory on every row; there are no broadcast rows.
+
+- **Central service** (`src/data/gymStaffNotifications.js`): business code
+  never resolves recipients itself. `notifyStaff({ gymId, type, title,
+  message, entityType, entityId, memberId, actorUserId, dedupeKey, metadata })`
+  → type registry (29 types; each declares category, severity
+  INFO/SUCCESS/WARNING/CRITICAL, and the PERMISSION required to receive it)
+  → recipients = CURRENT ACTIVE staff of that gym whose CURRENT role holds
+  that permission (no role snapshots) → self-action suppression
+  (selfSuppressed types never notify the actor) → dedupe (unique
+  dedupe_key + recipient index; retries/scans never duplicate) → personal
+  INSERT per recipient. `notifyStaff` NEVER throws into the caller.
+- **Type → permission examples**: PAYMENT_PROOF_SUBMITTED → payments.manage
+  (owner-only by default — front desk gets nothing); PAYMENT_RECORDED/
+  REFUNDED/APPROVED/REJECTED → payments.record (financial staff, actor
+  excluded); MEMBER_*/MEMBERSHIP_EXPIRING/MEMBER_INACTIVE → members.view;
+  TRAINER_* → members.manage; WORKOUT/NUTRITION_ASSIGNED →
+  assigned_members.view (trainers); CLASS_* → classes.manage;
+  DOCUMENT_SIGNED → documents.manage; STAFF_ROLE_CHANGED (SECURITY,
+  CRITICAL, self-suppressed) → staff.manage. New types = one registry line,
+  no UI changes.
+- **Hooks (all fire-and-forget)**: proofs (submitted/cancelled/approved/
+  rejected — approval passes skipStaffNotify to recordPayment to avoid a
+  double notification), recordPayment/refundPayment, assign/renew/cancel/
+  freeze/resume membership (membershipPlans.js), member left/archived/
+  rejoined + link-app/invite-accepted + staff invite accepted + role change
+  (gyms.js), trainer assign/end, content assignment (workout/nutrition),
+  class booking/cancellation, member document authorization.
+- **Lazy scan instead of cron** (project convention — see
+  runMembershipMaintenance): `runStaffNotificationScan(gymId)` runs when
+  staff list notifications; generates MEMBERSHIP_EXPIRING (default 3 days
+  ahead), MEMBERSHIP_EXPIRED (ended today), PAYMENT_OVERDUE (charges past
+  due_on with outstanding balance), MEMBER_INACTIVE (ACTIVE membership, no
+  visit for 14 days; thresholds configurable per gym via
+  `gyms.settings.staff_notifications.{membership_expiring_days,
+  member_inactive_days}`). Every scan alert carries a date-scoped dedupe_key
+  → repeated scans create nothing.
+- **Routes** (all `requireGymContext` — active staff of THIS gym only — and
+  every query additionally filters `recipient_user_id = req.user.id`, so a
+  staff member sees only their own inbox): `GET /:gymId/staff-notifications`
+  (filters unread/category/severity/member_id/q, limit≤100/offset; runs the
+  scan first), `GET …/unread-count`, `GET …/:id` (404 for anything not owned
+  by the caller), `POST …/read {ids}`, `POST …/read-all`.
+- **Retention**: rows are never auto-deleted; cleanup is an explicit ops
+  decision. Deleting a notification never touches business records. Left/
+  archived members' historical notifications keep working (member_id is ON
+  DELETE SET NULL; the portal falls back to the member page).
+- **Portal**: header bell (Badge + recent-8 dropdown, 45s polling — no
+  realtime bus yet, cleanly swappable), `/notifications` page (All/Unread
+  tabs, category/severity filters, search, 25-per-page Load more, mark read
+  on click, mark all as read), deep links resolved CLIENT-side from
+  entity_type/member_id (`utils/notificationLinks.ts` → e.g.
+  PAYMENT_PROOF → /members/:id/payments), dashboard "Recent activity" card
+  consuming the same list (same source of truth, not a second system).
+- **Tests**: `test/gymStaffNotifications.test.js` (11) — the permission
+  matrix (financial → owner only; member events → members.view holders, not
+  trainers), self-suppression, gym isolation + cross-gym 404/403, dedupe,
+  filters/search/pagination, read/read-all with read_at, scan idempotency,
+  member lifecycle hooks through the real API.
+
+
 #### 3.5.1 Billing & payment ledger (Phase 9) — in detail
 
 **Why this design.** The spec's hard requirement is *historical integrity*:

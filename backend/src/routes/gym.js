@@ -15,6 +15,7 @@ const { requireGymContext, requireGymPermission, requireGymPermissionAny } = req
 const { rateLimit } = require('../middleware/rateLimit');
 const { query } = require('../db/pool');
 const gyms = require('../data/gyms');
+const staffNotifications = require('../data/gymStaffNotifications');
 const plans = require('../data/membershipPlans');
 const trainers = require('../data/gymTrainers');
 const billing = require('../data/gymBilling');
@@ -900,6 +901,104 @@ registerRoute(router, {
 }, [requireAuth, requireGymContext(), requireGymPermission('settings.manage')]);
 
 // ── staff management ─────────────────────────────────────────────────────
+
+
+// ── staff Notification Center (gym-web) — RECIPIENT-scoped ───────────────
+// requireGymContext proves the caller is ACTIVE staff of THIS gym; every
+// query additionally filters recipient_user_id = req.user.id, so a staff
+// member only ever sees their own notifications (gym AND recipient scoped).
+// Triggering the lazy scan on list keeps expiry/overdue/inactivity alerts
+// fresh without a cron; dedupe keys make repeated scans no-ops.
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/staff-notifications/unread-count',
+  description: "The caller's unread staff-notification count for this gym (bell badge). Recipient-scoped.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext()], async (req, res) => {
+  try {
+    res.json({ count: await staffNotifications.unreadCount(req.user.id, req.gymContext.gymId) });
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext()]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/staff-notifications',
+  description: "The caller's staff notifications for this gym (newest first). Filters: unread=1, category, severity, member_id, q (title/message search), limit (<=100), offset. Runs the lazy maintenance scan (expiry / overdue / inactivity — date-deduped) first.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext()], async (req, res) => {
+  try {
+    await staffNotifications.runStaffNotificationScan(req.gymContext.gymId);
+    const rows = await staffNotifications.listForUser(req.user.id, req.gymContext.gymId, {
+      unread: req.query.unread === '1' || req.query.unread === 'true',
+      category: req.query.category, severity: req.query.severity,
+      member_id: req.query.member_id, q: req.query.q,
+      limit: req.query.limit, offset: req.query.offset,
+    });
+    res.json(rows);
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext()]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/staff-notifications/:id',
+  description: "One staff notification (404 unless it belongs to the caller AND this gym — cross-gym access is never confirmed).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext()], async (req, res) => {
+  try {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id || '')) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+    const row = await staffNotifications.getForUser(req.user.id, req.gymContext.gymId, req.params.id);
+    if (!row) return res.status(404).json({ error: 'Notification not found' });
+    res.json(row);
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext()]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/staff-notifications/read',
+  description: "Mark selected notifications read (ids array; ownership + gym re-checked in the UPDATE).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext()], async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const n = await staffNotifications.markRead(req.user.id, req.gymContext.gymId, ids);
+    res.json({ marked: n });
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext()]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/staff-notifications/read-all',
+  description: "Mark ALL of the caller's notifications in this gym read (unread count resets immediately).",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext()], async (req, res) => {
+  try {
+    const n = await staffNotifications.markAllRead(req.user.id, req.gymContext.gymId);
+    res.json({ marked: n });
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext()]);
 
 registerRoute(router, {
   method: 'GET',

@@ -12,6 +12,7 @@
 //    have their role changed — members must be reassigned first
 //    (enforced here via countActiveAssignments and in gyms.updateGymStaff).
 const { query, transaction } = require('../db/pool');
+const staffNotifications = require('./gymStaffNotifications');
 const branches = require('./gymBranches');
 
 class HttpError extends Error {
@@ -100,6 +101,14 @@ async function assignTrainer(gymId, memberId, actor, ip, { trainer_staff_id } = 
       action: 'trainer.assigned', entity: 'gym_trainer_assignment', entityId: rows[0].id,
       after: { member: memberId, trainer: trainer.trainer_name, replaced: current[0]?.id ?? null },
     });
+    staffNotifications.notifyStaff({
+      gymId, type: 'TRAINER_ASSIGNED',
+      title: 'Trainer assigned',
+      message: `${trainer.trainer_name} was assigned as trainer for ${rows[0].member_name || 'a member'}.`,
+      entityType: 'TRAINER_ASSIGNMENT', entityId: rows[0].id, memberId,
+      actorUserId: actor?.userId ?? actor ?? null,
+      dedupeKey: `trainer_assigned:${rows[0].id}`,
+    });
     return { ...rows[0], trainer_name: trainer.trainer_name };
   });
 }
@@ -123,6 +132,14 @@ async function endTrainerAssignment(gymId, memberId, assignmentId, actor, ip, { 
       gymId, actorUserId: actor?.userId ?? actor ?? null, actorLabel: actor?.label ?? null, ip,
       action: 'trainer.unassigned', entity: 'gym_trainer_assignment', entityId: assignmentId,
       before: { status: 'ACTIVE' }, after: { status: 'ENDED', reason: reason || 'unassigned' },
+    });
+    staffNotifications.notifyStaff({
+      gymId, type: 'TRAINER_UNASSIGNED',
+      title: 'Trainer unassigned',
+      message: `A trainer assignment was ended (${reason || 'unassigned'}).`,
+      entityType: 'TRAINER_ASSIGNMENT', entityId: assignmentId, memberId,
+      actorUserId: actor?.userId ?? actor ?? null,
+      dedupeKey: `trainer_unassigned:${assignmentId}:${updated.rows[0].updated_at.toISOString()}`,
     });
     return updated.rows[0];
   });

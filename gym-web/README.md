@@ -308,6 +308,35 @@ member) — never deleted. Portal surfaces:
   warning with [View Payment] / [Continue Check-in]; attendance stays
   recorded and idempotent (warning + retry never double-counts).
 
+## Staff Notification Center (gym-web phase)
+
+A bell in the global header (unread badge, 45s polling, recent-8 dropdown)
+plus a full `/notifications` page. This is the STAFF-facing stream — separate
+from the member-facing notifications — fed by real business events on the
+backend (payment proofs, member/membership lifecycle, trainer changes,
+inactivity alerts, staff/security events).
+
+- **Recipient-scoped**: the server filters every query by the authenticated
+  user AND the gym context; one staff member can never see another's inbox
+  or another gym's notifications (404/403, never a leak).
+- **Permission-aware**: notifications are created per recipient only when
+  that staff role holds the type's permission (e.g. payment-proof events go
+  to payments.manage holders — front desk/trainer get nothing financial).
+- **Page**: All/Unread tabs, category + severity filters, search (title/
+  message), 25-per-page "Load more", mark-read-on-click, mark all as read,
+  severity-colored unread dots, empty states ("You're all caught up.").
+- **Deep links** (`utils/notificationLinks.ts`): entity_type/member_id →
+  portal routes (payments proof → member payments tab, membership → member
+  membership tab, class → /classes, staff/security → /staff). Opening a
+  notification marks it read and navigates; the underlying entity page
+  re-checks authorization normally (a notification is never credentials).
+- **Dashboard**: "Recent activity" card consumes the same notification list
+  (same source of truth, not a second activity system).
+- Backend: `gym_staff_notifications` (migration 059), central service
+  `gymStaffNotifications.js` (type registry + permission-aware recipients +
+  dedupe keys + lazy maintenance scan for expiry/overdue/inactivity). See
+  the backend README for the full type/permission matrix.
+
 ## Security model
 
 The portal hides UI by role, but the **backend is the authority**: every

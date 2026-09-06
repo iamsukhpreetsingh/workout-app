@@ -20,6 +20,7 @@ const fs = require('fs');
 // production failure.
 const { query, transaction } = require('../db/pool');
 const billing = require('./gymBilling');
+const staffNotifications = require('./gymStaffNotifications');
 const proofStorage = require('./paymentProofStorage');
 const { createNotification } = require('./notifications');
 
@@ -212,7 +213,17 @@ async function submitProof(userId, ip, data, gymAudit) {
       `Your payment proof of ${(amount / 100).toFixed(2)} ${proof.currency} is pending verification.`,
       userId
     );
-    return proofToClient(proof);
+    return { clientProof: proofToClient(proof),
+             raw: { gymId, memberId: member_id, amount, currency: proof.currency } };
+  }).then(({ clientProof, raw }) => {
+    staffNotifications.notifyStaff({
+      gymId: raw.gymId, type: 'PAYMENT_PROOF_SUBMITTED',
+      title: 'Payment proof submitted',
+      message: `A payment proof of ${(raw.amount / 100).toFixed(2)} ${raw.currency} was submitted for verification.`,
+      entityType: 'PAYMENT_PROOF', entityId: clientProof.id, memberId: raw.memberId,
+      dedupeKey: `payment_proof_submitted:${clientProof.id}`,
+    });
+    return clientProof;
   });
 }
 
@@ -245,6 +256,13 @@ async function cancelMyProof(userId, proofId, ip, gymAudit) {
     });
     notifyMember(userId, 'Payment request cancelled',
       'Your payment verification request was cancelled.');
+    staffNotifications.notifyStaff({
+      gymId: proof.gym_id, type: 'PAYMENT_PROOF_CANCELLED',
+      title: 'Payment proof cancelled',
+      message: `The member cancelled their ${(proof.amount_cents / 100).toFixed(2)} ${proof.currency} payment verification request.`,
+      entityType: 'PAYMENT_PROOF', entityId: proof.id, memberId: proof.member_id,
+      dedupeKey: `payment_proof_cancelled:${proof.id}`,
+    });
     return { ok: true };
   });
 }
@@ -310,7 +328,7 @@ async function approveProof(gymId, proofId, actor, ip, gymAudit) {
       { charge_id: proof.charge_id, amount_cents: proof.amount_cents,
         method: proof.method, paid_on: proof.paid_on,
         note: `Member-submitted proof (txn ${proof.transaction_id})`,
-        allow_duplicate: false },
+        allow_duplicate: false, skipStaffNotify: true },
       gymAudit, client
     );
 
@@ -330,7 +348,23 @@ async function approveProof(gymId, proofId, actor, ip, gymAudit) {
         `Your payment of ${(proof.amount_cents / 100).toFixed(2)} ${proof.currency} has been verified.`,
         actor?.userId ?? null);
     }
-    return { proof: proofToClient({ ...proof, status: 'APPROVED' }), payment };
+    return { proof: proofToClient({ ...proof, status: 'APPROVED' }), payment,
+             raw: { gymId, memberId: proof.member_id, amount: proof.amount_cents,
+                    currency: proof.currency } };
+  }).then((result) => {
+    // the SUPERSEDED path returns without a payment — only notify on a real
+    // approval (superseded surfaces its own 409 to the caller)
+    if (result.payment) {
+      staffNotifications.notifyStaff({
+        gymId: result.raw.gymId, type: 'PAYMENT_PROOF_APPROVED',
+        title: 'Payment verified',
+        message: `A ${(result.raw.amount / 100).toFixed(2)} ${result.raw.currency} payment proof was approved — receipt ${result.payment.receipt_number} generated.`,
+        entityType: 'PAYMENT', entityId: result.payment.id, memberId: result.raw.memberId,
+        actorUserId: actor?.userId ?? actor ?? null,
+        dedupeKey: `payment_proof_approved:${result.payment.id}`,
+      });
+    }
+    return result; // preserve proof/payment AND the superseded marker
   });
 }
 
@@ -367,7 +401,19 @@ async function rejectProof(gymId, proofId, actor, ip, { reason } = {}, gymAudit)
         `Your payment proof of ${(proof.amount_cents / 100).toFixed(2)} ${proof.currency} was rejected: ${trimmed}`,
         actor?.userId ?? null);
     }
-    return proofToClient({ ...proof, status: 'REJECTED', rejection_reason: trimmed });
+    return { clientProof: proofToClient({ ...proof, status: 'REJECTED', rejection_reason: trimmed }),
+             raw: { gymId, memberId: proof.member_id, amount: proof.amount_cents,
+                    currency: proof.currency, reason: trimmed } };
+  }).then(({ clientProof, raw }) => {
+    staffNotifications.notifyStaff({
+      gymId: raw.gymId, type: 'PAYMENT_PROOF_REJECTED',
+      title: 'Payment proof rejected',
+      message: `A ${(raw.amount / 100).toFixed(2)} ${raw.currency} payment proof was rejected: ${raw.reason}`,
+      entityType: 'PAYMENT_PROOF', entityId: clientProof.id, memberId: raw.memberId,
+      actorUserId: actor?.userId ?? actor ?? null,
+      dedupeKey: `payment_proof_rejected:${clientProof.id}`,
+    });
+    return clientProof;
   });
 }
 

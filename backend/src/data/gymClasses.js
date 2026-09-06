@@ -31,6 +31,7 @@
 //               from the class branch
 //   room        same branch + room cannot host overlapping classes
 const { query, transaction } = require('../db/pool');
+const staffNotifications = require('./gymStaffNotifications');
 const plans = require('./membershipPlans');
 const branches = require('./gymBranches');
 
@@ -390,6 +391,14 @@ async function cancelClass(gymId, classId, actor, ip, { reason } = {}, gymAudit)
       entity: 'gym_class', entityId: classId,
       before: { status: 'SCHEDULED' }, after: { status: 'CANCELLED', reason: reason || null }, ip,
     });
+    staffNotifications.notifyStaff({
+      gymId, type: 'CLASS_CANCELLED',
+      title: 'Class cancelled',
+      message: `${cls.title || 'A class'} was cancelled${reason ? ` — ${reason}` : ''}. All bookings were released.`,
+      entityType: 'CLASS', entityId: String(classId), memberId: null,
+      actorUserId: actor?.userId ?? null,
+      dedupeKey: `class_cancelled:${classId}:${new Date().toISOString().slice(0, 16)}`,
+    });
     return projectClassFull(client, gymId, classId);
   });
 }
@@ -515,10 +524,19 @@ async function bookClass(gymId, classId, memberId, { source = 'DESK', actor, ip,
         waitlist_position, capacity: cls.capacity, booked: occ[0].n + (full ? 0 : 1) }, ip,
     });
 
-    return {
+    const out = {
       id: rows[0].id, class_id: classId, member_id: memberId,
       status, waitlist_position, spots_left: Math.max(cls.capacity - occ[0].n - (full ? 0 : 1), 0),
     };
+    staffNotifications.notifyStaff({
+      gymId, type: status === 'WAITLISTED' ? 'CLASS_BOOKED' : 'CLASS_BOOKED',
+      title: 'Class booking',
+      message: `${cls.title || 'A class'} — a member ${status === 'WAITLISTED' ? 'joined the waitlist' : 'booked a spot'}.`,
+      entityType: 'CLASS_BOOKING', entityId: String(cls.id), memberId,
+      actorUserId: actor?.userId ?? null,
+      dedupeKey: `class_booking:${rows[0].id}`,
+    });
+    return out;
   });
 }
 

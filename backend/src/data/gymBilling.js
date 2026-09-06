@@ -16,6 +16,7 @@
 //    rejected unless explicitly forced.
 //  - A payment can never exceed the charge's outstanding balance.
 const { query, transaction } = require('../db/pool');
+const staffNotifications = require('./gymStaffNotifications');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -224,8 +225,20 @@ async function recordPayment(gymId, memberId, actor, ip, data, gymAudit, dbClien
     });
     return getPayment(gymId, payment.id, client);
   };
-  if (dbClient) return run(dbClient);
-  return transaction(run);
+  const result = dbClient ? await run(dbClient) : await transaction(run);
+  // staff notification (payment proof approvals pass skipStaffNotify — they
+  // emit their own PAYMENT_PROOF_APPROVED instead). Fire-and-forget.
+  if (!data.skipStaffNotify) {
+    staffNotifications.notifyStaff({
+      gymId, type: 'PAYMENT_RECORDED',
+      title: 'Payment recorded',
+      message: `${((result.amount_cents || 0) / 100).toFixed(2)} ${result.currency} payment recorded — receipt ${result.receipt_number}.`,
+      entityType: 'PAYMENT', entityId: result.id, memberId,
+      actorUserId: actor?.userId ?? actor ?? null,
+      dedupeKey: `payment_recorded:${result.id}`,
+    });
+  }
+  return result;
 }
 
 const PAYMENT_SELECT = `
@@ -325,7 +338,16 @@ async function refundPayment(gymId, memberId, paymentId, actor, ip, data, gymAud
       action: 'payment.refunded', entity: 'membership_payment', entityId: paymentId,
       after: { refund_id: rows[0].id, amount_cents: amount, reason: data.reason ?? null },
     });
-    return { refund: rows[0], payment: await getPayment(gymId, paymentId, client) };
+    const out = { refund: rows[0], payment: await getPayment(gymId, paymentId, client) };
+    staffNotifications.notifyStaff({
+      gymId, type: 'PAYMENT_REFUNDED',
+      title: 'Payment refunded',
+      message: `${((rows[0].amount_cents || 0) / 100).toFixed(2)} ${rows[0].currency} refunded against receipt ${out.payment?.receipt_number || paymentId}.`,
+      entityType: 'PAYMENT', entityId: paymentId, memberId,
+      actorUserId: actor?.userId ?? actor ?? null,
+      dedupeKey: `payment_refunded:${rows[0].id}`,
+    });
+    return out;
   });
 }
 

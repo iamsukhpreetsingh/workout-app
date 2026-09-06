@@ -12,6 +12,7 @@
 //  - The last ACTIVE OWNER of a gym can never be demoted/removed.
 const { pool, query, transaction } = require('../db/pool');
 const { hasPermission } = require('./gymPermissions');
+const staffNotifications = require('./gymStaffNotifications');
 const crypto = require('crypto');
 
 // an accepted invitation never outlives this window
@@ -489,6 +490,16 @@ async function updateGymStaff(gymId, staffId, actor, ip, { gym_role, status }) {
       before: { gym_role: current.gym_role, status: current.status },
       after: { gym_role: rows[0].gym_role, status: rows[0].status },
     });
+    if (gym_role && gym_role !== current.gym_role) {
+      staffNotifications.notifyStaff({
+        gymId, type: 'STAFF_ROLE_CHANGED',
+        title: 'Security alert — staff role changed',
+        message: `Staff role changed from ${current.gym_role} to ${rows[0].gym_role}.`,
+        entityType: 'STAFF', entityId: staffId, memberId: null,
+        actorUserId: actor?.userId ?? actor ?? null,
+        dedupeKey: `staff_role_changed:${staffId}:${rows[0].updated_at.toISOString()}`,
+      });
+    }
     return rows[0];
   });
 }
@@ -746,6 +757,16 @@ async function reactivateGymMember(gymId, memberId, actor, ip) {
       action: wasLeft ? 'member.rejoined' : 'member.reactivated', entity: 'gym_member', entityId: memberId,
       before: { status: rows[0].status }, after: { status: 'ACTIVE' },
     });
+    if (wasLeft) {
+      staffNotifications.notifyStaff({
+        gymId, type: 'MEMBER_REJOINED',
+        title: 'Member rejoined',
+        message: `${updated[0].first_name || 'A member'}${updated[0].last_name ? ' ' + updated[0].last_name : ''} (${updated[0].member_code}) rejoined — same member identity, history restored.`,
+        entityType: 'MEMBER', entityId: memberId, memberId,
+        actorUserId: actor?.userId ?? null,
+        dedupeKey: `member_rejoined:${memberId}:${updated[0].updated_at.toISOString()}`,
+      });
+    }
     return memberToClient(updated[0]);
   });
 }
@@ -804,6 +825,13 @@ async function leaveGymAsMember(userId, gymId, ip, { note } = {}) {
       before: { status: member.status },
       after: { status: 'LEFT', reason: 'USER_LEFT', note: note || null },
     });
+    staffNotifications.notifyStaff({
+      gymId, type: 'MEMBER_LEFT',
+      title: 'Member left gym',
+      message: `${member.first_name || 'A member'}${member.last_name ? ' ' + member.last_name : ''} (${member.member_code}) left the gym via the app. History is preserved.`,
+      entityType: 'MEMBER', entityId: member.id, memberId: member.id,
+      dedupeKey: `member_left:${member.id}:${updated[0].updated_at.toISOString()}`,
+    });
     return memberToClient(updated[0]);
   });
 }
@@ -830,6 +858,14 @@ async function archiveGymMember(gymId, memberId, actor, ip, { reason } = {}) {
       action: 'member.removed_by_admin', entity: 'gym_member', entityId: memberId,
       before: { status: rows[0].status },
       after: { status: 'LEFT', reason: 'REMOVED_BY_ADMIN', note: reason || null },
+    });
+    staffNotifications.notifyStaff({
+      gymId, type: 'MEMBER_ARCHIVED',
+      title: 'Member archived',
+      message: `${rows[0].first_name || 'A member'}${rows[0].last_name ? ' ' + rows[0].last_name : ''} (${rows[0].member_code}) was archived by staff. History is preserved.`,
+      entityType: 'MEMBER', entityId: memberId, memberId,
+      actorUserId: actor?.userId ?? null,
+      dedupeKey: `member_archived:${memberId}:${updated[0].updated_at.toISOString()}`,
     });
     return memberToClient(updated[0]);
   });
@@ -1007,6 +1043,14 @@ async function linkMemberToApp(gymId, memberId, actor, ip, { email }) {
       after: { app_user_id: user.id, user_email: user.email, profile_backfilled: backfilled },
     });
     const refreshed = await client.query('SELECT * FROM gym_members WHERE id = $1', [member.id]);
+    staffNotifications.notifyStaff({
+      gymId, type: 'MEMBER_APP_CONNECTED',
+      title: 'App account connected',
+      message: `${refreshed.rows[0].first_name || 'A member'}${refreshed.rows[0].last_name ? ' ' + refreshed.rows[0].last_name : ''} (${refreshed.rows[0].member_code}) is now connected to the mobile app.`,
+      entityType: 'MEMBER', entityId: member.id, memberId: member.id,
+      actorUserId: actor?.userId ?? null,
+      dedupeKey: `member_app_connected:${member.id}:${refreshed.rows[0].updated_at.toISOString()}`,
+    });
     return memberToClient({ ...refreshed.rows[0],
       profile_backfilled: backfilled });
   });
@@ -1241,6 +1285,13 @@ async function acceptStaffInvitation(code, userId, ip) {
       action: 'staff.invite_accepted', entity: 'gym_staff_invite', entityId: invite.id,
       after: { user_id: userId, gym_role: invite.gym_role },
     });
+    staffNotifications.notifyStaff({
+      gymId: invite.gym_id, type: 'STAFF_INVITATION_ACCEPTED',
+      title: 'Staff invitation accepted',
+      message: `${invite.email} accepted the ${invite.gym_role} staff invitation.`,
+      entityType: 'STAFF', entityId: String(invite.id), memberId: null,
+      dedupeKey: `staff_invite_accepted:${invite.id}`,
+    });
     return { ok: true, gymName: invite.gym_name, gymRole: invite.gym_role };
   });
 }
@@ -1440,6 +1491,13 @@ async function acceptInvitation(code, userId, ip) {
       gymId: invite.gym_id, actorUserId: user.id, ip,
       action: 'member.invite_accepted', entity: 'gym_member', entityId: memberRows[0].id,
       after: { app_user_id: user.id, email: user.email },
+    });
+    staffNotifications.notifyStaff({
+      gymId: invite.gym_id, type: 'MEMBER_JOINED',
+      title: 'New member joined',
+      message: `${memberRows[0].first_name || user.name || 'A new member'}${memberRows[0].last_name ? ' ' + memberRows[0].last_name : ''} (${memberRows[0].member_code}) accepted the gym invitation and joined.`,
+      entityType: 'MEMBER', entityId: memberRows[0].id, memberId: memberRows[0].id,
+      dedupeKey: `member_joined:${memberRows[0].id}:${user.id}`,
     });
     return {
       ok: true,

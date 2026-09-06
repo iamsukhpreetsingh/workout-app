@@ -39,6 +39,8 @@ import AnnouncementsPage from './pages/AnnouncementsPage';
 import BranchesPage from './pages/BranchesPage';
 import ClassesPage from './pages/ClassesPage';
 import ReportsPage from './pages/ReportsPage';
+import NotificationsPage from './pages/NotificationsPage';
+import NotificationBell from './components/NotificationBell';
 import StaffPage from './pages/StaffPage';
 import TrainersPage from './pages/TrainersPage';
 
@@ -220,6 +222,8 @@ function Shell() {
         <AnnouncementsPage gymId={gymId!} />)} />
       <Route path="/reports" element={permGuard(['reports.view'], <ReportsPage />)} />
 
+      <Route path="/notifications" element={<NotificationsPage />} />
+
       <Route path="/settings" element={<Navigate to="/settings/profile" replace />} />
       <Route path="/settings/:tab" element={permGuard(['settings.manage'],
         <SettingsPage gymId={gymId!} myRole={ctx?.role || null} />)} />
@@ -270,7 +274,13 @@ function Shell() {
   return (
     <GymContext.Provider value={ctx}>
       <Layout style={{ minHeight: '100vh' }}>
-        <Header style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 16, paddingInline: isMobile ? 12 : 16 }}>
+        <Header style={{
+          display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 16,
+          paddingInline: isMobile ? 12 : 16,
+          // sticky shell: the header and side nav stay fixed; only the
+          // selected page's content scrolls
+          position: 'sticky', top: 0, zIndex: 200,
+        }}>
           {isMobile && (
             <Button
               type="text"
@@ -286,11 +296,16 @@ function Shell() {
           )}
           {gymSelect}
           <div style={{ flex: 1 }} />
+          <NotificationBell gymId={gymId} enabled={!!ctx} />
           {accountDropdown}
         </Header>
         <Layout>
           {!isMobile && (
-            <Sider width={200} theme="dark">
+            <Sider
+              width={200}
+              theme="dark"
+              style={{ position: 'sticky', top: 64, height: 'calc(100vh - 64px)', overflowY: 'auto' }}
+            >
               {navMenu()}
             </Sider>
           )}

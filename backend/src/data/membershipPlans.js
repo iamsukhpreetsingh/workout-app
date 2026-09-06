@@ -14,6 +14,7 @@
 const { query, transaction } = require('../db/pool');
 const branches = require('./gymBranches');
 const billing = require('./gymBilling');
+const staffNotifications = require('./gymStaffNotifications');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -593,6 +594,14 @@ async function assignMembership(gymId, memberId, actor, ip, { plan_id, starts_on
       { details: { plan: rows[0].plan_name, price_cents: rows[0].price_cents }, actor });
     // billing: every sale opens a DUE charge from the term's price snapshot
     await billing.createChargeForMembership(client, gymId, memberId, rows[0], actor);
+    staffNotifications.notifyStaff({
+      gymId, type: 'MEMBERSHIP_ASSIGNED',
+      title: 'Membership assigned',
+      message: `${rows[0].plan_name} membership assigned (${rows[0].starts_on} → ${rows[0].ends_on}).`,
+      entityType: 'MEMBERSHIP', entityId: rows[0].id, memberId,
+      actorUserId: actor?.userId ?? actor ?? null,
+      dedupeKey: `membership_assigned:${rows[0].id}`,
+    });
     return rows[0];
   });
 }
@@ -627,6 +636,14 @@ async function cancelMembership(gymId, memberId, membershipId, actor, ip, { reas
       before: { status: m.status }, after: { status: 'CANCELLED', reason: reason || 'member_request' },
     });
     await recordEvent(client, gymId, m.id, 'cancelled', { details: { reason: reason || 'member_request' }, actor });
+    staffNotifications.notifyStaff({
+      gymId, type: 'MEMBERSHIP_CANCELLED',
+      title: 'Membership cancelled',
+      message: `${m.plan_name || 'Membership'} was cancelled${reason ? ` — ${reason}` : ''}.`,
+      entityType: 'MEMBERSHIP', entityId: m.id, memberId,
+      actorUserId: actor?.userId ?? actor ?? null,
+      dedupeKey: `membership_cancelled:${m.id}:${updated.rows[0].updated_at?.toISOString?.() || ''}`,
+    });
     return updated.rows[0];
   });
 }
@@ -704,6 +721,14 @@ async function renewMembership(gymId, memberId, membershipId, actor, ip, gymAudi
     await recordEvent(client, gymId, created.rows[0].id, 'renewed',
       { details: { previous: current.id, price_cents: created.rows[0].price_cents }, actor });
     await billing.createChargeForMembership(client, gymId, memberId, created.rows[0], actor);
+    staffNotifications.notifyStaff({
+      gymId, type: 'MEMBERSHIP_RENEWED',
+      title: 'Membership renewed',
+      message: `${created.rows[0].plan_name} renewed for a new term (${created.rows[0].starts_on} → ${created.rows[0].ends_on}).`,
+      entityType: 'MEMBERSHIP', entityId: created.rows[0].id, memberId,
+      actorUserId: actor?.userId ?? actor ?? null,
+      dedupeKey: `membership_renewed:${created.rows[0].id}`,
+    });
     return created.rows[0];
   });
 }
@@ -762,6 +787,14 @@ async function freezeMembership(gymId, memberId, membershipId, actor, ip, { star
     });
     await recordEvent(client, gymId, term.id, 'frozen',
       { details: { starts_on: start, reason: reason || null }, actor });
+    staffNotifications.notifyStaff({
+      gymId, type: 'MEMBERSHIP_FROZEN',
+      title: 'Membership frozen',
+      message: `${term.plan_name || 'Membership'} frozen${reason ? ` — ${reason}` : ''}.`,
+      entityType: 'MEMBERSHIP', entityId: term.id, memberId,
+      actorUserId: actor?.userId ?? actor ?? null,
+      dedupeKey: `membership_frozen:${term.id}:${start}`,
+    });
     return { membership: { ...term, status: 'FROZEN' }, freeze: freezeRows[0] };
   });
 }
@@ -843,6 +876,14 @@ async function resumeMembership(gymId, memberId, membershipId, actor, ip, { resu
     });
     await recordEvent(client, gymId, term.id, cancel ? 'freeze_cancelled' : 'resumed',
       { details: { frozen_days: frozenDays, ends_on: updated.rows[0].ends_on }, actor });
+    staffNotifications.notifyStaff({
+      gymId, type: 'MEMBERSHIP_RESUMED',
+      title: 'Membership resumed',
+      message: `${term.plan_name || 'Membership'} resumed${cancel ? ' (freeze cancelled)' : ''} — ends ${updated.rows[0].ends_on}.`,
+      entityType: 'MEMBERSHIP', entityId: term.id, memberId,
+      actorUserId: actor?.userId ?? actor ?? null,
+      dedupeKey: `membership_resumed:${term.id}:${updated.rows[0].updated_at?.toISOString?.() || ''}`,
+    });
     return { membership: updated.rows[0], frozen_days: frozenDays };
   });
 }

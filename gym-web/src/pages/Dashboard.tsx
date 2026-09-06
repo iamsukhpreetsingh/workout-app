@@ -5,14 +5,19 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Card, Col, Row, Progress, Tag, List, Alert, Button, Skeleton,
-  Typography, Space, Descriptions, App as AntApp, Popconfirm,
+  Typography, Space, Descriptions, App as AntApp, Popconfirm, Badge, Statistic,
 } from 'antd';
 import {
   EnvironmentOutlined, PhoneOutlined, MailOutlined, GlobalOutlined,
   ClockCircleOutlined, ReloadOutlined, SettingOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { Gym, fetchGymLogoBlobUrl, reactivateGym, getGym } from '../api';
+import { Gym, fetchGymLogoBlobUrl, reactivateGym, getGym, getDashboard, formatMoney, listClasses, GymDashboard } from '../api';
+import { listStaffNotifications, StaffNotification } from '../api/staffNotifications';
+import {
+  TeamOutlined, UserOutlined, DollarOutlined, WarningOutlined,
+  RiseOutlined, CalendarOutlined, FieldTimeOutlined,
+} from '@ant-design/icons';
 
 const MISSING_LABELS: Record<string, string> = {
   logo: 'Logo', address: 'Address', phone: 'Phone', email: 'Email',
@@ -32,12 +37,28 @@ export default function Dashboard({ gymId, myRole }: Props) {
   const [loading, setLoading] = useState(true);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [reactivating, setReactivating] = useState(false);
+  const [recent, setRecent] = useState<StaffNotification[] | null>(null);
+  const [kpi, setKpi] = useState<GymDashboard | null>(null);
+  const [upcomingClasses, setUpcomingClasses] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const g = await getGym(gymId);
+      // Recent Activity (same source of truth as the Notification Center —
+      // NOT a second activity system). Best-effort: dashboard never fails
+      // because the notification list did.
+      try { setRecent(await listStaffNotifications(gymId, { limit: 5 })); } catch { setRecent(null); }
+      // KPI strip — one aggregated backend payload + a lightweight upcoming-
+      // classes count. Best-effort: the dashboard renders without them.
+      try { setKpi(await getDashboard(gymId)); } catch { setKpi(null); }
+      try {
+        const from = new Date().toISOString().slice(0, 10);
+        const to = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+        const cls = await listClasses(gymId, { from, to, status: 'SCHEDULED', limit: 100 });
+        setUpcomingClasses(Array.isArray(cls) ? cls.length : null);
+      } catch { setUpcomingClasses(null); }
       setGym(g);
       setLogoUrl(await fetchGymLogoBlobUrl(gymId));
     } catch (e: any) {
@@ -119,6 +140,81 @@ export default function Dashboard({ gymId, myRole }: Props) {
         {myRole && <Tag>{myRole}</Tag>}
       </Space>
 
+      {/* KPI strip — the numbers an owner checks first. Compact stat chips,
+          responsive: 6-across on desktop, 2-across on phones. */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small">
+            <Statistic
+              title="Members"
+              value={kpi ? `${kpi.members.active}/${kpi.members.total}` : '—'}
+              prefix={<TeamOutlined style={{ color: primary }} />}
+              valueStyle={{ fontSize: 20 }}
+            />
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>active / total</Typography.Text>
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small">
+            <Statistic
+              title="In gym today"
+              value={kpi ? kpi.attendance.today : '—'}
+              prefix={<UserOutlined style={{ color: primary }} />}
+              valueStyle={{ fontSize: 20 }}
+            />
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>visits so far</Typography.Text>
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small">
+            <Statistic
+              title="Due payments"
+              value={kpi ? formatMoney(kpi.financial.outstanding_cents, kpi.financial.currency) : '—'}
+              prefix={<DollarOutlined style={{ color: primary }} />}
+              valueStyle={{ fontSize: 20 }}
+            />
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              {kpi ? `${kpi.financial.open_charges} open charge${kpi.financial.open_charges === 1 ? '' : 's'}` : ''}
+            </Typography.Text>
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small">
+            <Statistic
+              title="Overdue"
+              value={kpi ? formatMoney(kpi.financial.overdue_cents, kpi.financial.currency) : '—'}
+              prefix={<WarningOutlined style={{ color: '#faad14' }} />}
+              valueStyle={{ fontSize: 20, color: kpi && kpi.financial.overdue_cents > 0 ? '#faad14' : undefined }}
+            />
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              {kpi ? `${kpi.financial.overdue_charges} charge${kpi.financial.overdue_charges === 1 ? '' : 's'}` : ''}
+            </Typography.Text>
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small">
+            <Statistic
+              title="Revenue (month)"
+              value={kpi ? formatMoney(kpi.financial.collected_month_cents, kpi.financial.currency) : '—'}
+              prefix={<RiseOutlined style={{ color: '#16A34A' }} />}
+              valueStyle={{ fontSize: 20 }}
+            />
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>net collected</Typography.Text>
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small">
+            <Statistic
+              title="Classes (7d)"
+              value={upcomingClasses ?? '—'}
+              prefix={<CalendarOutlined style={{ color: primary }} />}
+              valueStyle={{ fontSize: 20 }}
+            />
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>scheduled ahead</Typography.Text>
+          </Card>
+        </Col>
+      </Row>
+
       <Row gutter={[16, 16]}>
         <Col xs={24} md={8}>
           <Card title="Profile completion" extra={
@@ -150,7 +246,7 @@ export default function Dashboard({ gymId, myRole }: Props) {
           </Card>
         </Col>
 
-        <Col xs={24} md={16}>
+        <Col xs={24} md={10}>
           <Card title="Gym summary">
             <Descriptions column={1} size="small">
               <Descriptions.Item label={<><EnvironmentOutlined /> Address</>}>
@@ -178,6 +274,48 @@ export default function Dashboard({ gymId, myRole }: Props) {
               <Descriptions.Item label="Timezone">{gym.timezone}</Descriptions.Item>
               <Descriptions.Item label="Currency">{gym.currency}</Descriptions.Item>
             </Descriptions>
+          </Card>
+        </Col>
+
+        {/* compact Recent activity — sits beside the summary on desktop,
+            stacks under it on phones */}
+        <Col xs={24} md={6}>
+          <Card
+            size="small"
+            title="Recent activity"
+            styles={{ body: { paddingTop: 4 } }}
+            extra={<Button size="small" type="link" onClick={() => navigate('/notifications')}>All</Button>}
+          >
+            {recent === null || recent.length === 0 ? (
+              <Typography.Text type="secondary">You're all caught up.</Typography.Text>
+            ) : (
+              <List
+                size="small"
+                dataSource={recent}
+                renderItem={(n) => (
+                  <List.Item style={{ cursor: 'pointer', padding: '6px 0' }}
+                    onClick={() => navigate('/notifications')}>
+                    <div style={{ width: '100%', minWidth: 0 }}>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        {!n.is_read && <Badge status="processing" />}
+                        <Typography.Text strong={!n.is_read} style={{ fontSize: 12.5 }} ellipsis>
+                          {n.title}
+                        </Typography.Text>
+                      </div>
+                      {n.member_name && (
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                          {n.member_name}
+                        </Typography.Text>
+                      )}
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: 0 }}
+                        ellipsis={{ rows: 2 }}>
+                        {n.message}
+                      </Typography.Paragraph>
+                    </div>
+                  </List.Item>
+                )}
+              />
+            )}
           </Card>
         </Col>
 

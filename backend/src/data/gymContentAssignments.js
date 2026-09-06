@@ -35,6 +35,7 @@
 //    aggregation only serves rows for ACTIVE members of ACTIVE gyms, so
 //    reactivation restores everything untouched.
 const { query, transaction } = require('../db/pool');
+const staffNotifications = require('./gymStaffNotifications');
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -253,7 +254,7 @@ async function assignContent(gymId, memberId, actor, ip, payload = {}, gymAudit,
         notes: clean || undefined,
       },
     });
-    return {
+    const result = {
       ...created,
       starts_on: created.starts_on instanceof Date ? created.starts_on.toISOString().slice(0, 10) : created.starts_on,
       ends_on: created.ends_on instanceof Date
@@ -264,6 +265,16 @@ async function assignContent(gymId, memberId, actor, ip, payload = {}, gymAudit,
       [content_type === 'WORKOUT' ? 'workout_title' : 'item_title']: content.title,
       [content_type === 'WORKOUT' ? 'workout_version' : 'item_version']: content.version,
     };
+    staffNotifications.notifyStaff({
+      gymId, type: content_type === 'WORKOUT' ? 'WORKOUT_ASSIGNED' : 'NUTRITION_ASSIGNED',
+      title: content_type === 'WORKOUT' ? 'Workout assigned' : 'Nutrition plan assigned',
+      message: `${content.title} was assigned to a member.`,
+      entityType: content_type === 'WORKOUT' ? 'WORKOUT_ASSIGNMENT' : 'NUTRITION_ASSIGNMENT',
+      entityId: String(created.id), memberId,
+      actorUserId: actor?.userId ?? actor ?? null,
+      dedupeKey: `content_assigned:${created.id}`,
+    });
+    return result;
   });
 }
 
