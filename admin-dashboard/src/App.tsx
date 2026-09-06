@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Layout, Menu, Button, Typography, message } from 'antd';
 import {
+  HomeOutlined,
   ShopOutlined,
   DatabaseOutlined,
   ApiOutlined,
@@ -26,6 +27,7 @@ import { ImpersonationProvider, ImpersonationBanner } from './impersonation';
 import LoginPage from './pages/LoginPage';
 import OverviewPage from './pages/OverviewPage';
 import PlatformPage from './pages/PlatformPage';
+import GymsPage from './pages/GymsPage';
 import DatabasePage from './pages/DatabasePage';
 import ApiExplorerPage from './pages/ApiExplorerPage';
 import UsersPage from './pages/UsersPage';
@@ -64,6 +66,7 @@ export default function App() {
   const items = [
     { key: 'overview', icon: <DashboardOutlined />, label: 'Dashboard' },
     { key: 'platform', icon: <ShopOutlined />, label: 'Platform' },
+    { key: 'gyms', icon: <HomeOutlined />, label: 'Gyms' },
     { key: 'database', icon: <DatabaseOutlined />, label: 'Database' },
     { key: 'api', icon: <ApiOutlined />, label: 'API Explorer' },
     { key: 'users', icon: <TeamOutlined />, label: 'Users & Trainers' },
@@ -118,6 +121,7 @@ export default function App() {
           <Content style={{ paddingTop: 24, paddingRight: 24, paddingBottom: 24, paddingLeft: 24, overflow: 'auto' }} className="admin-content">
             {page === 'overview' && <OverviewPage />}
             {page === 'platform' && <PlatformPage />}
+            {page === 'gyms' && <GymsPage profile={p} />}
             {page === 'database' && <DatabasePage />}
             {page === 'api' && <ApiExplorerPage />}
             {page === 'users' && <UsersPage />}

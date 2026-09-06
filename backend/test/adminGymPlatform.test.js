@@ -19,6 +19,8 @@ process.env.ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || 'admin-test-secre
 const { pool, query } = require('../src/db/pool');
 const adminAuth = require('../src/admin/auth');
 const adminModules = require('../src/admin/modules');
+const adminGyms = require('../src/admin/gyms');
+const gymRoutes = require('../src/routes/gym');
 
 let app;
 let server;
@@ -58,6 +60,8 @@ before(async () => {
   app.use(express.json());
   app.use('/admin', adminAuth.router);
   app.use('/admin', adminModules.router);
+  app.use('/admin', adminGyms.router);
+  app.use('/gym', gymRoutes);
   await new Promise((resolve) => { server = app.listen(0, resolve); });
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 
@@ -126,3 +130,83 @@ test('F1: unauthenticated access is rejected', async () => {
   const res = await fetch(`${baseUrl}/admin/analytics/platform`);
   assert.equal(res.status, 401);
 });
+
+// ── F2: gym management + platform lifecycle ─────────────────────────────
+
+let gymA2, gymB2, ownerA2;
+
+test('F2 setup: two gyms with owners', async () => {
+  ownerA2 = await makeAppUser(`gp_owner_${suffix}@test.local`);
+  await query(`INSERT INTO gyms (name, slug) VALUES ($1, $2)`,
+    [`AdminGymTest ${suffix} Alpha`, `admingymtest-alpha-${suffix}`]);
+  gymA2 = (await query(`SELECT id FROM gyms WHERE slug = $1`, [`admingymtest-alpha-${suffix}`])).rows[0].id;
+  await query(`INSERT INTO gym_staff (gym_id, user_id, gym_role) VALUES ($1, $2, 'OWNER')`, [gymA2, ownerA2]);
+  await query(`INSERT INTO gyms (name, slug) VALUES ($1, $2)`,
+    [`AdminGymTest ${suffix} Beta`, `admingymtest-beta-${suffix}`]);
+  gymB2 = (await query(`SELECT id FROM gyms WHERE slug = $1`, [`admingymtest-beta-${suffix}`])).rows[0].id;
+});
+
+test('F2: platform gym list — search by name, status filter, counts', async () => {
+  const res = await adminApi('analyst', 'GET', `/admin/gyms?q=${encodeURIComponent('AdminGymTest ' + suffix)}`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok(body.total >= 1);
+  const gym = body.gyms.find((g) => g.slug === `admingymtest-alpha-${suffix}`);
+  assert.ok(gym, 'alpha gym in list');
+  assert.equal(gym.owner_email, `gp_owner_${suffix}@test.local`, 'owner resolved');
+  // status filter
+  const onlyActive = await (await adminApi('analyst', 'GET', '/admin/gyms?status=ACTIVE')).json();
+  assert.ok(onlyActive.gyms.every((g) => g.status === 'ACTIVE'));
+});
+
+test('F2: gym detail — staff roster + counts', async () => {
+  const res = await adminApi('analyst', 'GET', `/admin/gyms/${gymA2}`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.gym.id, gymA2);
+  assert.ok(body.staff.some((s) => s.gym_role === 'OWNER'));
+  assert.ok(typeof body.counts.members === 'number');
+  // unknown id → 404
+  const missing = await adminApi('analyst', 'GET', `/admin/gyms/${crypto.randomUUID()}`);
+  assert.equal(missing.status, 404);
+});
+
+test('F2: suspend requires super_admin', async () => {
+  const res = await adminApi('analyst', 'PATCH', `/admin/gyms/${gymA2}/suspend`, { reason: 'not allowed' });
+  assert.equal(res.status, 403);
+});
+
+test('F2: suspend → gym stops operating (guard chain) → reactivate restores', async () => {
+  // owner suspends... no — ADMIN suspends; the portal guard must 403 immediately
+  const res = await adminApi('super_admin', 'PATCH', `/admin/gyms/${gymA2}/suspend`,
+    { reason: 'terms of service violation' });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).status, 'SUSPENDED');
+
+  // the gym's OWN owner now hits the suspended wall (same chain as the portal)
+  const appRes = await fetch(`${baseUrl}/gym/${gymA2}/permissions`, {
+    headers: { Authorization: `Bearer ${await appUserToken(ownerA2)}` },
+  });
+  const body = await appRes.json();
+  assert.equal(appRes.status, 403, JSON.stringify(body));
+  assert.strictEqual(body.error, 'This gym is suspended');
+
+  // double suspend is a 404-shaped no-op (already suspended)
+  const again = await adminApi('super_admin', 'PATCH', `/admin/gyms/${gymA2}/suspend`, { reason: 'again' });
+  assert.equal(again.status, 404);
+
+  // reactivate
+  const re = await adminApi('super_admin', 'PATCH', `/admin/gyms/${gymA2}/reactivate`, {});
+  assert.equal(re.status, 200);
+  assert.equal((await re.json()).status, 'ACTIVE');
+  const appRes2 = await fetch(`${baseUrl}/gym/${gymA2}/permissions`, {
+    headers: { Authorization: `Bearer ${await appUserToken(ownerA2)}` },
+  });
+  assert.equal(appRes2.status, 200);
+});
+
+// small helper: mint an app JWT for an app user (uses the app auth secret)
+async function appUserToken(userId) {
+  const jwt = require('jsonwebtoken');
+  return jwt.sign({ id: userId, role: 'user' }, process.env.JWT_SECRET, { expiresIn: '5m' });
+}

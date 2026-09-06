@@ -148,6 +148,7 @@ app.use('/admin', adminAuth.router);
 app.use('/admin', adminGeneric.router);
 app.use('/admin', adminModules.router);
 // purpose-built admin modules (Phases 5-12) — one router per module
+app.use('/admin', require('./src/admin/gyms').router);
 app.use('/admin', require('./src/admin/relationships').router);
 app.use('/admin', require('./src/admin/intakeProfiles').router);
 app.use('/admin', require('./src/admin/progressionAdmin').router);
