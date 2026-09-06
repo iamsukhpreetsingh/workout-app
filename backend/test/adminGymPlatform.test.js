@@ -88,6 +88,18 @@ after(async () => {
   await pool.end();
 });
 
+
+// tiny fixture helper shared by F4 tests
+const gymsFixtures = {
+  async createMember(gymId, firstName) {
+    const { rows } = await query(
+      `INSERT INTO gym_members (gym_id, first_name) VALUES ($1, $2) RETURNING id`,
+      [gymId, firstName]
+    );
+    return rows[0];
+  },
+};
+
 function adminApi(role, method, path, body) {
   return fetch(`${baseUrl}${path}`, {
     method,
@@ -235,4 +247,48 @@ test('F3: platform leads list — gym name joined, filters work, cross-gym visib
 test('F3: unauthenticated leads access rejected', async () => {
   const res = await fetch(`${baseUrl}/admin/leads`);
   assert.equal(res.status, 401);
+});
+
+// ── F4: platform attendance + memberships views ──────────────────────────
+
+test('F4: platform memberships — rows carry gym+member, status/gym filters', async () => {
+  const m = await gymsFixtures.createMember(gymA2, 'Four Member');
+  const plan = (await query(
+    `INSERT INTO membership_plans (gym_id, name, duration_value, duration_unit, price_cents, currency, status)
+     VALUES ($1, 'F4Plan', 1, 'month', 99900, 'INR', 'ACTIVE') RETURNING id`, [gymA2])).rows[0];
+  const term = (await query(
+    `INSERT INTO member_memberships (gym_id, member_id, plan_id, plan_name, plan_duration_value,
+       plan_duration_unit, price_cents, currency, status, starts_on, ends_on)
+     VALUES ($1, $2, $3, 'F4Plan', 1, 'month', 99900, 'INR', 'ACTIVE', CURRENT_DATE - 5, CURRENT_DATE + 25)
+     RETURNING id`, [gymA2, m.id, plan.id])).rows[0];
+
+  const all = await (await adminApi('analyst', 'GET', '/admin/memberships?limit=100')).json();
+  const row = all.memberships.find((r) => r.id === term.id);
+  assert.ok(row, 'the new term is visible platform-wide');
+  assert.ok(row.gym_name.includes('Alpha'), 'gym name joined');
+  assert.equal(row.status, 'ACTIVE');
+
+  const filtered = await (await adminApi('analyst', 'GET', `/admin/memberships?gym_id=${gymB2}`)).json();
+  assert.ok(filtered.memberships.every((r) => r.gym_id === gymB2), 'gym filter works');
+  await pool.query('DELETE FROM member_memberships WHERE id = $1', [term.id]);
+  await pool.query('DELETE FROM membership_plans WHERE id = $1', [plan.id]);
+});
+
+test('F4: platform attendance — visit visible with member+gym, date filters', async () => {
+  const m = await gymsFixtures.createMember(gymA2, 'Four Visitor');
+  const visit = (await query(
+    `INSERT INTO gym_attendance (gym_id, member_id, source, check_in_at, local_date)
+     VALUES ($1, $2, 'FRONT_DESK', now() - interval '2 hours', CURRENT_DATE) RETURNING id`,
+    [gymA2, m.id])).rows[0];
+
+  const all = await (await adminApi('analyst', 'GET', '/admin/attendance?limit=100')).json();
+  const row = all.attendance.find((r) => r.id === visit.id);
+  assert.ok(row, 'the visit is visible platform-wide');
+  assert.ok(row.member_name.includes('Four Visitor'), 'member name joined');
+  assert.ok(row.gym_name.includes('Alpha'), 'gym name joined');
+
+  // date range that excludes it
+  const empty = await (await adminApi('analyst', 'GET', '/admin/attendance?from=2020-01-01&to=2020-01-02')).json();
+  assert.equal(empty.total, 0, 'outside the range → nothing');
+  await pool.query('DELETE FROM gym_attendance WHERE id = $1', [visit.id]);
 });

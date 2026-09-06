@@ -140,6 +140,87 @@ registerRoute(router, {
   } catch (e) { err(res, e); }
 }, requireAdminRole('analyst', 'super_admin', 'support', 'read_only'));
 
+
+registerRoute(router, {
+  method: 'GET', path: '/attendance', category: 'Gyms',
+  description: 'Platform-wide attendance visibility (read-only — the check-in workflow stays in the Gym Portal). Filters: gym_id, from/to (YYYY-MM-DD, gym-local visit date), limit/offset. Rows carry member + gym names.',
+  allowedRoles: ['analyst', 'super_admin', 'support', 'read_only'],
+}, async (req, res) => {
+  try {
+    const lim = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 100);
+    const off = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    const where = ['TRUE'];
+    const vals = [];
+    if (req.query.gym_id && UUID_RE.test(req.query.gym_id)) {
+      vals.push(req.query.gym_id); where.push(`a.gym_id = $${vals.length}`);
+    }
+    if (req.query.from && DATE_RE.test(req.query.from)) {
+      vals.push(req.query.from); where.push(`a.local_date >= $${vals.length}::date`);
+    }
+    if (req.query.to && DATE_RE.test(req.query.to)) {
+      vals.push(req.query.to); where.push(`a.local_date <= $${vals.length}::date`);
+    }
+    const { rows } = await query(
+      `SELECT a.id, a.local_date, a.check_in_at, a.source,
+              gm.first_name || ' ' || COALESCE(gm.last_name, '') AS member_name,
+              gm.member_code, g.name AS gym_name, g.id AS gym_id
+       FROM gym_attendance a
+       JOIN gym_members gm ON gm.id = a.member_id
+       JOIN gyms g ON g.id = a.gym_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY a.check_in_at DESC
+       LIMIT ${lim} OFFSET ${off}`,
+      vals
+    );
+    const total = (await query(
+      `SELECT count(*)::int AS c FROM gym_attendance a WHERE ${where.join(' AND ')}`, vals
+    )).rows[0].c;
+    res.json({ total, attendance: rows });
+  } catch (e) { err(res, e); }
+}, requireAdminRole('analyst', 'super_admin', 'support', 'read_only'));
+
+registerRoute(router, {
+  method: 'GET', path: '/memberships', category: 'Gyms',
+  description: 'Platform-wide membership terms (read-only). A user account is NOT a membership: rows here are gym-scoped terms and historical states (EXPIRED/CANCELLED) are preserved, never hidden. Filters: gym_id, status, q (member name/code/plan), limit/offset.',
+  allowedRoles: ['analyst', 'super_admin', 'support', 'read_only'],
+}, async (req, res) => {
+  try {
+    const lim = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 100);
+    const off = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const where = ['TRUE'];
+    const vals = [];
+    if (req.query.gym_id && UUID_RE.test(req.query.gym_id)) {
+      vals.push(req.query.gym_id); where.push(`t.gym_id = $${vals.length}`);
+    }
+    if (req.query.status && ['ACTIVE','UPCOMING','FROZEN','EXPIRED','CANCELLED'].includes(req.query.status)) {
+      vals.push(req.query.status); where.push(`t.status = $${vals.length}`);
+    }
+    if (req.query.q) {
+      vals.push(`%${String(req.query.q).trim()}%`);
+      where.push(`(gm.first_name ILIKE $${vals.length} OR gm.last_name ILIKE $${vals.length}
+        OR gm.member_code ILIKE $${vals.length} OR t.plan_name ILIKE $${vals.length})`);
+    }
+    const { rows } = await query(
+      `SELECT t.id, t.plan_name, t.status, t.starts_on, t.ends_on, t.price_cents, t.currency,
+              t.created_at,
+              gm.first_name || ' ' || COALESCE(gm.last_name, '') AS member_name,
+              gm.member_code, g.name AS gym_name, g.id AS gym_id
+       FROM member_memberships t
+       JOIN gym_members gm ON gm.id = t.member_id
+       JOIN gyms g ON g.id = t.gym_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY t.created_at DESC
+       LIMIT ${lim} OFFSET ${off}`,
+      vals
+    );
+    const total = (await query(
+      `SELECT count(*)::int AS c FROM member_memberships t WHERE ${where.join(' AND ')}`, vals
+    )).rows[0].c;
+    res.json({ total, memberships: rows });
+  } catch (e) { err(res, e); }
+}, requireAdminRole('analyst', 'super_admin', 'support', 'read_only'));
+
 // ── platform lifecycle: SUSPENDED is the admin's lever (spec: a suspended
 // gym stops operating — the guard chain already 403s everything). ─────────
 
