@@ -10,11 +10,12 @@ import {
 import { PlusOutlined, FileTextOutlined, RollbackOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import StatusBadge from './StatusBadge';
+import ProofReviewModal from './ProofReviewModal';
 import { ErrorState } from './States';
 import { useGymContext, hasPermission } from '../permissions';
 import {
   getMemberBilling, createCharge, recordPayment, refundPayment, getReceipt,
-  listGymPaymentProofs, approvePaymentProof, rejectPaymentProof, fetchProofScreenshotUrl,
+  listGymPaymentProofs, approvePaymentProof, rejectPaymentProof,
   formatMoney, Charge, Payment, Receipt, PaymentProof,
 } from '../api';
 
@@ -27,7 +28,6 @@ export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [proofs, setProofs] = useState<PaymentProof[] | null>(null);
   const [reviewing, setReviewing] = useState<PaymentProof | null>(null);
-  const [shotUrl, setShotUrl] = useState<string | null>(null);
   const [error, setError] = useState<any>(null);
   const [payOpen, setPayOpen] = useState(false);
   const [chargeOpen, setChargeOpen] = useState(false);
@@ -128,7 +128,6 @@ export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
       await approvePaymentProof(ctx!.gymId, p.id);
       message.success('Payment approved — receipt generated');
       setReviewing(null);
-      setShotUrl(null);
       load();
     } catch (e: any) {
       message.error(e.message || 'Could not approve');
@@ -140,7 +139,6 @@ export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
       await rejectPaymentProof(ctx!.gymId, p.id, 'Could not be verified');
       message.info('Proof rejected');
       setReviewing(null);
-      setShotUrl(null);
       load();
     } catch (e: any) {
       message.error(e.message || 'Could not reject');
@@ -234,7 +232,7 @@ export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
                 )}
                 {canManage && p.status === 'PENDING_VERIFICATION' && (
                   <>
-                    <Button size="small" onClick={async () => { setReviewing(p); setShotUrl(await fetchProofScreenshotUrl(ctx!.gymId, p.id).catch(() => null)); }}>
+                    <Button size="small" onClick={() => setReviewing(p)}>
                       Review
                     </Button>
                     <Button size="small" type="primary" onClick={() => doApproveProof(p)}>Approve</Button>
@@ -390,6 +388,17 @@ export default function MemberPaymentsTab({ memberId }: { memberId: string }) {
           </Descriptions>
         )}
       </Modal>
+
+      {/* proof review: details + authorized screenshot preview + approve/reject.
+          (Was missing entirely — the Review button set state nothing rendered,
+          so tapping it appeared to do nothing with no error anywhere.) */}
+      <ProofReviewModal
+        gymId={ctx!.gymId}
+        proof={reviewing}
+        onClose={() => setReviewing(null)}
+        onApprove={() => reviewing && doApproveProof(reviewing)}
+        onReject={() => reviewing && doRejectProof(reviewing)}
+      />
     </div>
   );
 }
