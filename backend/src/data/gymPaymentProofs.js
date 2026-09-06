@@ -138,8 +138,9 @@ async function submitProof(userId, ip, data, gymAudit) {
     const { member_id, member_status, gym_tz } = memberRows[0];
     const gymId = (await client.query('SELECT gym_id FROM membership_charges WHERE id = $1', [charge_id])).rows[0].gym_id;
 
-    if (member_status === 'CANCELLED') {
-      throw new HttpError(403, 'This member has left the gym — payment proofs cannot be submitted');
+    if (member_status === 'CANCELLED' || member_status === 'LEFT') {
+      throw new HttpError(403,
+        'You are no longer an active member of this gym — payment proofs cannot be submitted');
     }
 
     const { rows: chargeRows } = await client.query(

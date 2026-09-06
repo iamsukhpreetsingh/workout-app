@@ -30,6 +30,9 @@ export interface GymMember {
   allowed_branch_ids?: string[] | null;
   branch?: string | null;
   app_profile?: { date_of_birth?: string | null; gender?: string | null; height_cm?: number | null; weight_kg?: number | null } | null;
+  // LEAVE/REJOIN lifecycle: set when status = LEFT, cleared on rejoin
+  left_at?: string | null;
+  left_reason?: 'USER_LEFT' | 'REMOVED_BY_ADMIN' | null;
 }
 
 export const listMembers = (
@@ -67,6 +70,12 @@ export const unlinkMemberApp = (gymId: string, memberId: string) =>
 // member lifecycle: leave (cancel membership) / reactivate
 export const cancelMember = (gymId: string, memberId: string, reason?: string) =>
   api<GymMember>(`/gym/${gymId}/members/${memberId}/cancel`, { method: 'POST', body: { reason } });
+
+// archive/remove a member → LEFT (REMOVED_BY_ADMIN): the record + history are
+// kept, the member moves out of the active list; reactivate later = rejoin
+// into the SAME member identity
+export const archiveMember = (gymId: string, memberId: string, reason?: string) =>
+  api<GymMember>(`/gym/${gymId}/members/${memberId}/archive`, { method: 'POST', body: { reason } });
 
 export const reactivateMember = (gymId: string, memberId: string) =>
   api<GymMember>(`/gym/${gymId}/members/${memberId}/reactivate`, { method: 'POST' });

@@ -645,6 +645,11 @@ async function getGymMember(gymId, memberId) {
 async function updateGymMember(gymId, memberId, actor, ip, patch) {
   const allowed = ['first_name', 'last_name', 'email', 'phone', 'status', 'notes', 'joined_at',
     'date_of_birth', 'gender', 'emergency_contact_name', 'emergency_contact_phone', 'profile'];
+  // LEFT is a lifecycle event (left_at/left_reason + audit), not a field edit —
+  // it must go through the archive endpoint so the relationship metadata is set
+  if ((patch || {}).status === 'LEFT') {
+    throw new HttpError(400, 'Use POST /members/:id/archive to remove a member (sets left_at/left_reason)');
+  }
   const sets = [];
   const vals = [memberId, gymId];
   for (const [k, v] of Object.entries(patch || {})) {
@@ -717,7 +722,10 @@ async function cancelGymMember(gymId, memberId, actor, ip, { reason } = {}) {
 }
 
 // "Member reactivates": back to ACTIVE. Only a non-ACTIVE member can be
-// reactivated; the app link (if any) is untouched.
+// reactivated; the app link (if any) is untouched. Reactivating a LEFT row
+// is a REJOIN (audit 'member.rejoined'): the SAME gym_member identity and
+// all of its history come back — no new member record is created and no
+// expired membership is resurrected (new terms are assigned separately).
 async function reactivateGymMember(gymId, memberId, actor, ip) {
   return transaction(async (client) => {
     const { rows } = await client.query(
@@ -726,15 +734,102 @@ async function reactivateGymMember(gymId, memberId, actor, ip) {
     );
     if (!rows.length) throw new HttpError(404, 'Member not found');
     if (rows[0].status === 'ACTIVE') return memberToClient(rows[0]); // idempotent
+    const wasLeft = rows[0].status === 'LEFT';
     const { rows: updated } = await client.query(
-      `UPDATE gym_members SET status = 'ACTIVE', updated_at = now()
+      `UPDATE gym_members SET status = 'ACTIVE', left_at = NULL, left_reason = NULL,
+         updated_at = now()
        WHERE id = $1 AND gym_id = $2 RETURNING *`,
       [memberId, gymId]
     );
     await gymAudit(client, {
       gymId, actorUserId: actor?.userId ?? null, actorLabel: actor?.label ?? null, ip,
-      action: 'member.reactivated', entity: 'gym_member', entityId: memberId,
+      action: wasLeft ? 'member.rejoined' : 'member.reactivated', entity: 'gym_member', entityId: memberId,
       before: { status: rows[0].status }, after: { status: 'ACTIVE' },
+    });
+    return memberToClient(updated[0]);
+  });
+}
+
+// ── LEAVE / ARCHIVE — the relationship ends without deleting anything ────
+//
+// status → LEFT with left_at + left_reason. The gym_member row, its app
+// link, memberships, charges/payments/receipts, attendance, documents and
+// audit history are ALL preserved. Pending payment proofs are kept (the
+// gym still reviews them); the user simply can't add new activity until a
+// rejoin. Gym-scoped trainer assignments are ENDED (spec: mark the gym
+// assignment inactive, never destroy the history).
+
+// shared: end the member's ACTIVE trainer assignment(s) as part of a leave
+async function endActiveTrainerAssignments(client, memberId, gymId, reason) {
+  await client.query(
+    `UPDATE gym_trainer_assignments SET status = 'ENDED',
+       ended_on = (now() AT TIME ZONE (SELECT timezone FROM gyms WHERE id = $2))::date,
+       end_reason = $3, updated_at = now()
+     WHERE member_id = $1 AND gym_id = $2 AND status = 'ACTIVE'`,
+    [memberId, gymId, reason]
+  );
+}
+
+// USER-initiated leave (mobile Profile → My Gyms → Leave Gym). The user is
+// derived from the JWT — no member id or userId is accepted from the client.
+async function leaveGymAsMember(userId, gymId, ip, { note } = {}) {
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT * FROM gym_members
+       WHERE gym_id = $1 AND app_user_id = $2 AND status IN ('ACTIVE','PENDING','FROZEN')
+       FOR UPDATE`,
+      [gymId, userId]
+    );
+    if (!rows.length) {
+      // idempotent: leaving an already-LEFT relationship is a no-op
+      const { rows: former } = await client.query(
+        `SELECT * FROM gym_members WHERE gym_id = $1 AND app_user_id = $2 AND status = 'LEFT'
+         ORDER BY updated_at DESC LIMIT 1`,
+        [gymId, userId]
+      );
+      if (former.length) return { ...memberToClient(former[0]), already_left: true };
+      throw new HttpError(404, 'You are not a member of this gym');
+    }
+    const member = rows[0];
+    const { rows: updated } = await client.query(
+      `UPDATE gym_members SET status = 'LEFT', left_at = now(), left_reason = 'USER_LEFT',
+         updated_at = now()
+       WHERE id = $1 AND gym_id = $2 RETURNING *`,
+      [member.id, gymId]
+    );
+    await endActiveTrainerAssignments(client, member.id, gymId, 'member_left_gym');
+    await gymAudit(client, {
+      gymId, actorUserId: userId, ip,
+      action: 'member.left_by_user', entity: 'gym_member', entityId: member.id,
+      before: { status: member.status },
+      after: { status: 'LEFT', reason: 'USER_LEFT', note: note || null },
+    });
+    return memberToClient(updated[0]);
+  });
+}
+
+// ADMIN-initiated removal/archive (portal member detail → Archive Member).
+// Same LEFT state, but the audit trail records WHO terminated it.
+async function archiveGymMember(gymId, memberId, actor, ip, { reason } = {}) {
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      'SELECT * FROM gym_members WHERE id = $1 AND gym_id = $2 FOR UPDATE',
+      [memberId, gymId]
+    );
+    if (!rows.length) throw new HttpError(404, 'Member not found');
+    if (rows[0].status === 'LEFT') return memberToClient(rows[0]); // idempotent
+    const { rows: updated } = await client.query(
+      `UPDATE gym_members SET status = 'LEFT', left_at = now(), left_reason = 'REMOVED_BY_ADMIN',
+         updated_at = now()
+       WHERE id = $1 AND gym_id = $2 RETURNING *`,
+      [memberId, gymId]
+    );
+    await endActiveTrainerAssignments(client, memberId, gymId, 'member_removed_by_admin');
+    await gymAudit(client, {
+      gymId, actorUserId: actor?.userId ?? null, actorLabel: actor?.label ?? null, ip,
+      action: 'member.removed_by_admin', entity: 'gym_member', entityId: memberId,
+      before: { status: rows[0].status },
+      after: { status: 'LEFT', reason: 'REMOVED_BY_ADMIN', note: reason || null },
     });
     return memberToClient(updated[0]);
   });
@@ -849,6 +944,20 @@ async function linkMemberToApp(gymId, memberId, actor, ip, { email }) {
     if (clash.length) {
       throw new HttpError(409, 'That app account is already linked to another member of this gym');
     }
+    // a LEFT relationship for this user+gym is remembered history — linking
+    // a different row would duplicate the person; the old member row must be
+    // reactivated instead (rejoin restores the SAME identity)
+    const { rows: former } = await client.query(
+      `SELECT member_code FROM gym_members
+       WHERE gym_id = $1 AND app_user_id = $2 AND id != $3 AND status = 'LEFT'
+       ORDER BY updated_at DESC LIMIT 1`,
+      [gymId, user.id, member.id]
+    );
+    if (former.length) {
+      throw new HttpError(409,
+        `This app account previously left this gym (member ${former[0].member_code}). ` +
+        'Reactivate that member from the archived list instead of linking a new record.');
+    }
     const { rows } = await client.query(
       `UPDATE gym_members SET app_user_id = $3, app_invite_status = 'none', updated_at = now()
        WHERE id = $1 AND gym_id = $2 RETURNING *`,
@@ -940,7 +1049,7 @@ async function unlinkMemberFromApp(gymId, memberId, actor, ip) {
 // still keyed by app_user_id = caller.
 async function listGymMembershipsForUser(userId) {
   const { rows } = await query(
-    `SELECT m.id, m.member_code, m.status, m.joined_at,
+    `SELECT m.id, m.member_code, m.status, m.joined_at, m.left_at,
             g.id AS gym_id, g.name AS gym_name, g.slug AS gym_slug,
             g.phone AS gym_phone, g.email AS gym_email,
             g.address_line1 AS gym_address_line1, g.city AS gym_city,
@@ -964,8 +1073,8 @@ async function listGymMembershipsForUser(userId) {
        ORDER BY f.starts_on DESC
        LIMIT 1
      ) fz ON true
-     WHERE m.app_user_id = $1 AND m.status IN ('ACTIVE','PENDING','FROZEN')
-     ORDER BY g.name`,
+     WHERE m.app_user_id = $1 AND m.status IN ('ACTIVE','PENDING','FROZEN','LEFT')
+     ORDER BY (m.status = 'LEFT'), g.name`,
     [userId]
   );
   return rows;
@@ -1304,6 +1413,19 @@ async function acceptInvitation(code, userId, ip) {
     if (clash.length) {
       throw new HttpError(409, 'That app account is already linked to another member of this gym');
     }
+    // same rejoin rule as link-app: a remembered LEFT relationship must be
+    // reactivated by the gym — never a second member record for the person
+    const { rows: former } = await client.query(
+      `SELECT member_code FROM gym_members
+       WHERE gym_id = $1 AND app_user_id = $2 AND id != $3 AND status = 'LEFT'
+       ORDER BY updated_at DESC LIMIT 1`,
+      [invite.gym_id, user.id, memberRows[0].id]
+    );
+    if (former.length) {
+      throw new HttpError(409,
+        `You previously left this gym (member ${former[0].member_code}). ` +
+        'Ask the gym to reactivate that membership.');
+    }
     await client.query(
       `UPDATE gym_members SET app_user_id = $2, app_invite_status = 'none', updated_at = now()
        WHERE id = $1`,
@@ -1435,6 +1557,7 @@ module.exports = {
   listGymStaff, addGymStaff, updateGymStaff,
   createGymMember, listGymMembers, getGymMember, updateGymMember,
   cancelGymMember, reactivateGymMember, inviteMemberApp, cancelMemberInvite,
+  leaveGymAsMember, archiveGymMember,
   getInvitationByToken, acceptInvitation, declineInvitation, registerViaInvitation,
   createStaffInvite, acceptStaffInvitation, declineStaffInvitation, registerStaffInvitation,
   linkMemberToApp, unlinkMemberFromApp, listGymMembershipsForUser,

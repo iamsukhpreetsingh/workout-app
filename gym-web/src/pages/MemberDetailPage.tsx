@@ -29,7 +29,7 @@ import MemberDocumentsTab from '../components/MemberDocumentsTab';
 import { useGymContext, hasPermission } from '../permissions';
 import {
   getMember, updateMember, linkMemberApp, unlinkMemberApp,
-  cancelMember, reactivateMember, inviteMemberApp, cancelMemberInvite,
+  cancelMember, reactivateMember, archiveMember, inviteMemberApp, cancelMemberInvite,
   listBranches, setMemberBranches, transferMemberBranch, memberBranchHistory,
   Branch, BranchTransfer, GymMember,
 } from '../api';
@@ -336,6 +336,12 @@ export default function MemberDetailPage() {
       <Card size="small" title="Membership">
         <Space wrap align="center">
           <StatusBadge status={member.status} />
+          {member.status === 'LEFT' && member.left_at && (
+            <Typography.Text type="secondary">
+              Left {String(member.left_at).slice(0, 10)}
+              {member.left_reason === 'USER_LEFT' ? ' (left by member)' : ' (removed by gym)'}
+            </Typography.Text>
+          )}
           {canManage && member.status === 'ACTIVE' && (
             <Popconfirm
               title="Mark this member as having left?"
@@ -351,14 +357,32 @@ export default function MemberDetailPage() {
               <Button danger icon={<UserDeleteOutlined />}>Member left</Button>
             </Popconfirm>
           )}
+          {canManage && member.status === 'ACTIVE' && (
+            <Popconfirm
+              title="Archive / remove this member?"
+              description="The member moves to the former-members list (LEFT). All history, payments and documents are preserved and the same member can be reactivated later."
+              okButtonProps={{ danger: true }}
+              okText="Archive member"
+              onConfirm={async () => {
+                try {
+                  setMember(await archiveMember(ctx!.gymId, member.id));
+                  message.success('Member archived (LEFT) — history preserved');
+                } catch (e: any) { message.error(e.message || 'Could not archive'); }
+              }}
+            >
+              <Button icon={<UserDeleteOutlined />}>Archive member</Button>
+            </Popconfirm>
+          )}
           {canManage && member.status !== 'ACTIVE' && (
             <Button icon={<PlayCircleOutlined />} onClick={async () => {
               try {
                 setMember(await reactivateMember(ctx!.gymId, member.id));
-                message.success('Membership reactivated');
+                message.success(member.status === 'LEFT'
+                  ? 'Member rejoined — same member identity and history restored'
+                  : 'Membership reactivated');
               } catch (e: any) { message.error(e.message || 'Could not reactivate'); }
             }}>
-              Reactivate
+              {member.status === 'LEFT' ? 'Reactivate member (rejoin)' : 'Reactivate'}
             </Button>
           )}
         </Space>

@@ -280,6 +280,28 @@ evidence — the ledger only moves on admin approval. Portal surfaces:
   Duplicate protection is DB-enforced: one PENDING proof per charge and
   per (gym, transaction id).
 
+## Member leave / archive / rejoin (multi-gym phase)
+
+Members can leave a gym from the app; the gym sees them as LEFT (former
+member) — never deleted. Portal surfaces:
+- **Members page** — status filter now includes `LEFT` (former members are
+  excluded from the default ACTIVE view but searchable: name/email/phone/
+  member code all work, same as active search).
+- **Member detail** — LEFT members show a "Left <date>" note with who ended
+  it (by member / removed by gym). Actions: **Archive member** (ACTIVE →
+  LEFT, Popconfirm, keeps every record), **Member left** (legacy CANCELLED),
+  and **Reactivate member (rejoin)** — reactivating a LEFT member restores
+  the SAME member identity and all history (membership/payments/attendance/
+  trainer/documents tabs stay intact; no new membership is auto-assigned).
+- Backend: migration 058 (`gym_members.status = 'LEFT'`, `left_at`,
+  `left_reason`, one-relationship-per-user-per-gym unique index),
+  `POST /gym/:gymId/members/:id/archive` (members.manage), reactivate
+  doubles as rejoin (audit `member.rejoined`), user leave via
+  `POST /gym/my/memberships/:gymId/leave`. LEFT members fail gym-context
+  authz with "You are no longer an active member of this Gym" and are
+  excluded from announcement audiences; their pending payment proofs are
+  preserved for review.
+
 - **Attendance integration**: check-in responses carry a
   `payment_warning` (dues amount, due date, overdue flag, pending-proof
   flag) derived server-side from the ledger — the app shows it as a

@@ -15,7 +15,9 @@ import { usePagedList } from '../hooks/usePagedList';
 import { useGymContext } from '../permissions';
 import { listMembers, createMember, GymMember } from '../api';
 
-export const MEMBER_STATUSES = ['ACTIVE', 'PENDING', 'FROZEN', 'EXPIRED', 'CANCELLED'];
+// LEFT = former member (user left or admin archive) — kept for history,
+// excluded from the default ACTIVE workflow but searchable via this filter
+export const MEMBER_STATUSES = ['ACTIVE', 'PENDING', 'FROZEN', 'EXPIRED', 'CANCELLED', 'LEFT'];
 const CONNECTIONS = ['CONNECTED', 'NOT_CONNECTED', 'INVITATION_PENDING'];
 export const GENDERS = ['male', 'female', 'other', 'prefer_not_to_say'];
 

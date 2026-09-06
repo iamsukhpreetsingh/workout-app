@@ -492,7 +492,9 @@ export default function GymHomeScreen() {
     ))
   );
 
-  const multiGym = gym.memberships.length > 1;
+  // LEFT gyms are history, not switchable contexts (the screens would 403)
+  const switchable = gym.memberships.filter((m) => m && m.status !== 'LEFT');
+  const multiGym = switchable.length > 1;
 
   return (
     <ScrollView
@@ -502,7 +504,7 @@ export default function GymHomeScreen() {
     >
       {multiGym && (
         <View style={styles.switcher}>
-          {gym.memberships.map((m) => {
+          {switchable.map((m) => {
             const active = m.gym_id === gym.activeGymId;
             return (
               <TouchableOpacity

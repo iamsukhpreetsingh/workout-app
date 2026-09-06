@@ -45,6 +45,11 @@ async function resolveGymContext(userId, gymId) {
   if (member.rows[0]) {
     const m = member.rows[0];
     if (m.gym_status !== 'ACTIVE') return { error: 403, message: 'This gym is suspended' };
+    // a LEFT (former) member gets the precise message — every other
+    // non-ACTIVE state keeps the generic wording
+    if (m.member_status === 'LEFT') {
+      return { error: 403, message: 'You are no longer an active member of this Gym' };
+    }
     if (m.member_status !== 'ACTIVE') return { error: 403, message: 'Your membership is not active' };
     return {
       gymId, memberRowId: m.member_row_id, gymRole: 'MEMBER',

@@ -191,8 +191,8 @@ async function eligibility(client, gymId, memberId, source) {
   if (!rows.length) throw new HttpError(404, 'Member not found');
   const m = rows[0];
 
-  if (m.member_status === 'CANCELLED') {
-    throw new HttpError(403, 'This member has left the gym — attendance cannot be recorded');
+  if (m.member_status === 'CANCELLED' || m.member_status === 'LEFT') {
+    throw new HttpError(403, 'This member is no longer an active member of this gym — attendance cannot be recorded');
   }
   const strict = source === 'QR_CHECK_IN' || source === 'WORKOUT_COMPLETION';
   if (strict) {

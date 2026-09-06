@@ -10,7 +10,7 @@
 // manual invitation-code entry (M4) — the deep-link path lives in
 // InvitationContext.
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../theme';
@@ -18,20 +18,89 @@ import { GYM_HOME } from '../shared/constants/routes';
 import { useGym } from '../store/GymContext';
 import { useInvitation } from '../store/InvitationContext';
 import { extractInvitationToken } from '../lib/gymInvites';
+import { leaveMyGym } from '../lib/gymApi';
 
 export default function MyGymCard() {
   const colors = useColors();
   const navigation = useNavigation();
   // single source of truth — the gym home screen and this card share one
   // snapshot
-  const { loading, hasGym, memberships, activeGymId, setActiveGymId } = useGym();
+  const { loading, hasGym, memberships, activeGymId, setActiveGymId, reload } = useGym();
   const { openInvitation } = useInvitation();
+  const [leavingGymId, setLeavingGymId] = useState(null);
   const [codeOpen, setCodeOpen] = useState(false);
   const [code, setCode] = useState('');
   const [codeError, setCodeError] = useState(null);
   const [codeBusy, setCodeBusy] = useState(false);
 
   const styles = makeStyles(colors);
+
+  // ── LEAVE GYM (user-initiated disassociation) ─────────────────────────
+  // The confirmation spells out exactly what the member loses and what is
+  // preserved. The member identity is resolved server-side from the JWT;
+  // the call returns the fresh membership list and reload() re-resolves the
+  // selected gym (last gym left → the app goes back to standalone mode).
+  const confirmLeave = (m) => {
+    Alert.alert(
+      `Leave ${m.gym_name}?`,
+      [
+        'If you leave this gym:',
+        '\u2022 You lose access to its active member features.',
+        '\u2022 Gym attendance, check-in and announcements stop.',
+        '\u2022 You can no longer submit payment proofs there.',
+        '\u2022 Your personal fitness data and this gym\'s history are preserved.',
+        '\u2022 Your other gyms are not affected.',
+        'You can rejoin later if the gym allows.',
+      ].join('\n'),
+      [
+        { text: 'Keep Gym', style: 'cancel' },
+        { text: 'Leave Gym', style: 'destructive', onPress: () => doLeave(m) },
+      ]
+    );
+  };
+
+  const doLeave = async (m) => {
+    if (leavingGymId) return; // duplicate tap guard
+    setLeavingGymId(m.gym_id);
+    try {
+      await leaveMyGym(m.gym_id);
+      Alert.alert(
+        `You left ${m.gym_name}`,
+        'Your history with this gym is preserved. You can rejoin later if the gym allows.'
+      );
+      reload();
+    } catch (e) {
+      Alert.alert('Could not leave gym', e?.message || 'Please try again later.');
+    } finally {
+      setLeavingGymId(null);
+    }
+  };
+
+  const activeGyms = (memberships || []).filter((m) => m && m.status !== 'LEFT');
+  const formerGyms = (memberships || []).filter((m) => m && m.status === 'LEFT');
+
+  // history-only rows: flat (not tappable — the gym screens would 403), no
+  // leave action; rejoining is a gym-side operation
+  const formerSection = formerGyms.length ? (
+    <View style={styles.formerWrap}>
+      <Text style={styles.formerTitle}>Previous gyms</Text>
+      {formerGyms.map((m) => (
+        <View key={`former-${m.gym_id}-${m.member_code}`} style={[styles.card, styles.formerCard]}>
+          <Ionicons name="business-outline" size={19} color={colors.textDim} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.rowTitle, { color: colors.textDim }]}>{m.gym_name}</Text>
+            <Text style={styles.rowSub} numberOfLines={1}>
+              {[
+                'LEFT',
+                m.left_at ? String(m.left_at).slice(0, 10) : null,
+                m.left_reason === 'REMOVED_BY_ADMIN' ? 'removed by gym' : null,
+              ].filter(Boolean).join(' · ')}
+            </Text>
+          </View>
+        </View>
+      ))}
+    </View>
+  ) : null;
 
   if (loading) return null; // still resolving the session's gym snapshot
 
@@ -40,6 +109,7 @@ export default function MyGymCard() {
   // lives in InvitationContext). The code is validated client-side only
   // for shape — the server remains the sole authority.
   if (!hasGym) {
+    // former-gyms history stays visible even in standalone mode
     const submitCode = async () => {
       if (codeBusy) return;
       const token = extractInvitationToken(code);
@@ -116,13 +186,14 @@ export default function MyGymCard() {
             </View>
           </View>
         </Modal>
+        {formerSection}
       </View>
     );
   }
 
   return (
     <View>
-      {memberships.map((m) => {
+      {activeGyms.map((m) => {
         // membership term status (ACTIVE/FROZEN/…) is what matters to the
         // member; fall back to the membership-record status when no term exists
         const status = m.membership_status || m.status;
@@ -151,10 +222,23 @@ export default function MyGymCard() {
                 ].filter(Boolean).join(' · ')}
               </Text>
             </View>
+            <TouchableOpacity
+              style={styles.leaveBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+              onPress={() => confirmLeave(m)}
+              disabled={leavingGymId === m.gym_id}
+              accessibilityRole="button"
+              accessibilityLabel={`Leave ${m.gym_name}`}
+            >
+              {leavingGymId === m.gym_id
+                ? <ActivityIndicator size="small" color={colors.textDim} />
+                : <Ionicons name="log-out-outline" size={17} color={colors.textDim} />}
+            </TouchableOpacity>
             <Ionicons name="chevron-forward" size={17} color={colors.textDim} />
           </TouchableOpacity>
         );
       })}
+      {formerSection}
     </View>
   );
 }
@@ -171,6 +255,13 @@ const makeStyles = (colors) => StyleSheet.create({
     padding: 14,
     marginBottom: 12,
   },
+  leaveBtn: { paddingHorizontal: 6, paddingVertical: 6 },
+  formerWrap: { marginTop: 6 },
+  formerTitle: {
+    color: colors.textDim, fontSize: 11.5, fontWeight: '800',
+    letterSpacing: 0.4, marginBottom: 6, marginTop: 2,
+  },
+  formerCard: { opacity: 0.75 },
   rowTitle: { color: colors.text, fontSize: 14, fontWeight: '700' },
   rowSub: { color: colors.textDim, fontSize: 11, marginTop: 2 },
   emptyRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-start', paddingTop: 4 },

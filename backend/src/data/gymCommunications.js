@@ -46,8 +46,10 @@ class HttpError extends Error {
 const AUDIENCE_TYPES = ['ALL_ACTIVE_MEMBERS', 'SPECIFIC_MEMBERS', 'SPECIFIC_BRANCH'];
 const WALL_RE = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// "member who belongs" for audience purposes — CANCELLED means they left
-const ACTIVE_SQL = "status <> 'CANCELLED'";
+// "member who belongs" for audience purposes — CANCELLED and LEFT (former
+// member, user-initiated leave or admin archive) both mean "gone": former
+// members stop receiving new announcements but keep their history
+const ACTIVE_SQL = "status NOT IN ('CANCELLED','LEFT')";
 
 // ── gym-timezone wall-time ⇄ absolute instant ──────────────────────────────
 function tzOffsetMs(instant, timeZone) {

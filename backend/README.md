@@ -512,6 +512,79 @@ need to scan the wider codebase:
 - **Standalone users are unaffected**: zero gyms is a fully supported
   state; classes are NOT implemented yet.
 
+#### 3.5.0.2 Member LEAVE / REJOIN lifecycle (multi-gym phase) — in detail
+
+**Why this design.** A `gym_members` row is the gym-scoped RELATIONSHIP, not
+the person's account, and leaving must never delete it: every membership,
+payment, receipt, attendance, trainer and content record is keyed to that
+row. So leaving = a new terminal-but-remembered status `LEFT`, and rejoining
+= reactivating the SAME row (same member_code, same history). The existing
+CANCELLED state keeps its old meaning (admin-cancelled membership); LEFT is
+the former-member state used by BOTH user-initiated leave and admin removal,
+with `left_reason` distinguishing the two.
+
+- **Migration 058** (`migrations/058_member_leave_rejoin.sql`): widens the
+  `gym_members.status` CHECK with `LEFT`, adds `left_at TIMESTAMPTZ` and
+  `left_reason` (USER_LEFT | REMOVED_BY_ADMIN), and adds the partial unique
+  index `uniq_gym_members_relationship` on `(gym_id, app_user_id)` WHERE
+  `status IN ('ACTIVE','PENDING','FROZEN','LEFT')` — one remembered
+  relationship per user per gym, so a rejoin CANNOT create a duplicate
+  (CANCELLED stays outside the index for legacy data compat).
+- **User leave**: `POST /gym/my/memberships/:gymId/leave` (auth-only, in the
+  `/my` block BEFORE `/:gymId` routing) → `gyms.leaveGymAsMember(userId,
+  gymId, ip)` — the user and member row are derived from the JWT, never from
+  the body. Sets LEFT + left_at + USER_LEFT, ends the member's ACTIVE
+  trainer assignment(s) (`end_reason='member_left_gym'`, history kept), and
+  is IDEMPOTENT (leaving an already-LEFT gym is a 200 no-op with
+  `already_left: true`). Unknown gym → 404. Returns the fresh membership
+  list so the mobile app re-resolves its selected gym in one round-trip.
+- **Admin archive**: `POST /gym/:gymId/members/:memberId/archive`
+  (members.manage) → `gyms.archiveGymMember` — same LEFT state with
+  `left_reason='REMOVED_BY_ADMIN'`; idempotent; audit `member.removed_by_admin`.
+  Generic PATCH refuses `status: 'LEFT'` (400) — the lifecycle columns can
+  only be set through this route.
+- **Rejoin**: `POST /gym/:gymId/members/:memberId/reactivate` (existing
+  route) now REJOINS a LEFT member: same row, same member_code, app link
+  intact, `left_at/left_reason` cleared, audit `member.rejoined` (instead of
+  `member.reactivated` used for non-LEFT restores). NO expired membership is
+  resurrected — the gym assigns a new term; old terms stay historical.
+- **What does NOT happen on leave**: no user/member/history deletion, no
+  membership cancellation, no refunds, no charge rewrites, no pending-proof
+  deletion (the gym still reviews them), no upcoming-renewal deletion.
+- **Gates after leaving (all server-side)**:
+  - `resolveGymContext` (gymAuth) 403s every `/:gymId/*` route for LEFT
+    members with the precise message "You are no longer an active member of
+    this Gym" (PENDING/FROZEN/EXPIRED keep the generic wording).
+  - `gymPaymentProofs.submitProof` rejects LEFT members (the ownership
+    query intentionally finds the row, the status check then 403s) —
+    historical proofs remain listable.
+  - `gymAttendance.eligibility` blocks attendance for LEFT (all sources).
+  - `gymCommunications` audience SQL excludes LEFT — former members stop
+    receiving announcements/notifications, per-gym.
+  - `linkMemberToApp`/`acceptInvitation` 409 with guidance if the user has a
+    LEFT row in that gym (rejoin must reactivate the old record, never link
+    a fresh duplicate); `createGymMember`'s email guard also refuses a
+    second member with a LEFT member's email.
+- **Read side**: `listGymMembershipsForUser` (`GET /gym/my/memberships`) now
+  returns LEFT rows too (with `left_at`) — the app shows them under
+  "Previous gyms" while `hasGym`/active selection ignore them. Staff list
+  `GET /:gymId/members?status=LEFT` surfaces the former-members view.
+- **Tests**: `test/gymMemberLifecycle.test.js` (14) — multi-gym baseline,
+  leave + idempotency + precise 403s + gym-B-isolation, admin archive,
+  status list behavior, cross-gym archive 404, PATCH guard, rejoin restoring
+  the same identity, duplicate-member 409, distinct audit events.
+
+- **Mobile side (app)**: `MyGymCard` (Profile) renders one row per ACTIVE
+  gym relationship with a per-row leave action (log-out icon → Alert
+  confirmation spelling out what is lost vs preserved → `leaveMyGym` →
+  context `reload()`), plus a "Previous gyms" section for LEFT rows (flat,
+  non-tappable, LEFT · date · removed-by-gym). `GymContext.hasGym` counts
+  only non-LEFT rows — a user whose gyms are all LEFT is standalone again;
+  `resolveActiveMembershipRow` (gymState) and the GymHomeScreen switcher
+  chips never select a LEFT gym; `hasActiveGymMembership` (workout→attendance
+  prompt) ignores LEFT rows even when their term reads ACTIVE. Membership
+  list (`GET /gym/my/memberships`) includes LEFT rows with `left_at`.
+
 #### 3.5.0.1 Multi-branch (Phase 16) — in detail
 
 - **Branch entity**: `gym_branches` (name unique per gym case-insensitive,

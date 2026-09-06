@@ -25,10 +25,13 @@ export function statusColor(status, fallback) {
  * Pick the row that represents the user's active gym context.
  *
  * A user can be an app-linked member of several gyms (the backend returns
- * one row per gym, ordered by gym name). Resolution order:
- *   1. the caller's explicit selection (preferredGymId, when still present)
+ * one row per gym, ordered by gym name; LEFT = former gym rows included).
+ * A LEFT row is NEVER selectable as the active context — it is history,
+ * shown only in the "previous gyms" UI. Resolution order:
+ *   1. the caller's explicit selection (preferredGymId, when still present
+ *      and not a LEFT row)
  *   2. the first row whose membership term is ACTIVE
- *   3. the first row at all (PENDING/FROZEN member — still a valid gym
+ *   3. the first remaining row (PENDING/FROZEN member — still a valid gym
  *      relationship, shown with its own status)
  *
  * @param {Array|null} rows  rows from /gym/my/memberships
@@ -37,11 +40,13 @@ export function statusColor(status, fallback) {
  */
 export function resolveActiveMembershipRow(rows, preferredGymId) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
+  const selectable = rows.filter((r) => r && r.status !== 'LEFT');
+  if (selectable.length === 0) return null;
   if (preferredGymId) {
-    const hit = rows.find((r) => r && r.gym_id === preferredGymId);
+    const hit = selectable.find((r) => r.gym_id === preferredGymId);
     if (hit) return hit;
   }
-  return rows.find((r) => r && r.membership_status === 'ACTIVE') || rows[0];
+  return selectable.find((r) => r.membership_status === 'ACTIVE') || selectable[0];
 }
 
 /**

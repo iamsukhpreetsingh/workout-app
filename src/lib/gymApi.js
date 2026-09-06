@@ -6,7 +6,16 @@ import { api } from './api';
 export async function fetchMyGymMemberships() {
   // rows where THIS user is the app-linked member: gym name, member code,
   // membership status. Standalone users get [] — the gym is never required.
+  // LEFT rows (former gyms) are included and flagged with left_at.
   return api('/gym/my/memberships');
+}
+
+// USER-initiated LEAVE — voluntarily end the relationship with one gym.
+// The member identity is derived server-side from the JWT; other gyms are
+// untouched; history is preserved (status LEFT). Returns the fresh
+// membership list so the caller can re-resolve the selected gym at once.
+export async function leaveMyGym(gymId) {
+  return api(`/gym/my/memberships/${gymId}/leave`, { method: 'POST' });
 }
 
 // Phase 10 — called after a workout is saved. Returns whether an ACTIVE
@@ -16,7 +25,10 @@ export async function fetchMyGymMemberships() {
 export async function hasActiveGymMembership() {
   try {
     const rows = await fetchMyGymMemberships();
-    return Array.isArray(rows) && rows.some((m) => m.membership_status === 'ACTIVE');
+    // LEFT (former) gyms never prompt — their term rows can still read
+    // ACTIVE, but the relationship itself has ended
+    return Array.isArray(rows) &&
+      rows.some((m) => m.status !== 'LEFT' && m.membership_status === 'ACTIVE');
   } catch {
     return false;
   }

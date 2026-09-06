@@ -14,6 +14,7 @@ const COLORS: Record<string, string> = {
   FROZEN: 'gold',
   EXPIRED: 'default',
   CANCELLED: 'red',
+  LEFT: 'orange', // former member (user left / admin archive) — history kept
 };
 
 export default function StatusBadge({ status }: { status: string }) {

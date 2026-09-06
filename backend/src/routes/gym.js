@@ -274,6 +274,32 @@ registerRoute(router, {
   }
 }, [requireAuth, requireRole(['user', 'trainer', 'gym_staff'])]);
 
+// USER-initiated LEAVE — voluntary disassociation from one gym. The gym and
+// member identity are derived from the JWT, never from the body; other gym
+// memberships are untouched; the member row + all history are kept (LEFT).
+// Idempotent: leaving an already-left gym is a no-op.
+registerRoute(router, {
+  method: 'POST',
+  path: '/my/memberships/:gymId/leave',
+  description: "The authenticated user voluntarily leaves a gym: their gym_members row becomes LEFT (left_at/left_reason recorded, ACTIVE trainer assignments ended) and the gym's member features stop. History is preserved; the user can be rejoined by the gym. Other gyms are unaffected.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireRole(['user', 'trainer', 'gym_staff'])], async (req, res) => {
+  try {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.gymId)) {
+      return res.status(404).json({ error: 'You are not a member of this gym' });
+    }
+    await gyms.leaveGymAsMember(req.user.id, req.params.gymId, req.ip,
+      { note: req.body?.note });
+    // return the fresh membership snapshot so the app can re-resolve its
+    // selected gym in one round-trip
+    res.json(await gyms.listGymMembershipsForUser(req.user.id));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireRole(['user', 'trainer', 'gym_staff'])]);
+
 // ── invitation acceptance bridge (public token routes — no gym context) ──
 // Registered BEFORE '/:gymId' so 'invite' is never captured as a gym id.
 // The plaintext code is the bearer token; nothing else authorizes linking.
@@ -1217,6 +1243,28 @@ registerRoute(router, {
   try {
     res.json(await gyms.reactivateGymMember(
       req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip
+    ));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')]);
+
+// ADMIN archive/remove → LEFT (REMOVED_BY_ADMIN). The member record, app
+// link and every historical record are kept; the member moves out of the
+// default active list into the former/archived view. Reactivating a LEFT
+// row is a REJOIN (same member identity, same history).
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/members/:memberId/archive',
+  description: 'Admin removes/archives a member: gym_members.status → LEFT (left_at set, left_reason REMOVED_BY_ADMIN, ACTIVE trainer assignments ended). Nothing is deleted — history, payments, attendance and any pending payment proofs are preserved. The member can be reactivated (rejoin) later. Requires permission: members.manage (OWNER, ADMIN).',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('members.manage')], async (req, res) => {
+  try {
+    res.json(await gyms.archiveGymMember(
+      req.gymContext.gymId, req.params.memberId, { userId: req.user.id }, req.ip,
+      { reason: req.body?.reason }
     ));
   } catch (e) {
     httpError(res, e, 400);

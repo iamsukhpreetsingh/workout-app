@@ -93,10 +93,13 @@ export function GymProvider({ children }) {
         const list = Array.isArray(rows) ? rows : [];
         setMemberships(list);
         setHistories(Array.isArray(perGymHistory) ? perGymHistory : []);
-        // keep the user's explicit selection when it is still valid,
+        // keep the user's explicit selection when it is still a valid ACTIVE
+        // relationship (a LEFT row is history — never a selectable context),
         // otherwise fall back to the derived active row
         setActiveGymId((prev) => {
-          const kept = prev && list.some((r) => r && r.gym_id === prev) ? prev : null;
+          const kept = prev && list.some((r) => r && r.gym_id === prev && r.status !== 'LEFT')
+            ? prev
+            : null;
           return kept || (resolveActiveMembershipRow(list) || {}).gym_id || null;
         });
       } catch (e) {
@@ -120,6 +123,13 @@ export function GymProvider({ children }) {
     [memberships, activeGymId]
   );
 
+  // LEFT rows are history only ("previous gyms") — they never make the app
+  // a gym app again; a user whose relationships are all LEFT is standalone
+  const hasActiveGym = useMemo(
+    () => (memberships || []).some((m) => m && m.status !== 'LEFT'),
+    [memberships]
+  );
+
   const attendance = useMemo(() => {
     const entry = (histories || []).find((h) => h && h.gym_id === (activeRow || {}).gym_id);
     return summarizeAttendance(entry ? entry.history : null);
@@ -130,7 +140,7 @@ export function GymProvider({ children }) {
       loading: memberships === null,
       error,
       reload,
-      hasGym: !!memberships && memberships.length > 0,
+      hasGym: hasActiveGym,
       memberships: memberships || [],
       activeGymId,
       setActiveGymId,
@@ -160,7 +170,7 @@ export function GymProvider({ children }) {
       attendance,
       notificationsUnread: unreadCount,
     }),
-    [memberships, error, reload, activeRow, attendance, unreadCount, activeGymId]
+    [memberships, error, reload, activeRow, attendance, unreadCount, activeGymId, hasActiveGym]
   );
 
   return <GymContext.Provider value={value}>{children}</GymContext.Provider>;
