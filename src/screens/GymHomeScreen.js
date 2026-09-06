@@ -735,6 +735,25 @@ const makeStyles = (colors) => StyleSheet.create({
   stat: { flex: 1, alignItems: 'flex-start' },
   statValue: { color: colors.text, fontSize: 22, fontWeight: '800', fontVariant: ['tabular-nums'] },
   statLabel: { color: colors.textDim, fontSize: 11, marginTop: 2 },
+  // attendance action buttons ("Check in with QR" + "View full history").
+  // These were referenced without being defined — unstyled rendering
+  // (default black text, no padding/alignment) — now proper pill buttons,
+  // equal-width side by side.
+  attActions: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  attAction: {
+    flexGrow: 1, flexBasis: '40%',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    borderWidth: 1, borderColor: colors.border,
+    borderRadius: 9, paddingHorizontal: 12, paddingVertical: 9,
+  },
+  attActionPrimary: {
+    backgroundColor: colors.primary, borderColor: colors.primary,
+  },
+  attActionPrimaryText: { color: '#fff', fontWeight: '800', fontSize: 12.5 },
+  attActionText: { color: colors.primary, fontWeight: '800', fontSize: 12.5 },
   entryRow: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
     paddingVertical: 11,

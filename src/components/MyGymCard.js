@@ -91,7 +91,10 @@ export default function MyGymCard() {
       }
     };
     return (
-      <View style={styles.card}>
+      <>
+      {/* column container: styles.card is a row (icon · title · chevron) and
+          would push the invitation button off the card's edge */}
+      <View style={styles.emptyCard}>
         <View style={styles.emptyRow}>
           <Ionicons name="business-outline" size={18} color={colors.primary} />
           <View style={{ flex: 1 }}>
@@ -147,10 +150,11 @@ export default function MyGymCard() {
               </View>
             </View>
           </View>
-        </Modal>
-        {formerSection}
+      </Modal>
       </View>
-    );
+      {formerSection}
+    </>
+  );
   }
 
   return (
@@ -213,7 +217,15 @@ const makeStyles = (colors) => StyleSheet.create({
   formerCard: { opacity: 0.75 },
   rowTitle: { color: colors.text, fontSize: 14, fontWeight: '700' },
   rowSub: { color: colors.textDim, fontSize: 11, marginTop: 2 },
-  emptyRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-start', paddingTop: 4 },
+  emptyCard: {
+    backgroundColor: colors.card,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    padding: 14,
+    marginBottom: 12,
+  },
+  emptyRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
   emptyTitle: { color: colors.text, fontSize: 13.5, fontWeight: '800' },
   emptyBody: { color: colors.textDim, fontSize: 11.5, lineHeight: 16, marginTop: 3 },
   codeBtn: {

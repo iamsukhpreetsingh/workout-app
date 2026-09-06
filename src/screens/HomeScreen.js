@@ -17,7 +17,8 @@ import { NotificationBell } from '../components/NotificationBell';
 import { fmtVolume } from '../shared/utils/format';
 import { getSyncStatus, addSyncListener, initConnectivityListener, syncPending, getSyncSettings } from '../lib/sync';
 // import { ACTIVE_WORKOUT, MAIN_TABS, NOTIFICATION_CENTER, PLAN_DETAIL, PROFILE, SESSION_DETAIL, SETTINGS, TAB_HISTORY } from '../shared/constants/routes';
-import { ACTIVE_WORKOUT, CLIENT_ASSIGNED_DETAIL, HISTORY, NOTIFICATION_CENTER, PLAN_DETAIL, SESSION_DETAIL, SETTINGS } from '../shared/constants/routes';
+import { ACTIVE_WORKOUT, CLIENT_ASSIGNED_DETAIL, GYM_CHECK_IN, HISTORY, NOTIFICATION_CENTER, PLAN_DETAIL, SESSION_DETAIL, SETTINGS } from '../shared/constants/routes';
+import { useGym } from '../store/GymContext';
 const NUMS = { fontVariant: ['tabular-nums'] };
 
 function smartWorkoutName() {
@@ -77,6 +78,8 @@ export default function HomeScreen({ navigation }) {
   const [assignedPlans, setAssignedPlans] = useState([]);
   const [pinnedItems, setPinnedItems] = useState([]);
   const { user } = useAuth();
+  // gym association decides whether the QR check-in shortcut shows
+  const gymCtx = useGym();
   const [emptyName, setEmptyName] = useState(smartWorkoutName());
   const [syncStatus, setSyncStatus] = useState({ status: 'synced', pending_count: 0, isConnected: true });
   
@@ -265,6 +268,29 @@ export default function HomeScreen({ navigation }) {
         renderItem={null}
         ListHeaderComponent={
           <View>
+            {/* Gym attendance QR shortcut — only while the user is
+                associated with a gym (standalone users never see it).
+                Navigates to the QR check-in screen, which records the
+                visit; eligibility is re-validated by the backend. */}
+            {gymCtx.hasGym && (
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => navigation.navigate(GYM_CHECK_IN)}
+                style={styles.gymCheckIn}
+                accessibilityRole="button"
+                accessibilityLabel="Scan gym QR to mark attendance"
+              >
+                <View style={styles.gymCheckInIcon}>
+                  <Ionicons name="qr-code-outline" size={20} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.gymCheckInTitle}>Gym Check-in</Text>
+                  <Text style={styles.gymCheckInSub}>Scan the gym QR to mark today&apos;s attendance</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+              </TouchableOpacity>
+            )}
+
             {/* ── Zone 1: signature CTA ─────────────────────────────── */}
             <TouchableOpacity activeOpacity={0.85} onPress={onStartPress} style={styles.cta}>
               <View style={styles.ctaGlow} />
@@ -495,6 +521,29 @@ const makeStyles = (colors) =>
       alignItems: 'center',
       justifyContent: 'center',
     },
+    gymCheckIn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
+      padding: 13,
+      marginBottom: 12,
+    },
+    gymCheckInIcon: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.cardLight,
+      borderWidth: 1,
+      borderColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    gymCheckInTitle: { color: colors.text, fontSize: 14.5, fontWeight: '800' },
+    gymCheckInSub: { color: colors.textDim, fontSize: 11.5, marginTop: 2 },
     ctaTitle: { color: colors.text, fontSize: 22, fontWeight: '800', letterSpacing: -0.4 },
     ctaSub: { color: colors.textDim, fontSize: 13, marginTop: 3 },
     ctaGo: {
