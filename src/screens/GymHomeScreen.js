@@ -35,7 +35,7 @@
 // M1.1: this screen is a shared-pool screen (registered in every tab
 // stack), pushed from MyGymCard on the Profile tab. Same section, same
 // entry point — only the content of the screen grows up.
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -44,6 +44,7 @@ import {
   TouchableOpacity,
   Linking,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -56,6 +57,7 @@ import {
   fetchMyGymClasses,
   fetchMyGymAnnouncements,
   fetchMyGymBilling,
+  leaveMyGym,
 } from '../lib/gymApi';
 import {
   statusColor,
@@ -113,6 +115,49 @@ export default function GymHomeScreen() {
   );
 
   const styles = makeStyles(colors);
+
+  // ── LEAVE GYM — deliberately the LAST action on this page (never on the
+  // Profile card) so nobody leaves a gym by accident. The member identity
+  // is resolved server-side from the JWT; the relationship becomes LEFT
+  // (history preserved) and the app re-resolves its gym state.
+  const [leavingGym, setLeavingGym] = useState(false);
+
+  const doLeaveGym = async () => {
+    if (leavingGym || !gymRow?.gym_id) return; // duplicate tap guard
+    setLeavingGym(true);
+    try {
+      await leaveMyGym(gymRow.gym_id);
+      gym.reload(); // re-resolve selection (last gym → standalone mode)
+      Alert.alert(
+        `You left ${gymRow.gym_name}`,
+        'Your history with this gym is preserved. You can rejoin later if the gym allows.'
+      );
+      navigation.goBack(); // this gym's page is no longer accessible
+    } catch (e) {
+      Alert.alert('Could not leave gym', e?.message || 'Please try again later.');
+    } finally {
+      setLeavingGym(false);
+    }
+  };
+
+  const confirmLeaveGym = () => {
+    Alert.alert(
+      `Leave ${gymRow.gym_name}?`,
+      [
+        'If you leave this gym:',
+        '\u2022 You lose access to its active member features.',
+        '\u2022 Gym attendance, check-in and announcements stop.',
+        '\u2022 You can no longer submit payment proofs there.',
+        '\u2022 Your personal fitness data and this gym\'s history are preserved.',
+        '\u2022 Your other gyms are not affected.',
+        'You can rejoin later if the gym allows.',
+      ].join('\n'),
+      [
+        { text: 'Keep Gym', style: 'cancel' },
+        { text: 'Leave Gym', style: 'destructive', onPress: doLeaveGym },
+      ]
+    );
+  };
 
   // ── per-gym slices (pure selection — the server already ordered/sized) ──
   const gymId = (gym.gym || {}).gym_id || null;
@@ -562,6 +607,30 @@ export default function GymHomeScreen() {
           )}
         </>
       ))}
+
+      {/* LEAVE GYM — last item on the page, deliberately buried below every
+          daily-use section so it can never be tapped by accident */}
+      <View style={[styles.card, { borderColor: `${colors.red}55` }]}>
+        <Text style={[styles.cardTitle, { color: colors.red }]}>
+          Leave {gymRow.gym_name}
+        </Text>
+        <Text style={styles.leaveBody}>
+          Ends your membership with this gym. Your workouts, attendance and
+          payment history here are preserved, and you can rejoin later if the
+          gym allows.
+        </Text>
+        <TouchableOpacity
+          style={[styles.leaveBtn, leavingGym && { opacity: 0.6 }]}
+          onPress={confirmLeaveGym}
+          disabled={leavingGym}
+          accessibilityRole="button"
+          accessibilityLabel={`Leave ${gymRow.gym_name}`}
+        >
+          {leavingGym
+            ? <ActivityIndicator size="small" color="#fff" />
+            : <Text style={styles.leaveBtnText}>Leave this gym</Text>}
+        </TouchableOpacity>
+      </View>
     </ScrollView>
   );
 }
@@ -624,6 +693,14 @@ const makeStyles = (colors) => StyleSheet.create({
   },
   cardTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.xs },
   cardTitle: { color: colors.text, fontSize: 13, fontWeight: '800', letterSpacing: 0.3, marginBottom: spacing.sm },
+  leaveBody: { color: colors.textDim, fontSize: 11.5, lineHeight: 16, marginTop: 4, marginBottom: 10 },
+  leaveBtn: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.red,
+    borderRadius: 9,
+    paddingHorizontal: 14, paddingVertical: 9,
+  },
+  leaveBtnText: { color: '#fff', fontWeight: '800', fontSize: 12.5 },
   skeletonTitle: { height: 12, borderRadius: 6, width: 110, marginBottom: spacing.sm },
   skeletonBar: { borderRadius: 10 },
   sectionError: {

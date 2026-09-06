@@ -575,10 +575,13 @@ with `left_reason` distinguishing the two.
   the same identity, duplicate-member 409, distinct audit events.
 
 - **Mobile side (app)**: `MyGymCard` (Profile) renders one row per ACTIVE
-  gym relationship with a per-row leave action (log-out icon → Alert
-  confirmation spelling out what is lost vs preserved → `leaveMyGym` →
-  context `reload()`), plus a "Previous gyms" section for LEFT rows (flat,
-  non-tappable, LEFT · date · removed-by-gym). `GymContext.hasGym` counts
+  gym relationship (view + switch ONLY — deliberately NO leave action on
+  the card so nobody leaves a gym by accident) plus a "Previous gyms"
+  section for LEFT rows (flat, non-tappable, LEFT · date · removed-by-gym).
+  The LEAVE action lives at the very BOTTOM of the My Gym page
+  (GymHomeScreen, `GymHomeScreen.js`), below every daily-use section: a
+  red "Leave this gym" card → Alert spelling out what is lost vs preserved
+  → `leaveMyGym` → context `reload()` → navigate back. `GymContext.hasGym` counts
   only non-LEFT rows — a user whose gyms are all LEFT is standalone again;
   `resolveActiveMembershipRow` (gymState) and the GymHomeScreen switcher
   chips never select a LEFT gym; `hasActiveGymMembership` (workout→attendance
