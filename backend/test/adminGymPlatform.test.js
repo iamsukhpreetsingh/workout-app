@@ -210,3 +210,29 @@ async function appUserToken(userId) {
   const jwt = require('jsonwebtoken');
   return jwt.sign({ id: userId, role: 'user' }, process.env.JWT_SECRET, { expiresIn: '5m' });
 }
+
+// ── F3: platform-wide leads view (read-only) ─────────────────────────────
+
+test('F3: platform leads list — gym name joined, filters work, cross-gym visible', async () => {
+  await query(`INSERT INTO gym_leads (gym_id, full_name, phone) VALUES ($1, 'Alpha Lead', '9888800001')`, [gymA2]);
+  await query(`INSERT INTO gym_leads (gym_id, full_name, phone) VALUES ($1, 'Beta Lead', '9888800002')`, [gymB2]);
+
+  const all = await (await adminApi('analyst', 'GET', '/admin/leads?limit=100')).json();
+  assert.ok(all.total >= 2);
+  const alpha = all.leads.find((l) => l.full_name === 'Alpha Lead');
+  const beta = all.leads.find((l) => l.full_name === 'Beta Lead');
+  assert.ok(alpha && beta, 'leads from both gyms visible platform-wide');
+  assert.ok(alpha.gym_name.includes('Alpha'), 'gym name joined');
+
+  const filtered = await (await adminApi('analyst', 'GET', `/admin/leads?gym_id=${gymB2}`)).json();
+  assert.ok(filtered.leads.every((l) => l.gym_id === gymB2), 'gym filter narrows correctly');
+  assert.ok(filtered.leads.some((l) => l.full_name === 'Beta Lead'));
+
+  const byStatus = await (await adminApi('analyst', 'GET', '/admin/leads?status=NEW&limit=100')).json();
+  assert.ok(byStatus.leads.every((l) => l.status === 'NEW'));
+});
+
+test('F3: unauthenticated leads access rejected', async () => {
+  const res = await fetch(`${baseUrl}/admin/leads`);
+  assert.equal(res.status, 401);
+});

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Layout, Menu, Button, Typography, message } from 'antd';
 import {
   HomeOutlined,
+  UserAddOutlined,
   ShopOutlined,
   DatabaseOutlined,
   ApiOutlined,
@@ -28,6 +29,7 @@ import LoginPage from './pages/LoginPage';
 import OverviewPage from './pages/OverviewPage';
 import PlatformPage from './pages/PlatformPage';
 import GymsPage from './pages/GymsPage';
+import AdminLeadsPage from './pages/AdminLeadsPage';
 import DatabasePage from './pages/DatabasePage';
 import ApiExplorerPage from './pages/ApiExplorerPage';
 import UsersPage from './pages/UsersPage';
@@ -67,6 +69,7 @@ export default function App() {
     { key: 'overview', icon: <DashboardOutlined />, label: 'Dashboard' },
     { key: 'platform', icon: <ShopOutlined />, label: 'Platform' },
     { key: 'gyms', icon: <HomeOutlined />, label: 'Gyms' },
+    { key: 'admin-leads', icon: <UserAddOutlined />, label: 'Leads' },
     { key: 'database', icon: <DatabaseOutlined />, label: 'Database' },
     { key: 'api', icon: <ApiOutlined />, label: 'API Explorer' },
     { key: 'users', icon: <TeamOutlined />, label: 'Users & Trainers' },
@@ -122,6 +125,7 @@ export default function App() {
             {page === 'overview' && <OverviewPage />}
             {page === 'platform' && <PlatformPage />}
             {page === 'gyms' && <GymsPage profile={p} />}
+            {page === 'admin-leads' && <AdminLeadsPage />}
             {page === 'database' && <DatabasePage />}
             {page === 'api' && <ApiExplorerPage />}
             {page === 'users' && <UsersPage />}

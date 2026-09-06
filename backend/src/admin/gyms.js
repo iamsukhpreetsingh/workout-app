@@ -100,6 +100,46 @@ registerRoute(router, {
   } catch (e) { err(res, e); }
 }, requireAdminRole('analyst', 'super_admin', 'support', 'read_only'));
 
+
+registerRoute(router, {
+  method: 'GET', path: '/leads', category: 'Gyms',
+  description: 'Platform-wide lead inbox across ALL gyms (read-only visibility, not gym operations — status changes stay in the Gym Portal). Filters: gym_id, status, type, q (name/phone/email), limit, offset. Each row carries its gym name.',
+  allowedRoles: ['analyst', 'super_admin', 'support', 'read_only'],
+}, async (req, res) => {
+  try {
+    const lim = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 100);
+    const off = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const where = ['TRUE'];
+    const vals = [];
+    if (req.query.gym_id && UUID_RE.test(req.query.gym_id)) {
+      vals.push(req.query.gym_id); where.push(`l.gym_id = $${vals.length}`);
+    }
+    if (req.query.status && ['NEW','CONTACTED','TRIAL_SCHEDULED','TRIAL_COMPLETED','JOINED','NOT_JOINED','NO_RESPONSE','FOLLOW_UP','CLOSED'].includes(req.query.status)) {
+      vals.push(req.query.status); where.push(`l.status = $${vals.length}`);
+    }
+    if (req.query.type && ['ENQUIRY','TRIAL','VISITOR','MEMBERSHIP_ENQUIRY','GENERAL_ENQUIRY'].includes(req.query.type)) {
+      vals.push(req.query.type); where.push(`l.enquiry_type = $${vals.length}`);
+    }
+    if (req.query.q) {
+      vals.push(`%${String(req.query.q).trim()}%`);
+      where.push(`(l.full_name ILIKE $${vals.length} OR l.phone ILIKE $${vals.length} OR COALESCE(l.email,'') ILIKE $${vals.length})`);
+    }
+    const { rows } = await query(
+      `SELECT l.id, l.full_name, l.phone, l.email, l.enquiry_type, l.status, l.source,
+              l.created_at, l.converted_member_id, g.name AS gym_name, g.id AS gym_id
+       FROM gym_leads l JOIN gyms g ON g.id = l.gym_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY l.created_at DESC
+       LIMIT ${lim} OFFSET ${off}`,
+      vals
+    );
+    const total = (await query(
+      `SELECT count(*)::int AS c FROM gym_leads l WHERE ${where.join(' AND ')}`, vals
+    )).rows[0].c;
+    res.json({ total, leads: rows });
+  } catch (e) { err(res, e); }
+}, requireAdminRole('analyst', 'super_admin', 'support', 'read_only'));
+
 // ── platform lifecycle: SUSPENDED is the admin's lever (spec: a suspended
 // gym stops operating — the guard chain already 403s everything). ─────────
 
