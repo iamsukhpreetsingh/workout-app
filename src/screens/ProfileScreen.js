@@ -8,7 +8,7 @@ import { fetchMyActiveTrainer } from '../lib/gymApi';
 import { activeTrainerSourceLine } from '../lib/gymState';
 import { useColors } from '../theme';
 import { useHeaderActions } from '../components/HeaderActions';
-import { TAB_CLIENTS, EDIT_PROFILE, INTAKE_FORM } from '../shared/constants/routes';
+import { EDIT_PROFILE, INTAKE_FORM } from '../shared/constants/routes';
 import ChangePasswordCard from '../components/ChangePasswordCard';
 import MyGymCard from '../components/MyGymCard';
 
@@ -251,33 +251,7 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer, logout, inTr
             </Text>
           </View>
 
-          <TouchableOpacity
-            style={styles.switchBtn}
-            onPress={() => onSwitchView && onSwitchView('user')}
-          >
-            <Ionicons name="swap-horizontal-outline" size={18} color={colors.primary} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.switchTitle}>Switch to User View</Text>
-              <Text style={styles.switchSub}>Log your own workouts like a personal account</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-          </TouchableOpacity>
         </>
-      )}
-
-      {/* trainer browsing their own account in User View: switch back */}
-      {isTrainer && !inTrainerView && onSwitchView && (
-        <TouchableOpacity
-          style={styles.switchBtn}
-          onPress={() => onSwitchView('trainer')}
-        >
-          <Ionicons name="swap-horizontal-outline" size={18} color={colors.primary} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.switchTitle}>Switch to Trainer View</Text>
-            <Text style={styles.switchSub}>Manage clients and assign plans</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-        </TouchableOpacity>
       )}
 
       <View style={styles.card}>
@@ -418,13 +392,39 @@ function ProfileBody({ navigation, colors, styles, user, isTrainer, logout, inTr
         </TouchableOpacity>
       </View>
 
-      {isTrainer && (
+      {/* the ONE trainer-view entry point, deliberately at the very bottom:
+          - user view: "Manage Clients" opens the TRAINER VIEW (the Clients
+            tab only exists in the trainer navigator, so navigating there
+            from user view crashed — switching the view IS the feature);
+          - trainer view: the same spot becomes the way back to the personal
+            account (formerly the redundant mid-page switch card). */}
+      {isTrainer && !inTrainerView && onSwitchView && (
         <TouchableOpacity
           style={styles.clientsRow}
-          onPress={() => navigation.navigate(TAB_CLIENTS)}
+          onPress={() => onSwitchView('trainer')}
+          accessibilityRole="button"
+          accessibilityLabel="Open trainer view to manage clients"
         >
           <Ionicons name="people-outline" size={20} color={colors.primary} />
-          <Text style={styles.clientsText}>Manage Clients</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.clientsText}>Manage Clients</Text>
+            <Text style={styles.clientsSub}>Opens trainer view — clients, plans & assignments</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+        </TouchableOpacity>
+      )}
+      {isTrainer && inTrainerView && onSwitchView && (
+        <TouchableOpacity
+          style={styles.clientsRow}
+          onPress={() => onSwitchView('user')}
+          accessibilityRole="button"
+          accessibilityLabel="Open personal mode to log your own workouts"
+        >
+          <Ionicons name="person-outline" size={20} color={colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.clientsText}>Personal Mode</Text>
+            <Text style={styles.clientsSub}>Log your own workouts, diet & progress</Text>
+          </View>
           <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
         </TouchableOpacity>
       )}
@@ -453,14 +453,6 @@ const makeStyles = (colors) =>
     inviteBtnText: { color: colors.text, fontWeight: '700', fontSize: 13 },
     inviteBtnTextOn: { color: '#fff', fontWeight: '700', fontSize: 13 },
     inviteHint: { color: colors.textDim, fontSize: 11, marginTop: 12 },
-    switchBtn: {
-      flexDirection: 'row', alignItems: 'center', gap: 12,
-      backgroundColor: colors.card, borderRadius: 14, padding: 16,
-      borderLeftWidth: 3, borderLeftColor: colors.primary,
-      borderTopLeftRadius: 4, borderBottomLeftRadius: 4,
-    },
-    switchTitle: { color: colors.text, fontSize: 15, fontWeight: '700' },
-    switchSub: { color: colors.textDim, fontSize: 12, marginTop: 2 },
     editBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
       borderWidth: 1.5, borderColor: colors.primary, borderRadius: 12,
@@ -510,6 +502,7 @@ const makeStyles = (colors) =>
       marginTop: 4,
     },
     clientsText: { color: colors.primary, fontWeight: '700', flex: 1 },
+    clientsSub: { color: colors.textDim, fontSize: 11.5, marginTop: 2 },
     reconnectBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 24 },
     reconnectSheet: { backgroundColor: colors.card, borderRadius: 16, padding: 20 },
     reconnectTitle: { color: colors.text, fontSize: 17, fontWeight: '800' },
