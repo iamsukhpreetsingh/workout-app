@@ -360,3 +360,75 @@ GENERAL REQUIREMENTS
 - Add a documented test (automated or manual) verifying auto-discovery specifically: add a
   throwaway test table via migration, confirm it appears in Database; add a throwaway test route
   via registerRoute(), confirm it appears in API Explorer; remove both afterward.
+
+════════════════════════════════════════
+PHASE — GYM PLATFORM CONTROL (implemented 2026-09)
+════════════════════════════════════════
+Extends the admin panel from the trainer-app scope to the WHOLE platform.
+All new endpoints live in backend/src/admin/gyms.js (mounted in server.js
+before the other admin module routers) and reuse the same tables the User
+App and Gym Portal write to — no second source of truth, no duplicated
+business logic.
+
+Backend endpoints (all requireAdmin + requireAdminRole; writes super_admin
+only and admin-audited via admin_audit_log):
+
+- GET  /admin/analytics/platform
+    Platform KPI aggregate: users (total/new today-week-month/suspended),
+    gyms (active/inactive/suspended/new), memberships by status, attendance
+    (today/week/month + gyms active today), leads funnel (by status + type +
+    source, conversion %), trainers (gym staff vs independent connections),
+    12-month gym creation trend + 12-week lead trend.
+- GET  /admin/gyms            list — search (name/city/owner email), status
+                              filter (ACTIVE/INACTIVE/SUSPENDED), pagination,
+                              live member/lead/term counts + primary owner
+- GET  /admin/gyms/:id        detail — staff roster + live counts (members,
+                              active terms, leads, attendance 30d, branches,
+                              scheduled classes)
+- PATCH /admin/gyms/:id/suspend       → gyms.status = SUSPENDED (reason
+                              required). Enforcement is the EXISTING guard
+                              chain: resolveGymContext immediately answers
+                              403 "This gym is suspended" to the gym's staff
+                              AND members — no new enforcement code, and the
+                              User App / Gym Portal degrade automatically.
+- PATCH /admin/gyms/:id/reactivate    → SUSPENDED → ACTIVE (owner-
+                              deactivated INACTIVE gyms are NOT touched;
+                              that lever belongs to the owner).
+- GET  /admin/leads           platform-wide lead inbox (gym name joined;
+                              filters gym_id/status/type/q). READ-ONLY by
+                              design — follow-up is a Gym Portal operation.
+- GET  /admin/attendance      platform-wide check-ins (member + gym names;
+                              gym_id + from/to date filters). Read-only.
+- GET  /admin/memberships     platform-wide membership terms INCLUDING
+                              historical states (EXPIRED/CANCELLED preserved,
+                              never hidden — a user account is not a
+                              membership). Read-only.
+- GET  /admin/trainers        the TWO trainer relationship models kept
+                              separate and labeled: gym trainers (gym_staff
+                              TRAINER + live assignment counts) vs
+                              independent user connections (trainer_clients).
+                              Read-only; the gym-assignment-first precedence
+                              is documented in the UI, never modified here.
+
+Also wired to existing (previously unused) endpoints:
+- Admin accounts page → GET/POST/PATCH /admin/admins (super_admin): create,
+  deactivate, change panel role. Self-account protected in the UI.
+- Users page → PATCH /admin/users/:id/role (super_admin): user↔trainer
+  switch with the backend's 409 (trainer still has clients) surfaced.
+
+Frontend pages (admin-dashboard/src/pages): PlatformPage, GymsPage,
+AdminLeadsPage, AdminAttendancePage, AdminMembershipsPage,
+AdminTrainersPage, AdminAccountsPage — all antd Table/Card conventions,
+server-side pagination, loading/error/empty states, Popconfirm on every
+destructive action.
+
+Tests: backend/test/adminGymPlatform.test.js (14) — section-complete
+platform analytics with delta checks, gym list/detail, role gating,
+suspend-enforcement cross-check THROUGH the gym guard chain, reactivate,
+platform leads/attendance/memberships visibility + filters, trainers
+separation. Run: node --test test/adminGymPlatform.test.js
+
+Intentionally out of scope: gym APPROVAL workflow (gyms self-register and
+start ACTIVE — no PENDING state exists in the schema; adding one is a
+product decision), platform_settings table (feature_flags covers current
+needs), and impersonation changes.
