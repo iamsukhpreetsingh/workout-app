@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Layout, Menu, Button, Typography, message } from 'antd';
 import {
+  UserSwitchOutlined,
+  SafetyCertificateOutlined,
   IdcardOutlined,
   CalendarOutlined,
   HomeOutlined,
@@ -34,6 +36,8 @@ import GymsPage from './pages/GymsPage';
 import AdminLeadsPage from './pages/AdminLeadsPage';
 import AdminMembershipsPage from './pages/AdminMembershipsPage';
 import AdminAttendancePage from './pages/AdminAttendancePage';
+import AdminTrainersPage from './pages/AdminTrainersPage';
+import AdminAccountsPage from './pages/AdminAccountsPage';
 import DatabasePage from './pages/DatabasePage';
 import ApiExplorerPage from './pages/ApiExplorerPage';
 import UsersPage from './pages/UsersPage';
@@ -79,6 +83,8 @@ export default function App() {
     { key: 'database', icon: <DatabaseOutlined />, label: 'Database' },
     { key: 'api', icon: <ApiOutlined />, label: 'API Explorer' },
     { key: 'users', icon: <TeamOutlined />, label: 'Users & Trainers' },
+    { key: 'admin-trainers', icon: <UserSwitchOutlined />, label: 'Trainers' },
+    isSuper ? { key: 'admin-accounts', icon: <SafetyCertificateOutlined />, label: 'Admin Accounts' } : null,
     isSupport ? { key: 'relationships', icon: <SwapOutlined />, label: 'Relationships' } : null,
     isSupport ? { key: 'intake', icon: <FileTextOutlined />, label: 'Intake Profiles' } : null,
     isSupport ? { key: 'progression', icon: <LineChartOutlined />, label: 'Progression' } : null,
@@ -136,7 +142,9 @@ export default function App() {
             {page === 'admin-attendance' && <AdminAttendancePage />}
             {page === 'database' && <DatabasePage />}
             {page === 'api' && <ApiExplorerPage />}
-            {page === 'users' && <UsersPage />}
+            {page === 'users' && <UsersPage profile={p} />}
+            {page === 'admin-trainers' && <AdminTrainersPage />}
+            {page === 'admin-accounts' && <AdminAccountsPage currentEmail={p.email || ''} />}
             {page === 'relationships' && <RelationshipsPage />}
             {page === 'intake' && <IntakePage />}
             {page === 'progression' && <ProgressionPage />}

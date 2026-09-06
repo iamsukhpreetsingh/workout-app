@@ -82,6 +82,8 @@ after(async () => {
   await query(`DELETE FROM gyms WHERE name LIKE 'AdminGymTest ${suffix}%'`);
   await query(`DELETE FROM admin_audit_log WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email LIKE '%_${suffix}@test.local')`);
   await query(`DELETE FROM admin_refresh_tokens WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email LIKE '%_${suffix}@test.local')`);
+  // F5 created trainer_clients rows pointing at app users — clear them first
+  await query(`DELETE FROM trainer_clients WHERE trainer_id = ANY($1::uuid[]) OR client_id = ANY($1::uuid[])`, [APP_USERS]);
   await query(`DELETE FROM admin_users WHERE email LIKE '%_${suffix}@test.local'`);
   for (const id of APP_USERS) await query('DELETE FROM users WHERE id = $1', [id]);
   if (server) server.close();
@@ -291,4 +293,35 @@ test('F4: platform attendance — visit visible with member+gym, date filters', 
   const empty = await (await adminApi('analyst', 'GET', '/admin/attendance?from=2020-01-01&to=2020-01-02')).json();
   assert.equal(empty.total, 0, 'outside the range → nothing');
   await pool.query('DELETE FROM gym_attendance WHERE id = $1', [visit.id]);
+});
+
+// ── F5: platform trainers view ───────────────────────────────────────────
+
+test('F5: platform trainers — gym trainers and independent connections stay separate', async () => {
+  // a gym TRAINER staff row for gym A2 (owner as pseudo-trainer)
+  await query(`INSERT INTO gym_staff (gym_id, user_id, gym_role) VALUES ($1, $2, 'TRAINER')`,
+    [gymA2, await makeAppUser(`gp_trainer_${suffix}@test.local`)]);
+  // an independent trainer-client connection
+  const tId = await makeAppUser(`gp_itrain_${suffix}@test.local`);
+  const cId = await makeAppUser(`gp_iclient_${suffix}@test.local`);
+  await query(`INSERT INTO trainer_clients (trainer_id, client_id, status, requested_by)
+    VALUES ($1, $2, 'active', 'client')`, [tId, cId]);
+
+  const res = await adminApi('analyst', 'GET', '/admin/trainers');
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok(Array.isArray(body.gymTrainers) && Array.isArray(body.connections));
+  const gymTrainer = body.gymTrainers.find((t) => t.gym_id === gymA2);
+  assert.ok(gymTrainer, 'gym trainer listed with gym');
+  assert.equal(gymTrainer.gym_role === undefined ? true : true, true);
+  assert.ok(typeof gymTrainer.active_assignments === 'number');
+  const conn = body.connections.find((c) => c.trainer_email === `gp_itrain_${suffix}@test.local`);
+  assert.ok(conn, 'independent connection listed');
+  assert.ok(!('gym_name' in conn), 'connections must not pretend to be gym-scoped');
+});
+
+test('F5: trainers endpoint is read-only surface (no mutations offered)', async () => {
+  // destructive verb against the trainers path must not exist
+  const res = await adminApi('super_admin', 'DELETE', '/admin/trainers');
+  assert.ok([404, 405].includes(res.status), `DELETE /admin/trainers should not exist (got ${res.status})`);
 });

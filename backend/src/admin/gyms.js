@@ -221,6 +221,40 @@ registerRoute(router, {
   } catch (e) { err(res, e); }
 }, requireAdminRole('analyst', 'super_admin', 'support', 'read_only'));
 
+
+registerRoute(router, {
+  method: 'GET', path: '/trainers', category: 'Gyms',
+  description: "Platform-wide trainer view that keeps the TWO relationship models separate: (1) gym trainers = gym_staff rows with gym_role TRAINER (their assignments live in gym_trainer_assignments and are gym-scoped), (2) independent trainer connections = trainer_clients rows (user-to-user, app-level). The app's active-trainer precedence (gym assignment first) is displayed but never modified here.",
+  allowedRoles: ['analyst', 'super_admin', 'support', 'read_only'],
+}, async (req, res) => {
+  try {
+    const lim = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 200);
+    const gymTrainers = (await query(
+      `SELECT s.id, s.status, s.created_at, u.name, u.email,
+              g.name AS gym_name, g.id AS gym_id,
+              (SELECT count(*)::int FROM gym_trainer_assignments a
+                WHERE a.trainer_staff_id = s.id AND a.status = 'ACTIVE') AS active_assignments
+       FROM gym_staff s
+       JOIN users u ON u.id = s.user_id
+       JOIN gyms g ON g.id = s.gym_id
+       WHERE s.gym_role = 'TRAINER'
+       ORDER BY s.created_at DESC
+       LIMIT ${lim}`
+    )).rows;
+    const connections = (await query(
+      `SELECT tc.id, tc.status, tc.created_at, tc.responded_at,
+              tu.name AS trainer_name, tu.email AS trainer_email,
+              cu.name AS client_name, cu.email AS client_email
+       FROM trainer_clients tc
+       JOIN users tu ON tu.id = tc.trainer_id
+       JOIN users cu ON cu.id = tc.client_id
+       ORDER BY tc.created_at DESC
+       LIMIT ${lim}`
+    )).rows;
+    res.json({ gymTrainers, connections });
+  } catch (e) { err(res, e); }
+}, requireAdminRole('analyst', 'super_admin', 'support', 'read_only'));
+
 // ── platform lifecycle: SUSPENDED is the admin's lever (spec: a suspended
 // gym stops operating — the guard chain already 403s everything). ─────────
 

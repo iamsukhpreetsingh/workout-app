@@ -3,7 +3,7 @@ import { Card, Table, Input, Select, Button, Drawer, Descriptions, Tag, Space, S
 import { api, getProfile, resetUserPassword, impersonateUser } from '../api';
 import { useImpersonation } from '../impersonation';
 
-export default function UsersPage() {
+export default function UsersPage({ profile }: { profile?: { role: string } }) {
   const [rows, setRows] = useState<any[]>([]);
   const [q, setQ] = useState('');
   const [role, setRole] = useState<string | undefined>();
@@ -23,6 +23,18 @@ export default function UsersPage() {
   useEffect(() => { load(); }, []); // eslint-disable-line
 
   const open = async (id: string) => setDetail(await api(`/users/${id}`));
+
+  const changeRole = async (user: any, role: string) => {
+    if (role === user.role) return;
+    try {
+      const updated = await api(`/users/${user.id}/role`, { method: 'PATCH', body: { role } });
+      msg.success(`Role changed to ${updated.role}`);
+      setDetail({ ...detail, ...updated });
+      load();
+    } catch (e: any) {
+      msg.error(e.message || 'Could not change role');
+    }
+  };
 
   const suspend = async (user: any, suspended: boolean) => {
     try {
@@ -122,7 +134,17 @@ export default function UsersPage() {
           <div>
             <Descriptions column={1} size="small">
               <Descriptions.Item label="Email">{detail.email}</Descriptions.Item>
-              <Descriptions.Item label="Role">{detail.role}</Descriptions.Item>
+              <Descriptions.Item label="Role">
+                {profile?.role === 'super_admin' ? (
+                  <Select
+                    size="small"
+                    value={detail.role}
+                    style={{ width: 120 }}
+                    options={[{ value: 'user', label: 'user' }, { value: 'trainer', label: 'trainer' }]}
+                    onChange={(v) => changeRole(detail, v)}
+                  />
+                ) : detail.role}
+              </Descriptions.Item>
               <Descriptions.Item label="Created">{String(detail.created_at)?.slice(0, 10)}</Descriptions.Item>
               <Descriptions.Item label="Sessions logged">{detail.session_count}</Descriptions.Item>
               <Descriptions.Item label="Last workout">{detail.last_workout_at ? String(detail.last_workout_at).slice(0, 10) : '—'}</Descriptions.Item>
