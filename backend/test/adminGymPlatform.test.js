@@ -1,0 +1,128 @@
+// Admin panel — platform gym-business features (F1 platform analytics,
+// F2 gym management/lifecycle, F3 platform leads view). Real routers, real
+// DB, self-cleaning fixtures, same harness conventions as admin.test.js.
+const { test, before, after } = require('node:test');
+const assert = require('node:assert');
+const express = require('express');
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const path = require('path');
+
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
+if (!process.env.DATABASE_URL) {
+  console.error('adminGymPlatform.test.js requires DATABASE_URL (copy .env.example to .env)');
+  process.exit(1);
+}
+
+process.env.ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || 'admin-test-secret';
+
+const { pool, query } = require('../src/db/pool');
+const adminAuth = require('../src/admin/auth');
+const adminModules = require('../src/admin/modules');
+
+let app;
+let server;
+let baseUrl;
+
+const suffix = crypto.randomBytes(4).toString('hex');
+const ADMINS = {
+  super_admin: { email: `gp_sa_${suffix}@test.local`, password: 'SuperPass1!' },
+  analyst: { email: `gp_an_${suffix}@test.local`, password: 'AnalystPass1!' },
+  read_only: { email: `gp_ro_${suffix}@test.local`, password: 'ReadOnly1!' },
+};
+const tokens = {};
+const APP_USERS = [];
+
+async function loginAs(role) {
+  const res = await fetch(`${baseUrl}/admin/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: ADMINS[role].email, password: ADMINS[role].password }),
+  });
+  assert.equal(res.status, 200, `login as ${role} should succeed`);
+  const body = await res.json();
+  return body.accessToken;
+}
+
+async function makeAppUser(email) {
+  const { rows } = await query(
+    `INSERT INTO users (email, password_hash, name, role) VALUES ($1, 'x', 'App User', 'user') RETURNING id`,
+    [email]
+  );
+  APP_USERS.push(rows[0].id);
+  return rows[0].id;
+}
+
+before(async () => {
+  app = express();
+  app.use(express.json());
+  app.use('/admin', adminAuth.router);
+  app.use('/admin', adminModules.router);
+  await new Promise((resolve) => { server = app.listen(0, resolve); });
+  baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  for (const [role, creds] of Object.entries(ADMINS)) {
+    const hash = await bcrypt.hash(creds.password, 4);
+    await query(
+      `INSERT INTO admin_users (email, password_hash, name, role)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, is_active = true`,
+      [creds.email, hash, role, role]
+    );
+    tokens[role] = await loginAs(role);
+  }
+});
+
+after(async () => {
+  await query(`DELETE FROM gym_leads WHERE gym_id IN (SELECT id FROM gyms WHERE name LIKE 'AdminGymTest ${suffix}%')`);
+  await query(`DELETE FROM gyms WHERE name LIKE 'AdminGymTest ${suffix}%'`);
+  await query(`DELETE FROM admin_audit_log WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email LIKE '%_${suffix}@test.local')`);
+  await query(`DELETE FROM admin_refresh_tokens WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email LIKE '%_${suffix}@test.local')`);
+  await query(`DELETE FROM admin_users WHERE email LIKE '%_${suffix}@test.local'`);
+  for (const id of APP_USERS) await query('DELETE FROM users WHERE id = $1', [id]);
+  if (server) server.close();
+  await pool.end();
+});
+
+function adminApi(role, method, path, body) {
+  return fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${tokens[role]}`,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+// ── F1: platform analytics ───────────────────────────────────────────────
+
+test('F1: platform analytics — every section present, real aggregates', async () => {
+  const res = await adminApi('analyst', 'GET', '/admin/analytics/platform');
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  for (const key of ['users', 'gyms', 'memberships', 'attendance', 'leads', 'trainers', 'gymTrend', 'leadTrend']) {
+    assert.ok(body[key] !== undefined, `missing section ${key}`);
+  }
+  assert.ok(typeof body.users.total === 'number');
+  assert.ok(typeof body.gyms.active === 'number');
+  assert.ok(typeof body.leads.conversion_pct === 'number');
+});
+
+test('F1: platform analytics reflects new gyms and leads (delta check)', async () => {
+  const before = await (await adminApi('analyst', 'GET', '/admin/analytics/platform')).json();
+  await makeAppUser(`gp_delta_${suffix}@test.local`);
+  await query(`INSERT INTO gyms (name, slug) VALUES ($1, $2)`,
+    [`AdminGymTest ${suffix} delta`, `admingymtest-delta-${suffix}`]);
+  const gymId = (await query(`SELECT id FROM gyms WHERE name = $1`, [`AdminGymTest ${suffix} delta`])).rows[0].id;
+  await query(`INSERT INTO gym_leads (gym_id, full_name, phone) VALUES ($1, 'Delta Lead', '9000000099')`, [gymId]);
+
+  const after = await (await adminApi('analyst', 'GET', '/admin/analytics/platform')).json();
+  assert.equal(after.gyms.total, before.gyms.total + 1);
+  assert.equal(after.leads.total, before.leads.total + 1);
+});
+
+test('F1: unauthenticated access is rejected', async () => {
+  const res = await fetch(`${baseUrl}/admin/analytics/platform`);
+  assert.equal(res.status, 401);
+});

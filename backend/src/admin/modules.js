@@ -243,6 +243,72 @@ registerRoute(router, {
   } catch (e) { err(res, e); }
 }, requireAdminRole('analyst', 'super_admin', 'support', 'read_only'));
 
+
+registerRoute(router, {
+  method: 'GET', path: '/analytics/platform', category: 'Analytics',
+  description: 'Platform-wide gym-business metrics: users (new/suspended), gyms (active/inactive/suspended + creation trend), gym memberships by status, attendance volume (today/week/month), leads funnel by status/type/source with conversion, trainers (gym staff vs independent connections). Every number is one SQL aggregate over the SAME tables the User App and Gym Portal use — no second source of truth.',
+  allowedRoles: ['analyst', 'super_admin', 'support', 'read_only'],
+}, async (req, res) => {
+  try {
+    const one = async (sql) => (await query(sql)).rows[0];
+    const users = await one(`SELECT
+      (SELECT count(*)::int FROM users) AS total,
+      (SELECT count(*)::int FROM users WHERE role = 'user') AS app_users,
+      (SELECT count(*)::int FROM users WHERE role = 'trainer') AS trainers,
+      (SELECT count(*)::int FROM users WHERE is_suspended) AS suspended,
+      (SELECT count(*)::int FROM users WHERE created_at >= now() - interval '1 day') AS new_today,
+      (SELECT count(*)::int FROM users WHERE created_at >= now() - interval '7 days') AS new_week,
+      (SELECT count(*)::int FROM users WHERE created_at >= now() - interval '30 days') AS new_month`);
+    const gyms = await one(`SELECT
+      (SELECT count(*)::int FROM gyms) AS total,
+      (SELECT count(*)::int FROM gyms WHERE status = 'ACTIVE') AS active,
+      (SELECT count(*)::int FROM gyms WHERE status = 'INACTIVE') AS inactive,
+      (SELECT count(*)::int FROM gyms WHERE status = 'SUSPENDED') AS suspended,
+      (SELECT count(*)::int FROM gyms WHERE created_at >= now() - interval '1 day') AS new_today,
+      (SELECT count(*)::int FROM gyms WHERE created_at >= now() - interval '7 days') AS new_week,
+      (SELECT count(*)::int FROM gyms WHERE created_at >= now() - interval '30 days') AS new_month`);
+    const memberships = await one(`SELECT
+      (SELECT count(*)::int FROM member_memberships) AS total,
+      (SELECT count(*)::int FROM member_memberships WHERE status = 'ACTIVE') AS active,
+      (SELECT count(*)::int FROM member_memberships WHERE status = 'UPCOMING') AS upcoming,
+      (SELECT count(*)::int FROM member_memberships WHERE status = 'FROZEN') AS frozen,
+      (SELECT count(*)::int FROM member_memberships WHERE status = 'EXPIRED') AS expired,
+      (SELECT count(*)::int FROM member_memberships WHERE status = 'CANCELLED') AS cancelled,
+      (SELECT count(*)::int FROM member_memberships WHERE created_at >= now() - interval '30 days') AS new_month`);
+    const attendance = await one(`SELECT
+      (SELECT count(*)::int FROM gym_attendance WHERE check_in_at >= now() - interval '1 day') AS today,
+      (SELECT count(*)::int FROM gym_attendance WHERE check_in_at >= now() - interval '7 days') AS week,
+      (SELECT count(*)::int FROM gym_attendance WHERE check_in_at >= now() - interval '30 days') AS month,
+      (SELECT count(DISTINCT gym_id)::int FROM gym_attendance WHERE check_in_at >= now() - interval '1 day') AS gyms_active_today`);
+    const leads = await one(`SELECT
+      (SELECT count(*)::int FROM gym_leads) AS total,
+      (SELECT count(*)::int FROM gym_leads WHERE created_at >= now() - interval '7 days') AS new_week,
+      (SELECT count(*)::int FROM gym_leads WHERE status = 'NEW') AS status_new,
+      (SELECT count(*)::int FROM gym_leads WHERE status = 'CONTACTED') AS status_contacted,
+      (SELECT count(*)::int FROM gym_leads WHERE status IN ('TRIAL_SCHEDULED','TRIAL_COMPLETED')) AS status_trial,
+      (SELECT count(*)::int FROM gym_leads WHERE status = 'JOINED') AS status_joined,
+      (SELECT count(*)::int FROM gym_leads WHERE status = 'NOT_JOINED') AS status_not_joined,
+      (SELECT count(*)::int FROM gym_leads WHERE status = 'NO_RESPONSE') AS status_no_response,
+      (SELECT count(*)::int FROM gym_leads WHERE enquiry_type = 'TRIAL') AS type_trial,
+      (SELECT count(*)::int FROM gym_leads WHERE source = 'GYM_QR') AS via_qr,
+      CASE WHEN (SELECT count(*)::int FROM gym_leads) > 0
+        THEN round(100.0 * (SELECT count(*)::int FROM gym_leads WHERE status = 'JOINED')
+             / (SELECT count(*)::int FROM gym_leads), 1)
+        ELSE 0 END AS conversion_pct`);
+    const trainers = await one(`SELECT
+      (SELECT count(*)::int FROM gym_staff WHERE gym_role = 'TRAINER' AND status = 'ACTIVE') AS gym_trainers_active,
+      (SELECT count(*)::int FROM gym_staff WHERE gym_role = 'TRAINER' AND status <> 'ACTIVE') AS gym_trainers_inactive,
+      (SELECT count(*)::int FROM gym_trainer_assignments WHERE status = 'ACTIVE') AS gym_assignments_active,
+      (SELECT count(*)::int FROM trainer_clients WHERE status = 'active') AS independent_connections`);
+    const gymTrend = (await query(`SELECT date_trunc('month', created_at) AS month, count(*)::int AS c
+      FROM gyms GROUP BY 1 ORDER BY 1 DESC LIMIT 12`)).rows.reverse();
+    const leadTrend = (await query(`SELECT date_trunc('week', created_at) AS week, count(*)::int AS c
+      FROM gym_leads GROUP BY 1 ORDER BY 1 DESC LIMIT 12`)).rows.reverse();
+    leads.conversion_pct = Number(leads.conversion_pct); // numeric → JS number
+    res.json({ users, gyms, memberships, attendance, leads, trainers, gymTrend, leadTrend });
+  } catch (e) { err(res, e); }
+}, requireAdminRole('analyst', 'super_admin', 'support', 'read_only'));
+
 registerRoute(router, {
   method: 'GET', path: '/analytics/retention', category: 'Analytics',
   description: 'Signup-week cohorts and % still logging workouts N weeks later (cohort retention table).',
