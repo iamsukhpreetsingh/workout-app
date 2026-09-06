@@ -105,8 +105,18 @@ export default function App() {
       {/* fixed-position impersonation banner overlays the top when active */}
       <ImpersonationBanner />
       <Layout style={{ minHeight: '100vh' }}>
-        <Sider theme="dark" width={220}>
-          <div style={{ padding: 16, color: '#E8481F', fontWeight: 800, fontSize: 16 }}>
+        {/* sticky shell: the sidebar stays fixed while page content scrolls.
+            The sider is a flex column — the menu scrolls if it overflows and
+            the account/logout block is pinned to the bottom. */}
+        <Sider
+          theme="dark"
+          width={220}
+          style={{ position: 'sticky', top: 0, height: '100vh' }}
+        >
+          {/* AntD wraps Sider children in .ant-layout-sider-children — make it
+              a flex column so the menu scrolls and logout pins to the bottom */}
+          <style>{`.ant-layout-sider-children { display: flex; flex-direction: column; height: 100%; }`}</style>
+          <div style={{ padding: 16, color: '#E8481F', fontWeight: 800, fontSize: 16, flexShrink: 0 }}>
             🏋️ Workout Admin
           </div>
           <Menu
@@ -115,8 +125,9 @@ export default function App() {
             selectedKeys={[page]}
             items={items}
             onClick={(e) => setPage(e.key)}
+            style={{ flex: 1, overflowY: 'auto', borderInlineEnd: 0 }}
           />
-          <div style={{ position: 'absolute', bottom: 12, width: 220, padding: '0 12px' }}>
+          <div style={{ flexShrink: 0, padding: '12px 12px', borderTop: '1px solid rgba(255,255,255,0.08)', width: '100%' }}>
             <div style={{ color: '#888', fontSize: 12, marginBottom: 2 }}>
               {p.name} · {p.role}
             </div>
