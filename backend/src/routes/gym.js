@@ -16,6 +16,7 @@ const { rateLimit } = require('../middleware/rateLimit');
 const { query } = require('../db/pool');
 const gyms = require('../data/gyms');
 const staffNotifications = require('../data/gymStaffNotifications');
+const leads = require('../data/gymLeads');
 const plans = require('../data/membershipPlans');
 const trainers = require('../data/gymTrainers');
 const billing = require('../data/gymBilling');
@@ -301,6 +302,44 @@ registerRoute(router, {
   }
 }, [requireAuth, requireRole(['user', 'trainer', 'gym_staff'])]);
 
+
+// ── public Lead QR routes (visitor-facing, NO auth) ───────────────────────
+// Registered BEFORE '/:gymId' so 'leads' is never captured as a gym id.
+// The QR secret in the URL is the credential; the backend resolves gym →
+// lead. Rate-limited: the form is public and hostile input is expected.
+// NOTE the deliberate type separation: attendance QR payloads are rejected
+// here exactly like lead payloads are rejected by the attendance scanner.
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/leads/public/:token',
+  description: 'Public Lead QR landing: resolves the gym from the lead QR token. Returns the safe landing payload or a generic UNAVAILABLE state (invalid / disabled QR, suspended or deactivated gym are indistinguishable from outside). No authentication.',
+  requiresAuth: false,
+  allowedRoles: ['public'],
+  category: 'Gym',
+}, [rateLimit({ key: 'lead-landing', max: 60, windowMs: 60 * 60 * 1000 })], async (req, res) => {
+  try {
+    res.json(await leads.getLeadLanding(req.params.token));
+  } catch (e) {
+    httpError(res, e, 404);
+  }
+}, [rateLimit({ key: 'lead-landing', max: 60, windowMs: 60 * 60 * 1000 })]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/leads/public/:token',
+  description: 'Public lead submission from the QR form (no account, no login). Validates token → ACTIVE gym → leads enabled, validates all input server-side, dedupes double-taps (same phone within 10 minutes), flags leads whose phone matches an existing member, and NEVER creates a member/credentials. Rate limited per IP.',
+  requiresAuth: false,
+  allowedRoles: ['public'],
+  category: 'Gym',
+}, [rateLimit({ key: 'lead-submit', max: 20, windowMs: 60 * 60 * 1000 })], async (req, res) => {
+  try {
+    res.status(201).json(await leads.submitLead(req.params.token, req.ip, req.body || {}));
+  } catch (e) {
+    httpError(res, e, 404);
+  }
+}, [rateLimit({ key: 'lead-submit', max: 20, windowMs: 60 * 60 * 1000 })]);
+
 // ── invitation acceptance bridge (public token routes — no gym context) ──
 // Registered BEFORE '/:gymId' so 'invite' is never captured as a gym id.
 // The plaintext code is the bearer token; nothing else authorizes linking.
@@ -375,7 +414,12 @@ registerRoute(router, {
   category: 'Gym',
 }, [requireAuth], async (req, res) => {
   try {
-    const gym = await attendance.resolveCheckInCode((req.body || {}).code);
+    const rawCode = String((req.body || {}).code || '').trim();
+    // typed-payload separation: a LEAD QR must never check anyone in
+    if (/^gymlead:v1:/i.test(rawCode)) {
+      return res.status(400).json({ error: 'This QR code is not an attendance QR code.' });
+    }
+    const gym = await attendance.resolveCheckInCode(rawCode);
     if (!gym) return res.status(404).json({ error: 'Invalid check-in code — ask the front desk' });
     const memberships = await gyms.listGymMembershipsForUser(req.user.id);
     const mine = memberships.find((m) => m.gym_id === gym.id);
@@ -909,6 +953,124 @@ registerRoute(router, {
 // member only ever sees their own notifications (gym AND recipient scoped).
 // Triggering the lazy scan on list keeps expiry/overdue/inactivity alerts
 // fresh without a cron; dedupe keys make repeated scans no-ops.
+
+
+// ── Leads: public QR enquiries (gym portal) ───────────────────────────────
+// leads.view = see the inbox; leads.manage = statuses/notes/QR. Trainers
+// have neither. Every query is gym-scoped via requireGymContext.
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/leads/qr-code',
+  description: "The gym's Lead QR secret (payload gymlead:v1:<code> — rendered as QR by the portal, encoded into the public /join URL). Get-or-create; NEVER the attendance QR. Requires permission: leads.manage.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.manage')], async (req, res) => {
+  try {
+    res.json({ lead_qr_code: await leads.ensureLeadQrCode(req.gymContext.gymId) });
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/leads/qr-code/rotate',
+  description: "Rotates the Lead QR secret — printed posters with the old QR immediately stop working (safe public message, no lead is created). Requires permission: leads.manage.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.manage')], async (req, res) => {
+  try {
+    res.json({ lead_qr_code: await leads.rotateLeadQrCode(req.gymContext.gymId, { userId: req.user.id }, req.ip, gyms.gymAudit) });
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.manage')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/leads',
+  description: "The gym's lead inbox (newest first). Filters: status, type, q (name/phone/email), limit, offset. Requires permission: leads.view.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.view')], async (req, res) => {
+  try {
+    res.json(await leads.listLeads(req.gymContext.gymId, {
+      status: req.query.status, type: req.query.type, q: req.query.q,
+      limit: req.query.limit, offset: req.query.offset,
+    }));
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.view')]);
+
+registerRoute(router, {
+  method: 'GET',
+  path: '/:gymId/leads/:leadId',
+  description: "One lead with internal notes and lifecycle activity (from the audit log). Another gym's lead is a 404 that never confirms existence. Requires permission: leads.view.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.view')], async (req, res) => {
+  try {
+    const lead = await leads.getLead(req.gymContext.gymId, req.params.leadId);
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    res.json(lead);
+  } catch (e) {
+    httpError(res, e);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.view')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/leads/:leadId/status',
+  description: "Update the lead lifecycle status (NEW/CONTACTED/TRIAL_SCHEDULED/TRIAL_COMPLETED/JOINED/NOT_JOINED/NO_RESPONSE/FOLLOW_UP/CLOSED) — audited with before/after. Requires permission: leads.manage.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.manage')], async (req, res) => {
+  try {
+    res.json(await leads.updateLeadStatus(req.gymContext.gymId, req.params.leadId,
+      { userId: req.user.id, label: req.gymContext.gymRole }, req.ip, req.body?.status, gyms.gymAudit));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/leads/:leadId/notes',
+  description: 'Adds an internal follow-up note (1-500 chars). Notes are gym-internal and never shown on the public form. Audited. Requires permission: leads.manage.',
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.manage')], async (req, res) => {
+  try {
+    res.status(201).json(await leads.addLeadNote(req.gymContext.gymId, req.params.leadId,
+      { userId: req.user.id, label: req.gymContext.gymRole }, req.ip, req.body?.note, gyms.gymAudit));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.manage')]);
+
+registerRoute(router, {
+  method: 'POST',
+  path: '/:gymId/leads/:leadId/convert',
+  description: "Back-links a lead to a member ALREADY created through the normal member-creation flow (member_id in body) and marks the lead JOINED. Never creates a member by itself. Audited. Requires permissions: leads.manage AND members.create.",
+  requiresAuth: true,
+  allowedRoles: ['user', 'trainer', 'gym_staff'],
+  category: 'Gym',
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.manage'), requireGymPermission('members.create')], async (req, res) => {
+  try {
+    res.json(await leads.linkConvertedMember(req.gymContext.gymId, req.params.leadId,
+      req.body?.member_id, { userId: req.user.id, label: req.gymContext.gymRole }, req.ip, gyms.gymAudit));
+  } catch (e) {
+    httpError(res, e, 400);
+  }
+}, [requireAuth, requireGymContext(), requireGymPermission('leads.manage'), requireGymPermission('members.create')]);
 
 registerRoute(router, {
   method: 'GET',

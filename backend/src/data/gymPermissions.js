@@ -16,6 +16,7 @@ const GYM_PERMISSIONS = {
     'classes.manage', // class scheduling: create/edit/cancel classes (Phase 17)
     'documents.manage', // member documents & digital waivers (Phase 18)
     'assigned_members.view',
+    'leads.view', 'leads.manage', // Leads: public QR enquiries (leads phase)
   ],
   ADMIN: [
     'members.view', 'members.create', 'members.manage',
@@ -25,6 +26,7 @@ const GYM_PERMISSIONS = {
     'branches.manage', // multi-branch CRUD (Phase 16)
     'classes.manage', // class scheduling (Phase 17)
     'documents.manage', // member documents & digital waivers (Phase 18)
+    'leads.view', 'leads.manage', // Leads: public QR enquiries (leads phase)
   ],
   TRAINER: [
     'assigned_members.view', 'workouts.manage',
@@ -34,6 +36,7 @@ const GYM_PERMISSIONS = {
     'members.view', 'members.create', 'memberships.view', 'checkin.manage',
     'payments.record',
     'documents.manage', // desk files/records member paperwork (Phase 18)
+    'leads.view', 'leads.manage', // desk fields leads from the QR poster
   ],
   MEMBER: [
     'own.profile.view', 'own.membership.view',

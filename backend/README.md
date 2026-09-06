@@ -688,6 +688,60 @@ recipient_user_id are mandatory on every row; there are no broadcast rows.
   member lifecycle hooks through the real API.
 
 
+#### 3.5.1.0 Gym Leads / Visitor QR (leads phase) — in detail
+
+**Two separations this phase is built around (both DB- and code-enforced):**
+
+1. **LEAD QR ≠ ATTENDANCE QR.** The lead secret is a SEPARATE 128-bit key in
+   `gyms.settings.lead_qr_code` (mirroring `checkin_code` storage, never the
+   same value), its payload is typed `gymlead:v1:<code>` (vs
+   `gymcheckin:v1:<code>`), and both directions reject the other shape:
+   `POST /my/attendance/check-in` answers 400 "This QR code is not an
+   attendance QR code." for lead payloads, and the lead endpoints answer the
+   safe UNAVAILABLE/404 for attendance payloads. Rotating one never touches
+   the other.
+2. **A LEAD IS NOT A MEMBER.** `POST /gym/leads/public/:token` (no auth, no
+   account, no app) never creates users, credentials or gym_members rows.
+   Conversion is explicit: the gym creates the member through the normal
+   flow, then `POST /:gymId/leads/:id/convert { member_id }` (leads.manage +
+   members.create) back-links `converted_member_id` and sets status JOINED.
+   A lead whose phone matches an existing gym member is flagged
+   (`matched_member_id`) instead of duplicating the person.
+
+- **Public flow** (`src/data/gymLeads.js`): `GET /gym/leads/public/:token`
+  resolves token → ACTIVE gym → leads enabled, and returns ONLY
+  `{ state, gym_name, city, types }` — invalid / disabled / suspended /
+  deactivated gyms all collapse into the same safe UNAVAILABLE state (and a
+  dead QR NEVER creates a lead). `POST …` validates everything server-side
+  (name incl. O'Connor/Mary-Jane, phone 7-20, optional email, enum
+  enquiry_type ENQUIRY/TRIAL/VISITOR/MEMBERSHIP_ENQUIRY/GENERAL_ENQUIRY,
+  optional visit date, message ≤500), rate-limits per IP (20/hour via the
+  shared rateLimit middleware), dedupes double-taps (same gym+phone within
+  10 min returns the existing lead), and notifies staff (LEAD_RECEIVED →
+  leads.view holders) through the staff notification service.
+- **Staff surface** (permissions added to the matrix: OWNER, ADMIN,
+  FRONT_DESK get `leads.view` + `leads.manage`; TRAINER/MEMBER nothing):
+  `GET /:gymId/leads` (filters status/type/q), `GET …/:leadId` (detail with
+  internal notes + lifecycle activity read from the append-only audit log),
+  `POST …/:leadId/status` (9-state lifecycle, audited with before/after),
+  `POST …/:leadId/notes` (internal, never public), `POST …/:leadId/convert`,
+  and `GET/POST /:gymId/leads/qr-code(/rotate)` for the poster QR (rotation
+  kills old printed posters with the safe public message).
+- **Storage**: `gym_leads` + `gym_lead_notes` (migration 060) with
+  CHECK-constrained enums, length-limited columns (the form is public and
+  hostile), and (gym_id, status, created_at DESC) / (gym_id, phone) indexes.
+- **Portal**: `LeadJoinPage` (public page at `#/join/<code>`, rendered
+  outside auth exactly like the invite landing; mobile-friendly form +
+  thank-you screen + consent note), `LeadsPage` (inbox + detail drawer +
+  status/notes/convert + QR poster drawer using `qrcode.react` — the QR
+  encodes the public /join URL and is rendered locally, never via an
+  external QR service), nav item gated on leads.view.
+- **Tests**: `test/gymLeads.test.js` (17) — the full matrix: landing
+  isolation, validation, double-tap dedupe, member-match flag, no-account
+  guarantee, dead-QR behavior, BOTH scanner rejections, permission gating,
+  cross-gym 403s, audited lifecycle, notes privacy, conversion, and the 429.
+
+
 #### 3.5.1 Billing & payment ledger (Phase 9) — in detail
 
 **Why this design.** The spec's hard requirement is *historical integrity*:

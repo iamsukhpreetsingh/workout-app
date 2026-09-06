@@ -15,6 +15,7 @@ import {
   CheckSquareOutlined, UserOutlined, ThunderboltOutlined, AppleOutlined,
   CalendarOutlined, SoundOutlined, BarChartOutlined, SettingOutlined,
   PlusOutlined, LogoutOutlined, CrownOutlined, TagOutlined, MenuOutlined,
+  UserAddOutlined,
 } from '@ant-design/icons';
 import {
   UserProfile, GymMembershipEntry, getMyGyms, getGymPermissions, getSelectedGymId,
@@ -24,6 +25,8 @@ import { GymContext, hasPermission } from './permissions';
 import { PermissionDenied } from './components/States';
 import LoginPage from './pages/LoginPage';
 import InviteLandingPage from './pages/InviteLandingPage';
+import LeadJoinPage from './pages/LeadJoinPage';
+import LeadsPage from './pages/LeadsPage';
 import CreateGymWizard from './pages/CreateGymWizard';
 import Dashboard from './pages/Dashboard';
 import SettingsPage from './pages/SettingsPage';
@@ -50,6 +53,7 @@ const { Header, Sider, Content } = Layout;
 const NAV_ITEMS = [
   { path: '/', label: 'Dashboard', icon: <DashboardOutlined />, perms: [] },
   { path: '/members', label: 'Members', icon: <TeamOutlined />, perms: ['members.view'] },
+  { path: '/leads', label: 'Leads', icon: <UserAddOutlined />, perms: ['leads.view'] },
   { path: '/memberships', label: 'Memberships', icon: <IdcardOutlined />, perms: ['memberships.view'] },
   { path: '/memberships/plans', label: 'Plans', icon: <TagOutlined />, perms: ['plans.manage'] },
   { path: '/branches', label: 'Branches', icon: <ApartmentOutlined />, perms: ['branches.manage'] },
@@ -128,6 +132,10 @@ function Shell() {
   // any auth gating (works signed-out, signed-in, or with no gym at all)
   const inviteMatch = location.pathname.match(/^\/invite\/(.+)$/);
   if (inviteMatch) return <InviteLandingPage token={inviteMatch[1]} />;
+    // Lead QR landing — PUBLIC (visitor, no account), outside the shell and
+    // auth gating entirely, exactly like the invite landing
+    const joinMatch = location.pathname.match(/^\/join\/(.+)$/);
+    if (joinMatch) return <LeadJoinPage token={joinMatch[1]} />;
 
   if (booting) {
     return (
@@ -203,6 +211,7 @@ function Shell() {
       <Route path="/members/:id" element={permGuard(['members.view'], <MemberDetailPage />)} />
       <Route path="/members/:id/:tab" element={permGuard(['members.view'], <MemberDetailPage />)} />
 
+      <Route path="/leads" element={permGuard(['leads.view'], <LeadsPage />)} />
       <Route path="/memberships" element={permGuard(['memberships.view'], <MembershipsPage />)} />
       <Route path="/memberships/plans" element={permGuard(['plans.manage'], <PlansPage />)} />
       <Route path="/branches" element={permGuard(['branches.manage'], <BranchesPage />)} />

@@ -50,6 +50,15 @@ export default function GymCheckInScreen() {
   const styles = makeStyles(colors);
 
   const submit = async (rawCode) => {
+    // typed-payload separation: the gym's LEAD QR (public enquiry form) must
+    // never check anyone in — name the mismatch instead of a generic error
+    if (/^gymlead:v1:/i.test(String(rawCode || '').trim())) {
+      setResult({
+        kind: 'error',
+        message: 'This QR code is not an attendance QR code. It opens the gym\'s visitor registration form.',
+      });
+      return;
+    }
     const trimmed = normalizeCheckInCode(rawCode);
     if (!trimmed) {
       setResult({

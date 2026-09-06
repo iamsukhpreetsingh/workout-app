@@ -67,6 +67,8 @@ const TYPES = {
   CLASS_CANCELLED:          { category: 'CLASS', severity: 'WARNING', permission: 'classes.manage' },
   // documents
   DOCUMENT_SIGNED:          { category: 'DOCUMENT', severity: 'INFO', permission: 'documents.manage' },
+  // leads (public QR enquiries)
+  LEAD_RECEIVED:            { category: 'LEAD', severity: 'INFO', permission: 'leads.view' },
   // staff/system/security
   STAFF_INVITATION_ACCEPTED:{ category: 'SYSTEM', severity: 'INFO', permission: 'staff.manage' },
   STAFF_ROLE_CHANGED:       { category: 'SECURITY', severity: 'CRITICAL', permission: 'staff.manage', selfSuppressed: true },

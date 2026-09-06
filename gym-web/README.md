@@ -337,6 +337,26 @@ inactivity alerts, staff/security events).
   dedupe keys + lazy maintenance scan for expiry/overdue/inactivity). See
   the backend README for the full type/permission matrix.
 
+## Leads / Visitor QR (leads phase)
+
+Public lead capture: each gym gets a dedicated **Lead/Visitor QR poster**
+(Leads → "Lead QR poster") encoding `#/join/<token>` — a standalone public
+page (`LeadJoinPage`) with a mobile-friendly form (name + phone required;
+email, enquiry type, preferred visit date, message optional). No account,
+no login, no app. After submission the visitor sees a thank-you screen;
+the enquiry lands in the portal's **Leads** section (leads.view /
+leads.manage permissions — owner/admin/front desk).
+
+- Completely separate from the attendance QR: different secret, different
+  payload prefix (`gymlead:v1:` vs `gymcheckin:v1:`), and each scanner
+  rejects the other's QR with a clear message.
+- Staff manage the lifecycle (NEW → CONTACTED → TRIAL_* → JOINED /
+  NOT_JOINED / NO_RESPONSE / FOLLOW_UP / CLOSED) with audited transitions,
+  internal notes, and an explicit "link member" conversion (never automatic).
+- A new lead notifies authorized staff via the Notification Center
+  (LEAD_RECEIVED). Regenerating the poster QR instantly disables the old one
+  with a safe public message.
+
 ## Security model
 
 The portal hides UI by role, but the **backend is the authority**: every
